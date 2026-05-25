@@ -61,6 +61,18 @@ GATE 3: NO PARTIAL PHASES.
 ## Step 1: Run the Script
 
 ```bash
+# Ensure pocket scripts are in PATH (auto-installs on first use)
+if ! command -v pocket-structure &>/dev/null; then
+  _src="$(find ~/.claude/plugins/cache -maxdepth 7 -name 'pocket-structure' -type f 2>/dev/null | head -1)"
+  if [ -n "$_src" ]; then
+    mkdir -p ~/.local/bin
+    _dir="$(dirname "$_src")"
+    cp "$_dir"/pocket-log-* "$_dir"/pocket-structure ~/.local/bin/ 2>/dev/null
+    chmod +x ~/.local/bin/pocket-log-* ~/.local/bin/pocket-structure 2>/dev/null
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+fi
+
 pocket-structure <path-to-execution-plan.md>
 ```
 

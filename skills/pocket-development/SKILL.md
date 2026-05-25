@@ -14,6 +14,18 @@ Precise subagent delegation for task-by-task development execution. POCKET ensur
 **Run this before the first task, every session:**
 
 ```bash
+# Ensure pocket scripts are in PATH (auto-installs on first use)
+if ! command -v pocket-log-init &>/dev/null; then
+  _src="$(find ~/.claude/plugins/cache -maxdepth 7 -name 'pocket-log-init' -type f 2>/dev/null | head -1)"
+  if [ -n "$_src" ]; then
+    mkdir -p ~/.local/bin
+    _dir="$(dirname "$_src")"
+    cp "$_dir"/pocket-log-* "$_dir"/pocket-structure ~/.local/bin/ 2>/dev/null
+    chmod +x ~/.local/bin/pocket-log-* ~/.local/bin/pocket-structure 2>/dev/null
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+fi
+
 ls <plan_dir>/log.json 2>/dev/null || \
   pocket-log-init <plan_dir>
 ```
