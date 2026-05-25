@@ -18,6 +18,17 @@
   },
   "repository": "https://github.com/rfxlamia/pocketto",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "skills/",
+    "bin/",
+    "README.md"
+  ],
+  "scripts": {
+    "prepublishOnly": "echo 'Publishing pocketto to npm...'"
+  },
   "pi": {
     "skills": ["./skills"],
     "extensions": []
