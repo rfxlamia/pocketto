@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "pocketto",
-      "source": ".",
+      "source": { "source": "github", "repo": "rfxlamia/pocketto" },
       "description": "Structured subagent delegation, bug hunting, iterative planning, and code review workflows.",
       "version": "1.0.0",
       "category": "productivity",
