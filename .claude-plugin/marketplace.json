@@ -1,0 +1,18 @@
+{
+  "name": "pocketto",
+  "owner": {
+    "name": "rfxlamia",
+    "url": "https://github.com/rfxlamia"
+  },
+  "description": "Pocket-driven development skills for Claude Code",
+  "plugins": [
+    {
+      "name": "pocketto",
+      "source": ".",
+      "description": "Structured subagent delegation, bug hunting, iterative planning, and code review workflows.",
+      "version": "1.0.0",
+      "category": "productivity",
+      "tags": ["pocket", "development", "delegation", "bug-hunting", "planning"]
+    }
+  ]
+}
