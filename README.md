@@ -15,7 +15,7 @@ pi install git:github.com/rfxlamia/pocketto
 Or from npm:
 
 ```bash
-pi install npm:pocketto
+pi install npm:pocketto-pi
 ```
 
 ### Claude Code
