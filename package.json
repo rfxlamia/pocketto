@@ -1,0 +1,31 @@
+{
+  "name": "pocketto",
+  "version": "1.0.0",
+  "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows for Pi.",
+  "keywords": [
+    "pi-package",
+    "pocket",
+    "development",
+    "delegation",
+    "bug-hunting",
+    "planning",
+    "workflow",
+    "skills"
+  ],
+  "author": {
+    "name": "rfxlamia",
+    "url": "https://github.com/rfxlamia"
+  },
+  "repository": "https://github.com/rfxlamia/pocketto",
+  "license": "MIT",
+  "pi": {
+    "skills": ["./skills"],
+    "extensions": []
+  },
+  "bin": {
+    "pocket-log-init": "./bin/pocket-log-init",
+    "pocket-log-update": "./bin/pocket-log-update",
+    "pocket-log-close": "./bin/pocket-log-close",
+    "pocket-structure": "./bin/pocket-structure"
+  }
+}

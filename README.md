@@ -1,10 +1,24 @@
 # pocketto
 
-> Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows for Claude Code.
+> Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows.
 
-A Claude Code plugin providing 8 skills for systematic, structured development — from raw idea to shipped code.
+Provides 8 skills for systematic, structured development — from raw idea to shipped code.
 
 ## Installation
+
+### Pi (Pocket)
+
+```bash
+pi install git:github.com/rfxlamia/pocketto
+```
+
+Or from npm:
+
+```bash
+pi install npm:pocketto
+```
+
+### Claude Code
 
 ```bash
 /plugin marketplace add rfxlamia/pocketto
