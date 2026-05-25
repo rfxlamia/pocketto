@@ -22,7 +22,8 @@
     "access": "public"
   },
   "files": [
-    "skills/",
+    "skills/**",
+    "!skills/**/__pycache__/**",
     "bin/",
     "README.md"
   ],
