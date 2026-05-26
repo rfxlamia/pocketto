@@ -78,6 +78,21 @@ pocket-development receives two distinct input formats. Identify which type befo
 - Track "Phase N of M" context throughout execution — surface it in all status reports
 - Terminal step is a structured PHASE_COMPLETE or PHASE_BLOCKED report (see Phase Completion Protocol)
 
+## Main Agent Role (HARDENED)
+
+Main agent = **Delegator + Auditor only**. This is non-negotiable.
+
+| Main agent MUST | Main agent MUST NOT |
+|-----------------|---------------------|
+| Initialize and update pocket log | Write, edit, or create implementation code |
+| Construct Pocket Packets and dispatch subagents | Invoke `pocket-review` skill per-task during execution |
+| Run quick audit after each implementer DONE | Do full two-stage review during development |
+| Invoke `pocket-review` after ALL tasks are done | Take over a task because "it's faster to do it myself" |
+
+**Full two-stage review (`pocket-review`) is only called once — after the last task is marked DONE. Per-task review is a quick audit only (see [Review](#review) section).**
+
+---
+
 ## 6 Iron Laws (MANDATORY)
 
 These are non-negotiable. Violating any iron law leads to degraded delegation quality.
@@ -321,21 +336,20 @@ digraph pocket_process {
 
     "Wait for status" -> { "DONE" "NEEDS_CONTEXT" "BLOCKED" "DONE_WITH_CONCERNS" };
 
-    "DONE" -> "Invoke pocket-review";
-    "Invoke pocket-review" -> { "REVIEW_PASS" "REVIEW_FAIL" "REVIEW_BLOCKED" };
-    "REVIEW_PASS" -> "Mark task complete";
-    "REVIEW_FAIL" -> "Re-dispatch implementer with fix instructions";
-    "Re-dispatch implementer with fix instructions" -> "Wait for status";
-    "REVIEW_BLOCKED" -> "Escalate to human";
+    "DONE" -> "Quick audit (git log + tests + DELIVERABLE check)";
+    "Quick audit (git log + tests + DELIVERABLE check)" -> { "Audit pass" "Audit fail" };
+    "Audit pass" -> "Mark task DONE in log";
+    "Audit fail" -> "Re-dispatch implementer with failure reason";
+    "Re-dispatch implementer with failure reason" -> "Wait for status";
 
     "NEEDS_CONTEXT" -> "Provide context -> Re-dispatch (no work)";
     "BLOCKED" -> "Categorize blocker -> Fix -> Re-dispatch";
-    "DONE_WITH_CONCERNS" -> "Read concerns -> Assess risk -> Proceed or abort";
+    "DONE_WITH_CONCERNS" -> "Assess concerns -> Correctness risk? -> Address first or proceed to quick audit";
 
-    "Mark task complete" -> "More tasks?";
+    "Mark task DONE in log" -> "More tasks?";
     "More tasks?" -> "Extract task N+1" [label="yes"];
-    "More tasks?" -> "Final review" [label="no"];
-    "Final review" -> "Phase file?";
+    "More tasks?" -> "Invoke pocket-review (full two-stage)" [label="no"];
+    "Invoke pocket-review (full two-stage)" -> "Phase file?";
     "Phase file?" -> "Evaluate Phase Completion Gate" [label="yes (Type B)"];
     "Phase file?" -> "Done" [label="no (Type A)"];
     "Evaluate Phase Completion Gate" -> { "PHASE_COMPLETE report" "PHASE_BLOCKED report" };
@@ -392,27 +406,43 @@ Match prompting complexity to task complexity:
 
 ## Review
 
-Review is handled by the `pocket-review` skill. When implementer reports DONE:
+Two distinct review phases. Do NOT conflate them.
 
-1. Extract task context from phase file (DELIVERABLE, QUALITY_BAR, files_changed)
-2. Build input for pocket-review: plan_dir, phase_file, task_id, task_name, files_changed, spec_ref (absolute path to spec file), quality_bar, concerns, review_loop_limit, current_cycle
-3. Invoke `pocket-review` skill with task context
-4. pocket-review writes review report to `<plan_dir>/reviews/<task_id>-cycle-<N>.json` and returns: `REVIEW_PASS` | `REVIEW_FAIL` | `REVIEW_BLOCKED`
-5. On REVIEW_FAIL: read `fix_instructions` from the review report JSON, pass verbatim to implementer in next Pocket Packet under "FIX INSTRUCTIONS FROM REVIEW" section
-6. On REVIEW_BLOCKED: read `fix_instructions` from review report for human context, escalate to human, halt phase
+### Per-Task Quick Audit (during execution)
 
-**DONE_WITH_CONCERNS handling:** If implementer reported DONE_WITH_CONCERNS, assess concerns first. If correctness risk → address before invoking pocket-review. If observation only → proceed to pocket-review (concerns will be re-assessed during Stage 1).
+When implementer reports DONE, main agent runs a quick audit inline — no subagent, no pocket-review:
 
-See `pocket-review` skill for full two-stage review protocol (spec compliance → code quality), review loop, and escalation handling.
+1. Run `git log --oneline -5` — confirm a commit exists for this task
+2. Run tests if the plan specifies a test command — confirm green
+3. Check the packet's DELIVERABLE checklist — all items must be met
+
+**Audit pass** → mark task DONE in log, proceed to next task.
+
+**Audit fail** → re-dispatch implementer with specific failure reason:
+```
+AUDIT FAILED: [what failed — missing commit / failing tests / DELIVERABLE item N not met]
+Fix this specific issue. Do not scope-creep.
+```
+Do NOT mark task DONE until audit passes.
+
+**DONE_WITH_CONCERNS:** Assess concerns first. If correctness risk → address before running quick audit. If observation only → proceed with quick audit normally (concerns go into the final pocket-review phase).
+
+### End-of-Execution Full Review (after all tasks done)
+
+After ALL tasks are marked DONE in the log, invoke the `pocket-review` skill once for the full two-stage review (spec compliance → code quality).
+
+See `pocket-review` skill for full two-stage review protocol, review loop, and escalation handling.
 
 ## Status Handling
 
 | Status | Controller Action |
 |--------|-------------------|
-| **DONE** | Invoke pocket-review skill |
-| **DONE_WITH_CONCERNS** | Read concerns → Assess risk → Proceed or abort |
+| **DONE** | Quick audit (git log + tests + DELIVERABLE check) → mark task DONE if pass; re-dispatch with failure reason if fail |
+| **DONE_WITH_CONCERNS** | Assess concerns → correctness risk: address first; observation only: proceed to quick audit |
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
 | **BLOCKED** | Categorize blocker type → Fix → Re-dispatch |
+
+**After ALL tasks DONE:** invoke `pocket-review` skill once for full two-stage review.
 
 ### BLOCKED Categorization
 
@@ -446,7 +476,8 @@ Update a **task within a phase** (add `--task <task_id>`):
 pocket-log-update <plan_dir> <phase_file> <status> --task T1
 ```
 
-Status values (phase and task): `WAITING` → `REVIEW` → `DONE` | `BLOCKED`
+Task status: `WAITING` → `DONE` | `BLOCKED`
+Phase status: `WAITING` → `REVIEW` → `DONE` | `BLOCKED`
 
 ### Script 3 — Close (after all phases complete)
 
@@ -462,12 +493,14 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Exits no
 |--------|---------|
 | Session start (no `log.json`) | Script 1 — see **Startup** section above |
 | Session start (log.json exists, tasks missing) | Script 1 — auto-migrates tasks into existing phases |
-| Implementer returns DONE for a task → entering review | Script 2 `--task TN` → `REVIEW` |
-| Two-stage review passes for a task | Script 2 `--task TN` → `DONE` |
-| All tasks in phase DONE → entering phase review | Script 2 (phase) → `REVIEW` |
-| Phase review passes | Script 2 (phase) → `DONE` |
-| Unresolvable BLOCKED (task or phase) | Script 2 → `BLOCKED` |
+| Quick audit passes for a task | Script 2 `--task TN` → `DONE` |
+| Unresolvable BLOCKED (task) | Script 2 `--task TN` → `BLOCKED` |
+| All tasks in phase DONE → entering pocket-review | Script 2 (phase) → `REVIEW` |
+| pocket-review passes for phase | Script 2 (phase) → `DONE` |
+| Unresolvable BLOCKED (phase) | Script 2 (phase) → `BLOCKED` |
 | All phases complete (Type B only) | Script 3 (close) |
+
+**IMPORTANT:** NEVER set task status to `DONE` before quick audit (git log + tests + DELIVERABLE check) completes. NEVER set task status to `REVIEW` — that status is for phases only.
 
 `log.json` lives in `docs/pocket/plans/{slug}/log.json` — this is pocket-closing's primary input.
 
@@ -523,12 +556,16 @@ When delegation pressure threatens to bypass structure:
 
 ## Red Flags
 
-**Never do:**
+**Main agent role violations (HARDENED — see [Main Agent Role](#main-agent-role-hardened) section):**
+- Implement code yourself instead of delegating to a subagent
+- Invoke `pocket-review` skill per-task during execution (full review = after ALL tasks done)
+- Mark task DONE in the log without running the quick audit first
+
+**Delegation violations:**
 - Delegate without a Pocket Packet
 - Skip the Entry Gate Checklist
-- Trust a subagent's report without verification (use explore reviewers)
+- Trust a subagent's report without verification (quick audit: git log + tests + DELIVERABLE)
 - Give ambiguous prompts ("handle X", "fix Y")
-- Skip review loops after finding issues
 - Proceed with BLOCKED status without categorizing
 - Accept vague escalation ("I'm stuck" without reason)
 
