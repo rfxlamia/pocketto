@@ -47,7 +47,7 @@ Main agent = **Delegator + Preflight only**. Does NOT review code.
 
 ## Preflight
 
-Run ALL steps before dispatching any subagent. One failure in steps 1–3 → PHASE_BLOCKED immediately.
+Run ALL steps before dispatching any subagent. Failure in steps 1–2 → PHASE_BLOCKED immediately.
 
 ### Step 1: Resolve plan_dir and phase_file
 
@@ -67,19 +67,7 @@ Verify:
 - `header.baseline_sha` is a non-null string → else `PHASE_BLOCKED: "baseline_sha missing in log.json header"`
 - `phases[N].tasks` array exists for the target phase
 
-### Step 3: Check scope (sequential plans only)
-
-Read the phase file. If any task header has a `[depends: ...]` tag:
-
-```
-PHASE_BLOCKED: "Plans with [depends:...] cross-task dependencies are not supported.
-               pocket-review uses sequential SHA ranges — non-sequential graphs produce wrong file attribution.
-               Review manually or restructure as a sequential plan."
-```
-
-Normal pocket-development plans are sequential. This check is a safety guard.
-
-### Step 4: Build reviewable task list
+### Step 3: Build reviewable task list
 
 Iterate tasks in plan order. For each task:
 
@@ -98,20 +86,20 @@ files_changed = git diff --name-only <prev_sha>..<task.done_sha>
 
 If zero tasks are reviewable → `PHASE_BLOCKED: "No reviewable tasks found. Ensure all tasks are DONE with done_sha."`.
 
-### Step 5: Extract task context from plan file
+### Step 4: Extract task context from plan file
 
 For each reviewable task, read the plan file and extract:
 - `DELIVERABLE` section (under `### Task N: Name`)
 - `spec_ref` — the spec file the task references (absolute path)
 - `quality_bar` — must-have, must-not-have, red flags
 
-### Step 6: Ensure reviews/ directory exists
+### Step 5: Ensure reviews/ directory exists
 
 ```bash
 mkdir -p <plan_dir>/reviews/
 ```
 
-### Step 7: Load reviewer reference file paths
+### Step 6: Load reviewer reference file paths
 
 Note absolute paths — these are passed to subagents:
 ```
