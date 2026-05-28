@@ -1,6 +1,6 @@
 {
   "name": "pocketto-pi",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows for Pi.",
   "keywords": [
     "pi-package",
@@ -31,7 +31,9 @@
     "prepublishOnly": "echo 'Publishing pocketto to npm...'"
   },
   "pi": {
-    "skills": ["./skills"],
+    "skills": [
+      "./skills"
+    ],
     "extensions": []
   },
   "bin": {
