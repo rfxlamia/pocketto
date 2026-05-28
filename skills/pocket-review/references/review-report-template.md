@@ -273,21 +273,42 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
 
 ## File Naming
 
+**Batch mode (pocket-review, post-phase):**
+```
+reviews/<task_id>-review.json
+```
+Examples:
+- `reviews/T1-review.json`
+- `reviews/T3-review.json`
+
+Re-running pocket-review overwrites these files. No audit history is preserved automatically.
+
+**Legacy per-task mode (deprecated):**
 ```
 reviews/<task_id>-cycle-<N>.json
 ```
 
-Examples:
-- `reviews/T3-cycle-1.json`
-- `reviews/T3-cycle-2.json`
-- `reviews/T5-cycle-1.json`
-
 ## Write Location
 
 ```
-<plan_dir>/reviews/<task_id>-cycle-<N>.json
+<plan_dir>/reviews/<task_id>-review.json
 ```
 
 Where `<plan_dir>` is the pocket plan directory (e.g., `docs/pocket/plans/2026-05-08-auth-refactor/`).
 
-The `reviews/` subdirectory is created automatically on first review if it doesn't exist.
+The `reviews/` subdirectory must be created by the main agent before dispatching subagents.
+
+## Batch Mode Field Notes
+
+In batch mode (invoked by pocket-review post-phase), set these fields as follows:
+
+| Field | Batch mode value |
+|-------|-----------------|
+| `cycle` | Always `1` |
+| `reviewer_config` | `"batch-parallel"` |
+| `loop_info.current_cycle` | `1` |
+| `loop_info.max_cycles` | `1` |
+| `loop_info.cycles_remaining` | `0` |
+| `overall` | `"REVIEW_PASS"` \| `"REVIEW_FAIL"` \| `"REVIEW_BLOCKED"` |
+
+`REVIEW_FAIL` in batch mode means: issues found, no re-dispatch. Fix code and re-run pocket-review.

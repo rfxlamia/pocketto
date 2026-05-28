@@ -1,363 +1,224 @@
 ---
 name: pocket-review
-description: Two-stage review (spec compliance + code quality) for pocket-development tasks. Use when pocket-development invokes review after implementer reports DONE. Trigger on "review task", "pocket-review", or when pocket-development invokes this. Returns REVIEW_PASS, REVIEW_FAIL, or REVIEW_BLOCKED.
+description: Post-phase batch reviewer. User invokes after pocket-development marks all phase tasks DONE. Main agent runs preflight and dispatches parallel reviewer subagents (one per task). Returns PHASE_REVIEWED or PHASE_BLOCKED.
 ---
 
 # Pocket Review
 
-Independent two-stage review skill extracted from pocket-development. Verifies implementer output against spec compliance (Stage 1) then code quality (Stage 2), with bounded review loop and structured escalation.
+Post-phase batch reviewer. Invoked directly by the user after pocket-development finishes a phase or flat plan.
 
-**Core principle:** Review is a pipeline, not a checkpoint. Spec compliance before quality. Never trust self-reports — always read actual code.
+**Core principle:** Main agent delegates. Subagents review. One subagent per task, all parallel.
 
 ## Position in Pocket Bundle
 
 ```
 pocket-grinding → pocket-planning → pocket-structuring → pocket-development → POCKET-REVIEW → pocket-closing
-                                                                         ↑
-                                                                   invoked by
-                                                              pocket-development
+                                                                                    ↑
+                                                                          User invokes here
+                                                                     after phase/plan completes
 ```
 
-pocket-review is **never invoked directly by the user**. It is called by pocket-development after each implementer reports DONE.
+pocket-review is **invoked directly by the user** — not by pocket-development. When pocket-development finishes a phase, it emits a handoff message. The user then spawns pocket-review.
 
-## When to Use
-
-**Trigger:** pocket-development invokes this skill after implementer status = DONE.
-
-**Only invoke on DONE.** If implementer reported DONE_WITH_CONCERNS, pocket-development must assess concerns first. If observation-only, proceed. If correctness risk, address before invoking.
-
-**Input contract (from pocket-development):**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `plan_dir` | path | Yes | Plan directory containing phase file + log.json. Structure: `plan_dir/` contains phase file directly, `plan_dir/reviews/` for output. |
-| `phase_file` | filename | Yes | Phase file for Type B (`execution-plan-phase-N.md`) or flat plan for Type A (`execution-plan.md`). Always exists directly in `plan_dir/`. |
-| `task_id` | string | Yes | Task identifier (e.g., `T3`) |
-| `task_name` | string | Yes | Human-readable task name |
-| `files_changed` | list | Yes | Files created/modified by implementer. Must be non-empty. |
-| `spec_ref` | string | Yes | Absolute file path to spec file. Optionally append `#section` fragment for direct rule reference (e.g., `docs/pocket/spec/auth/topic.md#rule-3`). |
-| `quality_bar` | object | Yes | Must-have, must-not-have, red flags from Pocket Packet. Must be non-empty. |
-| `concerns` | list | No | Concerns flagged by implementer (empty list `[]` if none). |
-| `review_loop_limit` | int | Yes | Max review cycles. Default: 2. Hard cap: 5 (even if limit > 5, escalation fires at cycle 5). |
-| `current_cycle` | int | Yes | Current review cycle number (1-indexed). First invocation = 1. Passed by pocket-development. |
-
-**Output contract (to pocket-development):**
-
-| Status | Meaning | pocket-development Action |
-|--------|---------|--------------------------|
-| `REVIEW_PASS` | Both stages passed | Extract `fix_instructions` (empty), update log → DONE |
-| `REVIEW_FAIL` | Issues found, fixable | Extract `fix_instructions` from report, re-dispatch implementer |
-| `REVIEW_BLOCKED` | Max cycles exceeded or input invalid | Extract `fix_instructions` for human, escalate, halt phase |
-
-**Extract fix instructions from:** `reviews/<task_id>-cycle-<N>.json` → `fix_instructions` field. Pass verbatim to implementer in next Pocket Packet.
-
-## Input Validation (BEFORE Stage 1)
-
-**Mandatory gate.** Validate ALL inputs before reading any code.
+## Invocation
 
 ```
-1. phase_file exists at <plan_dir>/<phase_file>?
-   FAIL → REVIEW_BLOCKED: "Phase file not found: <path>"
-
-2. files_changed is non-empty?
-   FAIL → REVIEW_BLOCKED: "files_changed is empty — no code to review"
-
-3. spec_ref resolves to a readable file?
-   (If spec_ref contains #fragment, strip fragment and check file)
-   FAIL → REVIEW_BLOCKED: "Spec file not found: <path>"
-
-4. quality_bar is non-empty (has at least one must-have or must-not-have)?
-   FAIL → REVIEW_BLOCKED: "quality_bar is empty — cannot assess code quality"
-
-5. current_cycle <= review_loop_limit OR current_cycle <= 5 (hard cap)?
-   FAIL → REVIEW_BLOCKED: "Cycle <N> exceeds limit — human escalation required"
+/pocketto:pocket-review <path-to-execution-plan-or-plan-dir>
 ```
 
-ANY validation FAIL → Return REVIEW_BLOCKED immediately. Do not proceed to Stage 1.
-
-## 4 Iron Laws
-
+Examples:
 ```
-1. NO SKIP THE STAGES
-   Stage 1 (spec) MUST pass before Stage 2 (quality) runs.
-   ENFORCEMENT: Stage 2 checks Stage 1 result at start. If FAIL → SKIPPED.
-
-2. NO TRUST WITHOUT EVIDENCE
-   Always read ACTUAL code, NOT implementer's report.
-   WHY: Self-assessments are unreliable. Only code inspection reveals truth.
-
-3. NO UNBOUNDED LOOP
-   Review loop has hard cap at 5 cycles, regardless of review_loop_limit.
-   WHY: Infinite review loops waste tokens and stall progress.
-
-4. NO SILENT ESCALATION
-   Every REVIEW_BLOCKED includes: what failed, why, what would unblock.
-   WHY: "I'm stuck" without reason creates deadlock.
+/pocketto:pocket-review docs/pocket/plans/2026-05-28-auth/execution-plan.md
+/pocketto:pocket-review docs/pocket/plans/2026-05-28-auth/execution-plan-phase-1.md
+/pocketto:pocket-review docs/pocket/plans/2026-05-28-auth/
 ```
 
-## The Process
+## Main Agent Role (HARDENED)
 
-```dot
-digraph review_process {
-    rankdir=TB;
+Main agent = **Delegator + Preflight only**. Does NOT review code.
 
-    "Receive task context" -> "Input Validation";
-    "Input Validation" -> { "INVALID" "Stage 1: Spec Compliance" };
-    "INVALID" -> "REVIEW_BLOCKED";
-    "Stage 1: Spec Compliance" -> "Read actual code";
-    "Read actual code" -> "Compare vs DELIVERABLE";
-    "Compare vs DELIVERABLE" -> { "STAGE_1_PASS" "STAGE_1_FAIL" };
+| Main agent MUST | Main agent MUST NOT |
+|-----------------|---------------------|
+| Run preflight and validate log.json | Read implementation files or assess code |
+| Compute SHA ranges per task via git diff | Evaluate spec compliance or code quality |
+| Dispatch ALL reviewer subagents in one parallel call | Re-dispatch implementers (no loop in batch mode) |
+| Collect subagent results and write review JSON files | Interpret subagent findings beyond what they report |
+| Print summary table | Update log.json status (leave to user or pocket-closing) |
 
-    "STAGE_1_FAIL" -> "Generate fix instructions";
-    "Generate fix instructions" -> "REVIEW_FAIL";
+## Preflight
 
-    "STAGE_1_PASS" -> "Stage 2: Code Quality";
-    "Stage 2: Code Quality" -> "Circuit Breaker Check";
-    "Circuit Breaker Check" -> { "SKIP" "Read actual code" };
-    "SKIP" -> "Set stage_2 = SKIPPED";
-    "Set stage_2 = SKIPPED" -> "REVIEW_FAIL";
+Run ALL steps before dispatching any subagent. One failure in steps 1–3 → PHASE_BLOCKED immediately.
 
-    "Read actual code" -> "Compare vs QUALITY BAR";
-    "Compare vs QUALITY BAR" -> { "STAGE_2_PASS" "STAGE_2_FAIL" };
-
-    "STAGE_2_FAIL" -> "Generate fix instructions";
-    "Generate fix instructions" -> "REVIEW_FAIL";
-
-    "STAGE_2_PASS" -> "Write review report";
-    "Write review report" -> "REVIEW_PASS";
-
-    "REVIEW_FAIL" -> "Write review report";
-    "Write review report" -> "current_cycle < limit AND < 5?";
-    "current_cycle < limit AND < 5?" -> "Return REVIEW_FAIL to pocket-development" [label="yes"];
-    "current_cycle < limit AND < 5?" -> "REVIEW_BLOCKED" [label="no"];
-}
-```
-
-## Stage 1: Spec Compliance
-
-**Mode:** Read-only review
-
-**Question:** Did the implementer build the RIGHT thing?
-
-### Verification Process
+### Step 1: Resolve plan_dir and phase_file
 
 ```
-1. Read the phase file at <plan_dir>/<phase_file>
-   → extract task's DELIVERABLE section
-
-2. Read the spec file at <spec_ref> (strip #fragment if present)
-   → extract acceptance criteria rule
-
-3. Read ACTUAL code files from files_changed (NOT implementer's report)
-
-4. For each DELIVERABLE item:
-   - [ ] Requirement present in code?
-   - [ ] Behavior matches spec?
-   - [ ] No extra work not in spec?
-
-5. Handle concerns if present:
-   - Correctness risk → investigate and report as Stage 1 finding
-   - Observation → note in report, proceed
-   - null/empty concerns → skip concerns handling
-
-6. Report with file:line references
+If invoked with a file path → plan_dir = parent dir, phase_file = filename
+If invoked with a dir path → scan for execution-plan*.md, use the only/first match
 ```
 
-### Output Format
+### Step 2: Read log.json
 
 ```
-✅ SPEC COMPLIANT
-   All requirements verified:
-   - [x] <requirement 1> (<file>:<line>)
-   - [x] <requirement 2> (<file>:<line>)
-
-❌ ISSUES FOUND
-   Missing requirements:
-   - [ ] <description> (<file>:<line> or "not found")
-   Extra work:
-   - [+] <description> (<file>:<line>)
-   Misunderstanding:
-   - [~] <description> — expected X, got Y (<file>:<line>)
+<plan_dir>/log.json
 ```
 
-**Reference:** `references/spec-compliance-review.md` for full DO/DON'T table and edge cases.
+Verify:
+- File exists → else `PHASE_BLOCKED: "log.json not found at <path>"`
+- `header.baseline_sha` is a non-null string → else `PHASE_BLOCKED: "baseline_sha missing in log.json header"`
+- `phases[N].tasks` array exists for the target phase
 
-## Stage 2: Code Quality
+### Step 3: Check scope (sequential plans only)
 
-**Mode:** Read-only review
-
-**Question:** Did the implementer build it WELL?
-
-### Circuit Breaker (Run First)
-
-```
-IF Stage_1.status = FAIL in this invocation:
-  - Set stage_2.status = "SKIPPED"
-  - Set stage_2.assessment = "N/A"
-  - Skip all remaining Stage 2 steps
-  - Proceed to review report generation
-```
-
-### Verification Process
+Read the phase file. If any task header has a `[depends: ...]` tag:
 
 ```
-1. Read ACTUAL code files from files_changed
-
-2. Check against QUALITY BAR from Pocket Packet:
-   - Must-have items present?
-   - Must-not-have items absent?
-   - No red flags triggered?
-
-3. Check code quality:
-   - Follows existing codebase patterns?
-   - Proper error handling?
-   - Tests verify behavior (not just pass)?
-   - Clean, maintainable structure?
-
-4. Classify issues by severity
+PHASE_BLOCKED: "Plans with [depends:...] cross-task dependencies are not supported.
+               pocket-review uses sequential SHA ranges — non-sequential graphs produce wrong file attribution.
+               Review manually or restructure as a sequential plan."
 ```
 
-### Issue Severity
+Normal pocket-development plans are sequential. This check is a safety guard.
 
-| Severity | Meaning | Action |
-|----------|---------|--------|
-| **Critical** | Security risk, data loss possible | Must fix before PASS |
-| **Important** | Bug risk, maintainability impact | Must fix before PASS |
-| **Minor** | Style, preferences | Note, implementer may fix |
+### Step 4: Build reviewable task list
 
-### Output Format
+Iterate tasks in plan order. For each task:
 
 ```
-STRENGTHS:
-- <positive observation 1>
-- <positive observation 2>
+prev_sha = header.baseline_sha           (for the first task)
+         = previous_task.done_sha        (for subsequent tasks)
 
-ISSUES:
-- [Critical] <description> (<file>:<line>)
-- [Important] <description> (<file>:<line>)
-- [Minor] <description> (<file>:<line>)
-
-ASSESSMENT: Approved | Request Changes
+files_changed = git diff --name-only <prev_sha>..<task.done_sha>
 ```
 
-**Reference:** `references/code-quality-review.md` for full checklist and severity classification guide.
+| Condition | Action |
+|-----------|--------|
+| `task.status != "DONE"` | Skip — log: `"T{id} not DONE (status: {status}) — skipped"` |
+| `task.done_sha` missing or null | Skip — log: `"T{id} missing done_sha — skipped"` |
+| `files_changed` is empty | Skip — log: `"T{id} SHA range <prev>..<done> has no file changes — skipped"` |
 
-## Review Loop
+If zero tasks are reviewable → `PHASE_BLOCKED: "No reviewable tasks found. Ensure all tasks are DONE with done_sha."`.
 
-When either stage fails:
+### Step 5: Extract task context from plan file
 
-```
-1. Generate fix instructions (specific, with file:line references)
-2. Write review report to <plan_dir>/reviews/<task_id>-cycle-<N>.json
-3. Check: current_cycle < review_loop_limit AND current_cycle < 5?
-   YES → Return REVIEW_FAIL to pocket-development
-   NO  → Return REVIEW_BLOCKED
-```
+For each reviewable task, read the plan file and extract:
+- `DELIVERABLE` section (under `### Task N: Name`)
+- `spec_ref` — the spec file the task references (absolute path)
+- `quality_bar` — must-have, must-not-have, red flags
 
-**Loop limit:**
-- Soft limit: `review_loop_limit` (default: 2)
-- Hard cap: 5 cycles absolute maximum
-- If review_loop_limit > 5, escalation still fires at cycle 5
+### Step 6: Ensure reviews/ directory exists
 
-**Escalation:**
-```
-REVIEW_BLOCKED: Task T3 (Phase N of M)
-Failed after: <N> review cycles (hard cap: 5)
-Remaining issues:
-  - [Critical] Token expiry not checked (auth_service.py:42) — failed across cycles
-  - [Important] Magic number 3600 (auth_service.py:45) — failed across cycles
-Root cause: Implementer consistently misses error handling patterns
-Recommended action: Human review of error handling approach, possible task split
-→ Awaiting human decision
+```bash
+mkdir -p <plan_dir>/reviews/
 ```
 
-## Review Report Artifact
+### Step 7: Load reviewer reference file paths
 
-Every review cycle writes to `reviews/` subdirectory:
-
+Note absolute paths — these are passed to subagents:
 ```
-docs/pocket/plans/{slug}/
-├── log.json
-├── <phase_file>
-└── reviews/
-    ├── T3-cycle-1.json
-    ├── T3-cycle-2.json
-    └── ...
+<skill_dir>/references/spec-compliance-review.md
+<skill_dir>/references/code-quality-review.md
+<skill_dir>/references/review-report-template.md
 ```
 
-**Write before returning control.** Report file name: `<task_id>-cycle-<current_cycle>.json`
+## Dispatch (Parallel)
 
-### Report JSON Schema
+After all preflight steps pass, load `references/subagent-dispatch-template.md` to get the exact prompt structure.
 
-Required fields: `task_id`, `task_name`, `cycle`, `timestamp`, `reviewer_config`, `stage_1`, `stage_2`, `overall`, `fix_instructions`, `loop_info`
+Construct one review packet per reviewable task. Then dispatch ALL subagents in a **single message** (one Agent tool call per task, all in the same response).
+
+**Subagent type:** `code-reviewer`
+
+**Never dispatch sequentially.** All tasks go in one parallel batch.
+
+## Collect and Write
+
+After ALL subagents complete:
+
+1. For each subagent result:
+   - Parse the JSON output from the subagent
+   - Write to `<plan_dir>/reviews/<task_id>-review.json`
+   - If subagent could not complete → write a REVIEW_BLOCKED stub entry
+
+2. Print summary table:
+
+```
+PHASE REVIEW COMPLETE — <phase_file>
+──────────────────────────────────────────
+T1  <task_name>          REVIEW_PASS
+T2  <task_name>          REVIEW_FAIL   ← issues found
+T3  <task_name>          skipped (no file changes)
+──────────────────────────────────────────
+Pass: 1  Issues: 1  Skipped: 1
+```
+
+3. For each REVIEW_FAIL task, print the `fix_instructions` from the report.
+
+## Output States
+
+| State | Meaning |
+|-------|---------|
+| PHASE_REVIEWED | All reviewable tasks reviewed — pass or issues |
+| PHASE_BLOCKED | Preflight failed — cannot review |
+
+**No review loop in batch mode.** If issues are found (REVIEW_FAIL in JSON), fix the code and re-run pocket-review.
+Re-running overwrites existing `reviews/<task_id>-review.json` files.
+
+## Iron Laws
+
+```
+1. NO CODE READING BY MAIN AGENT
+   Only subagents read implementation files.
+   WHY: Main agent is delegator, not reviewer. Self-review defeats the independence principle.
+
+2. NO SEQUENTIAL DISPATCH
+   All subagents dispatched in one parallel Agent call.
+   WHY: Reviews are independent per task. Serial dispatch wastes time.
+
+3. NO LOOP
+   One review per run. Fix issues, then re-run.
+   WHY: No implementer to re-dispatch to. Batch mode is observe-and-report only.
+
+4. NO SILENT BLOCK
+   Every PHASE_BLOCKED includes: what failed, why, what would unblock.
+```
+
+## Sample log.json (Valid Preflight Input)
 
 ```json
 {
-  "task_id": "T3",
-  "task_name": "Extract auth layer",
-  "cycle": 1,
-  "timestamp": "2026-05-08T12:00:00Z",
-  "reviewer_config": "standard",
-  "stage_1": {
-    "status": "PASS",
-    "issues": [],
-    "concerns_addressed": []
+  "header": {
+    "plan_dir": "docs/pocket/plans/2026-05-28-auth",
+    "plan_type": "flat",
+    "status": "IN_PROGRESS",
+    "date_started": "2026-05-28",
+    "date_completed": null,
+    "baseline_sha": "abc1234def5678"
   },
-  "stage_2": {
-    "status": "PASS",
-    "strengths": ["Clean separation", "Tests passing"],
-    "issues": [],
-    "assessment": "Approved"
-  },
-  "overall": "REVIEW_PASS",
-  "fix_instructions": "",
-  "loop_info": {
-    "current_cycle": 1,
-    "max_cycles": 2,
-    "cycles_remaining": 1
-  }
+  "phases": [
+    {
+      "order": 1,
+      "file": "execution-plan.md",
+      "status": "DONE",
+      "tasks": [
+        { "id": "T1", "name": "Extract auth layer",    "status": "DONE", "done_sha": "bcd2345efg6789" },
+        { "id": "T2", "name": "Add token validation",  "status": "DONE", "done_sha": "cde3456fgh7890" },
+        { "id": "T3", "name": "Write integration tests","status": "DONE", "done_sha": "def4567ghi8901" }
+      ]
+    }
+  ]
 }
 ```
 
-**Reference:** `references/review-report-template.md` for full schema and all examples.
+SHA ranges computed:
+- T1: `abc1234def5678..bcd2345efg6789`
+- T2: `bcd2345efg6789..cde3456fgh7890`
+- T3: `cde3456fgh7890..def4567ghi8901`
 
-## Model Tiering for Reviewers
-
-| Stage | Complexity | When to Escalate |
-|-------|------------|------------------|
-| Stage 1: Spec Compliance | Standard | Escalate if spec is complex or multi-file |
-| Stage 2: Code Quality | Standard | Escalate for architectural review or high-risk code |
-
-**Escalation within a loop:** If Stage 1 fails due to reasoning errors (reviewer misunderstood spec — distinguish from real spec violation by checking if the issue is about spec interpretation vs missing code), escalate to deeper review before re-review. Record configuration used in `reviewer_config` field.
-
-## Red Flags
-
-**Never do:**
-- Skip Stage 1 and go straight to Stage 2
-- Trust implementer's self-report without reading code
-- Run Stage 2 on spec-non-compliant code (circuit breaker should prevent)
-- Exceed review loop limit without escalating
-- Accept vague fix instructions ("handle edge cases")
-- Review without file:line references
-- Invoke on DONE_WITH_CONCERNS without clearance from pocket-development
-
-**If code is unreadable:**
-- Report as Stage 2 issue: [Important] Code readability
-- Do not attempt to review quality of incomprehensible code
-
-**If spec is ambiguous:**
-- Report as Stage 1 issue: [missing] Ambiguous spec — cannot verify
-- Do not guess intent — escalate to human
-
-**If spec vs quality conflict (code matches spec but spec has security flaw):**
-- Stage 1: PASS (code matches spec)
-- Stage 2: Flag as Critical issue with note: "Spec compliance confirmed but potential spec-level security concern"
-- Escalate: "Spec vs quality conflict — human decision needed on whether spec should change"
-
-## Reference Triggers
+## Reference Files
 
 | Reference | When to Load |
 |-----------|--------------|
-| `references/spec-compliance-review.md` | Stage 1 review — full verification protocol |
-| `references/code-quality-review.md` | Stage 2 review — quality checklist + severity guide |
-| `references/review-report-template.md` | Writing review report artifact — schema + examples |
+| `references/subagent-dispatch-template.md` | Before dispatching — exact prompt structure per task |
+| `references/spec-compliance-review.md` | Pass absolute path to subagent prompt |
+| `references/code-quality-review.md` | Pass absolute path to subagent prompt |
+| `references/review-report-template.md` | Pass absolute path to subagent prompt |

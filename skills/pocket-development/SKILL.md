@@ -85,11 +85,11 @@ Main agent = **Delegator + Auditor only**. This is non-negotiable.
 | Main agent MUST | Main agent MUST NOT |
 |-----------------|---------------------|
 | Initialize and update pocket log | Write, edit, or create implementation code |
-| Construct Pocket Packets and dispatch subagents | Invoke `pocket-review` skill per-task during execution |
+| Construct Pocket Packets and dispatch subagents | Invoke `pocket-review` during execution (it's user-triggered post-phase) |
 | Run quick audit after each implementer DONE | Do full two-stage review during development |
-| Invoke `pocket-review` after ALL tasks are done | Take over a task because "it's faster to do it myself" |
+| Emit PHASE_COMPLETE handoff with pocket-review command | Take over a task because "it's faster to do it myself" |
 
-**Full two-stage review (`pocket-review`) is only called once — after the last task is marked DONE. Per-task review is a quick audit only (see [Review](#review) section).**
+**Full two-stage review (`pocket-review`) is user-triggered after ALL tasks are DONE — pocket-development does NOT invoke it. Per-task review during execution is a quick audit only (see [Review](#review) section).**
 
 ---
 
@@ -348,8 +348,8 @@ digraph pocket_process {
 
     "Mark task DONE in log" -> "More tasks?";
     "More tasks?" -> "Extract task N+1" [label="yes"];
-    "More tasks?" -> "Invoke pocket-review (full two-stage)" [label="no"];
-    "Invoke pocket-review (full two-stage)" -> "Phase file?";
+    "More tasks?" -> "Emit PHASE_COMPLETE handoff" [label="no"];
+    "Emit PHASE_COMPLETE handoff" -> "Phase file?";
     "Phase file?" -> "Evaluate Phase Completion Gate" [label="yes (Type B)"];
     "Phase file?" -> "Done" [label="no (Type A)"];
     "Evaluate Phase Completion Gate" -> { "PHASE_COMPLETE report" "PHASE_BLOCKED report" };
@@ -427,11 +427,20 @@ Do NOT mark task DONE until audit passes.
 
 **DONE_WITH_CONCERNS:** Assess concerns first. If correctness risk → address before running quick audit. If observation only → proceed with quick audit normally (concerns go into the final pocket-review phase).
 
-### End-of-Execution Full Review (after all tasks done)
+### End-of-Execution Handoff (after all tasks done)
 
-After ALL tasks are marked DONE in the log, invoke the `pocket-review` skill once for the full two-stage review (spec compliance → code quality).
+After ALL tasks are marked DONE in the log, emit a PHASE_COMPLETE handoff message. Do NOT invoke pocket-review directly.
 
-See `pocket-review` skill for full two-stage review protocol, review loop, and escalation handling.
+```
+PHASE_COMPLETE: All tasks marked DONE.
+
+Full spec compliance + code quality review is a separate user-triggered step.
+
+Run: /pocketto:pocket-review <plan_dir>/<phase_file>
+
+pocket-review dispatches parallel reviewer subagents (one per task) and writes results to:
+<plan_dir>/reviews/
+```
 
 ## Status Handling
 
@@ -442,7 +451,7 @@ See `pocket-review` skill for full two-stage review protocol, review loop, and e
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
 | **BLOCKED** | Categorize blocker type → Fix → Re-dispatch |
 
-**After ALL tasks DONE:** invoke `pocket-review` skill once for full two-stage review.
+**After ALL tasks DONE:** emit PHASE_COMPLETE handoff with the `/pocketto:pocket-review <plan_dir>` command. Do NOT invoke pocket-review directly — it is user-triggered.
 
 ### BLOCKED Categorization
 
@@ -495,8 +504,8 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Exits no
 | Session start (log.json exists, tasks missing) | Script 1 — auto-migrates tasks into existing phases |
 | Quick audit passes for a task | Script 2 `--task TN` → `DONE` |
 | Unresolvable BLOCKED (task) | Script 2 `--task TN` → `BLOCKED` |
-| All tasks in phase DONE → entering pocket-review | Script 2 (phase) → `REVIEW` |
-| pocket-review passes for phase | Script 2 (phase) → `DONE` |
+| All tasks in phase DONE → emit PHASE_COMPLETE handoff | Script 2 (phase) → `REVIEW` |
+| pocket-review passes (user runs it separately) | Script 2 (phase) → `DONE` |
 | Unresolvable BLOCKED (phase) | Script 2 (phase) → `BLOCKED` |
 | All phases complete (Type B only) | Script 3 (close) |
 
@@ -558,7 +567,7 @@ When delegation pressure threatens to bypass structure:
 
 **Main agent role violations (HARDENED — see [Main Agent Role](#main-agent-role-hardened) section):**
 - Implement code yourself instead of delegating to a subagent
-- Invoke `pocket-review` skill per-task during execution (full review = after ALL tasks done)
+- Invoke `pocket-review` directly — it is user-triggered post-phase, not called by pocket-development
 - Mark task DONE in the log without running the quick audit first
 
 **Delegation violations:**
