@@ -17,8 +17,20 @@ Examples:
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+
+def get_git_sha(cwd: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=cwd,
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+    except FileNotFoundError:
+        return None
 
 VALID_STATUSES = {"WAITING", "REVIEW", "DONE", "BLOCKED"}
 
@@ -70,6 +82,10 @@ def main():
         task = task_match[0]
         old_status = task["status"]
         task["status"] = new_status
+        if new_status == "DONE":
+            sha = get_git_sha(plan_dir)
+            if sha:
+                task["done_sha"] = sha
         log_path.write_text(json.dumps(log, indent=2) + "\n")
         print(f"Updated {args.phase_file} / {task['id']} ({task['name']}): {old_status} → {new_status}")
     else:

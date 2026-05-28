@@ -16,9 +16,21 @@ tasks, injects tasks into existing phases (migration) without touching phase sta
 
 import json
 import re
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+
+
+def get_git_sha(cwd: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=cwd,
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+    except FileNotFoundError:
+        return None
 
 
 def resolve_plan_dir(arg: str) -> Path:
@@ -125,6 +137,7 @@ def main():
             "status": "IN_PROGRESS",
             "date_started": date.today().isoformat(),
             "date_completed": None,
+            "baseline_sha": get_git_sha(plan_dir),
         },
         "phases": phases,
     }
