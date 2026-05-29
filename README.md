@@ -2,7 +2,7 @@
 
 > Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows.
 
-Provides 8 skills for systematic, structured development — from raw idea to shipped code.
+Provides 9 skills for systematic, structured development — from raw idea to shipped code.
 
 ## Installation
 
@@ -55,6 +55,7 @@ pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring �
 | `pocket-structuring` | Plan has ≥7 tasks, needs phase splitting |
 | `pocket-development` | Plan ready, execute task-by-task via subagents |
 | `pocket-review` | Called internally by pocket-development after each task |
+| `pocket-branding` | Design system, creative brief, brand identity, UI tokens |
 
 ---
 
@@ -121,6 +122,17 @@ Fast iteration workflow for small-to-medium changes. Enforces brief-plan + subag
 **Trigger:** "quick fix", "small change", "just update X"
 
 ---
+
+### `pocketto:pocket-branding`
+
+Brand-aware design system generator that acts as Head of Brand. Translates abstract brand language into a mathematically-validated, implementation-ready design system, then writes `creative-brief.md` as the source of truth for all UI/UX in a project. Standalone skill (like bug-hunting and hotfix — no full pipeline required).
+
+**Trigger:** "pocket-branding", "design system", "creative brief", "define the brand", "brand identity", "set up UI tokens"
+
+**Deliverables:**
+- `docs/pocket/rule/creative-brief.md` — the design system source of truth
+- `docs/pocket/rule/creative-brief-preview.html` — visual preview for alignment
+- `.claude/rules/pocket-branding.md` — enforcement rule for future UI work
 
 ## CLI Tools
 
