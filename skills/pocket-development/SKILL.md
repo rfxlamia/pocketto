@@ -188,6 +188,7 @@ Before constructing any Pocket Packet, you MUST load the relevant reference file
 | Packet construction | `references/pocket-packet.md`, `references/sandwich-prompt.md` |
 | Task decomposition unclear | `references/task-decomposition.md` |
 | Entry gate fails | `references/entry-gate.md`, `references/iron-laws.md` |
+| Plan has `[parallel: TX]` annotations | `references/entry-gate.md` (classification rules) |
 | Status is BLOCKED/NEEDS_CONTEXT | `references/status-handling.md` |
 
 ### Citation Requirement
@@ -210,7 +211,7 @@ references/task-decomposition.md — Guidelines for splitting complex tasks into
 
 ## Pocket Packet Structure
 
-Every subagent spawn requires this 7-field structure:
+Every subagent spawn requires this 7-field structure (plus an 8th `WORKTREE` field for tasks classified as PARALLEL GROUP at the Entry Gate — see [Parallel Group Execution](#parallel-group-execution)):
 
 ```markdown
 ## OBJECTIVE
@@ -329,7 +330,13 @@ digraph pocket_process {
     rankdir=TB;
 
     "Read plan, extract task N" -> "Run Entry Gate Checklist";
-    "Run Entry Gate Checklist" -> { "KEEP LOCAL" "Construct Pocket Packet" };
+    "Run Entry Gate Checklist" -> { "KEEP LOCAL" "Classify task" };
+    "Classify task" -> { "FOUNDATION / SOLO" "PARALLEL GROUP" };
+    "FOUNDATION / SOLO" -> "Construct Pocket Packet";
+    "PARALLEL GROUP" -> "Run Parallel Group Execution";
+    "Run Parallel Group Execution" -> "Construct Pocket Packets (incl. WORKTREE)";
+    "Construct Pocket Packets (incl. WORKTREE)" -> "Spawn implementers (parallel batch)";
+    "Spawn implementers (parallel batch)" -> "Wait for status";
     "KEEP LOCAL" -> "Handle locally, skip subagent";
     "Construct Pocket Packet" -> "Spawn implementer";
     "Spawn implementer" -> "Wait for status";
@@ -354,6 +361,155 @@ digraph pocket_process {
     "Phase file?" -> "Done" [label="no (Type A)"];
     "Evaluate Phase Completion Gate" -> { "PHASE_COMPLETE report" "PHASE_BLOCKED report" };
 }
+```
+
+## Parallel Group Execution
+
+Activates when Entry Gate item 5 classifies tasks as PARALLEL GROUP. Subagents are spawned as twins/forks inheriting CWD; without isolation they collide on `git status`, `git log`, lockfiles, and shared registries. Worktree-per-task gives each subagent a clean checkout.
+
+**Classification happens in `references/entry-gate.md`.** This section covers the execution mechanics once classification = PARALLEL GROUP.
+
+### Worktree Setup (main agent, before dispatch)
+
+```bash
+parent_sha=$(git rev-parse HEAD)        # latest merged task or baseline
+
+# One-time per repo (idempotent):
+grep -qxF '.worktree/' .gitignore || echo '.worktree/' >> .gitignore
+
+# Per task in the group:
+for task in group:
+    git worktree add .worktree/<task_id> -b task/<task_id> $parent_sha
+```
+
+Path: `<cwd>/.worktree/<task_id>` — conventional location, auto-added to `.gitignore` of main branch on first parallel run.
+
+### Pocket Packet — WORKTREE Field (parallel tasks only)
+
+Sequential tasks: omit. Parallel tasks: required.
+
+```markdown
+## WORKTREE
+Path:       <abs_path>/.worktree/<task_id>
+Branch:     task/<task_id>
+Parent SHA: <parent_sha>
+[CRITICAL: ALL operations must run from this worktree.
+ First action: `cd <abs_path>/.worktree/<task_id>`. Do NOT touch parent repo.]
+```
+
+SANDWICH CONTEXT enforces CWD twice (Iron Law #4):
+
+```
+FIRST LINE: [CRITICAL: cd <abs_worktree_path> BEFORE any file or git
+             operation. Wrong CWD = audit fail.]
+
+NEAR END:   [REPEAT: Final commit must land on branch task/<task_id>.
+             Verify before reporting DONE:
+               git -C <abs_worktree_path> branch --show-current]
+```
+
+### Parallel Dispatch
+
+Dispatch ALL tasks in the group in ONE batch — single message containing N parallel Agent calls. Same pattern pocket-review uses for its review subagents.
+
+**Never** dispatch sequentially within a group. Concurrency is the entire point.
+
+### Per-Worktree Quick Audit (main agent)
+
+When a subagent reports DONE, audit runs against ITS worktree:
+
+```bash
+WT=.worktree/<task_id>
+
+# 1. CWD discipline — catches "subagent ignored cd"
+[[ $(git -C $WT branch --show-current) == "task/<task_id>" ]] || AUDIT FAIL
+
+# 2. At least one commit ahead of parent
+[[ $(git -C $WT rev-list $parent_sha..HEAD --count) -gt 0 ]] || AUDIT FAIL
+
+# 3. Tests (if plan specifies a test command) — inside worktree
+git -C $WT <test_command>
+
+# 4. DELIVERABLE checklist verified against worktree state
+```
+
+Audit fail → re-dispatch implementer with same WORKTREE field. Worktree RETAINED until audit passes.
+
+### Group Merge (main agent, after ALL group tasks audit-pass)
+
+Main agent performs merges sequentially in plan order from the main repo:
+
+```bash
+for task in group_in_plan_order:                    # T5 → T6 → T7
+    git merge --no-ff task/<task_id> \
+              -m "Merge <task_id> (parallel group)"
+
+    # On conflict:
+    git merge --abort
+    → BLOCKED: category=parallel-conflict
+      Reason:   <task_id> conflicts with already-merged <prev_task>
+      Files:    <conflicting files>
+      Unblock:  User decides resolution strategy
+      Halt — worktrees retained for diagnosis
+```
+
+Merge commit SHA becomes that task's `done_sha` in log.json — **schema stays linear**, pocket-review preflight unchanged.
+
+```bash
+pocket-log-update <plan_dir> <phase_file> DONE --task <task_id>
+# Captures HEAD (= merge_sha) as done_sha
+```
+
+### Cleanup (main agent, after group fully merged + logged)
+
+```bash
+for task in group:
+    git worktree remove .worktree/<task_id>
+    git branch -d task/<task_id>
+```
+
+If ANY task in the group is BLOCKED → NO cleanup of any worktree in that group. Diagnosability over tidiness.
+
+### Risk Mitigations Built Into Flow
+
+| Risk | Mitigation |
+|------|------------|
+| Subagent ignores `cd` instruction | Audit Step 1 verifies `branch --show-current` = `task/<task_id>`. Wrong branch = AUDIT FAIL — no human-trust gap |
+| Lockfile / build artifact race | Each worktree builds independently. Shared caches (pnpm store, cargo target) are project-specific — handle in plan, not skill |
+| `.worktree/` polluting repo | Auto-added to `.gitignore` on first parallel run, auto-removed after merge |
+| Conflict mid-merge | Sequential merge in plan order + `--abort` + structured BLOCKED with file list |
+| log.json schema drift | `done_sha = merge_sha` keeps log linear; pocket-review untouched |
+| Misclassified parallel/sequential | Caught at Entry Gate item 5 (classification), not here |
+
+### Sample Flow
+
+```
+Plan: T5, T6, T7 — parallel group after T4
+
+1. T4 merged. parent = git rev-parse HEAD (= T4's done_sha)
+
+2. Entry Gate items 1-4 pass for each task individually.
+   Item 5 classifies all three as PARALLEL GROUP.
+
+3. Worktree setup:
+   git worktree add .worktree/T5 -b task/T5 parent
+   git worktree add .worktree/T6 -b task/T6 parent
+   git worktree add .worktree/T7 -b task/T7 parent
+
+4. Dispatch [T5, T6, T7] in ONE message — each packet has its WORKTREE field
+
+5. All return DONE → audit each in its worktree → all pass
+
+6. Main agent merges sequentially:
+   git merge --no-ff task/T5 → done_sha[T5] = HEAD
+   git merge --no-ff task/T6 → done_sha[T6] = HEAD
+   git merge --no-ff task/T7 → done_sha[T7] = HEAD
+
+7. pocket-log-update for each → log stays linear
+
+8. Cleanup: remove worktrees, delete branches
+
+9. Continue to T9 (deps now satisfied)
 ```
 
 ## Sandwich Prompt Rules
@@ -461,6 +617,7 @@ pocket-review dispatches parallel reviewer subagents (one per task) and writes r
 | Reasoning needs | Escalate review depth |
 | Task too large | Split into smaller packets |
 | Plan wrong | Escalate to human |
+| Parallel-conflict | Group merge failed — abort merge, escalate to user with conflicting file list, retain worktrees for diagnosis |
 
 Every BLOCKED status must include:
 1. What's blocked (specific)
@@ -577,6 +734,8 @@ When delegation pressure threatens to bypass structure:
 - Give ambiguous prompts ("handle X", "fix Y")
 - Proceed with BLOCKED status without categorizing
 - Accept vague escalation ("I'm stuck" without reason)
+- Dispatch a parallel group without creating worktrees first — collision risk on `git status`, `git log`, lockfiles, shared registries
+- Merge a parallel group before ALL tasks in the group audit-pass — partial merges create ambiguous parent SHAs for the rest
 
 **If agent asks questions:**
 - Answer clearly and completely
@@ -595,7 +754,7 @@ Load these reference files when SKILL.md says "see reference for details" or whe
 | Reference | When to Load | What You'll Learn |
 |-----------|--------------|-------------------|
 | `references/iron-laws.md` | Iron laws enforcement details or pressure countermeasure specifics | Full text of 6 iron laws with enforcement examples |
-| `references/entry-gate.md` | Gate checklist fails, need decision matrix or KEEP LOCAL examples | Decision tree for gate pass/fail |
+| `references/entry-gate.md` | Gate checklist fails, need decision matrix or KEEP LOCAL examples, OR plan has `[parallel: TX]` annotations | Decision tree for gate pass/fail; Foundation/Parallel-Group/Solo classification rules |
 | `references/pocket-packet.md` | Packet construction unclear, need field-by-field guide | Complete field definitions with examples |
 | `references/sandwich-prompt.md` | Need attention mechanic details or method selection | Sandwich structure variations |
 
