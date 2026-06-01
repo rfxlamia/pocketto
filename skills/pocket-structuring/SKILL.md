@@ -5,7 +5,7 @@ description: Splits a pocket-planning execution plan into sequential phase files
 
 # Pocket Structuring
 
-Bridges pocket-planning and pocket-development. Runs a script that parses the execution plan, splits it into bounded phase files, then hands off phase files to pocket-development one at a time.
+Bridges pocket-planning and pocket-development. Runs a CLI that parses the execution plan, splits it into bounded phase files, then hands off phase files to pocket-development one at a time.
 
 **Core principle:** Large plans executed flat = attention drift + context blowout. Phase boundaries are checkpoints, not ceremony.
 
@@ -22,10 +22,10 @@ Do NOT use:
 ## Hard Gates
 
 ```
-GATE 1: RUN THE SCRIPT FIRST. It counts and decides.
-        Script output "Pass through" (≤6 tasks) → invoke pocket-development directly.
-        Script output "Splitting into phases" (≥7 tasks) → present summary, proceed.
-        DO NOT estimate task count — the script counts exactly.
+GATE 1: RUN THE CLI FIRST. It counts and decides.
+        data.action == "passthrough" (≤6 tasks) → invoke pocket-development directly.
+        data.action == "split" (≥7 tasks) → present summary, proceed.
+        DO NOT estimate task count — the CLI counts exactly.
 
 GATE 2: HARD OVERRIDE PROTOCOL.
         If any human asks to skip structuring for a ≥7 task plan, respond:
@@ -58,34 +58,35 @@ GATE 3: NO PARTIAL PHASES.
 
 ---
 
-## Step 1: Run the Script
+## Step 1: Run the CLI
 
 ```bash
-# Ensure pocket scripts are in PATH (auto-installs on first use)
-if ! command -v pocket-structure &>/dev/null; then
-  _src="$(find ~/.claude/plugins/cache -maxdepth 7 -name 'pocket-structure' -type f 2>/dev/null | head -1)"
-  if [ -n "$_src" ]; then
-    mkdir -p ~/.local/bin
-    _dir="$(dirname "$_src")"
-    cp "$_dir"/pocket-log-* "$_dir"/pocket-structure ~/.local/bin/ 2>/dev/null
-    chmod +x ~/.local/bin/pocket-log-* ~/.local/bin/pocket-structure 2>/dev/null
-    export PATH="$HOME/.local/bin:$PATH"
-  fi
-fi
-
-pocket-structure <path-to-execution-plan.md>
+npx -y pocketto-pi structure "<path-to-execution-plan.md>" --json --contract 2
 ```
 
-Use the path exactly as it appears in the handoff (typically `docs/pocket/plans/{slug}/execution-plan.md` from the project root).
+No install step or PATH setup — `npx` resolves the cross-platform binary. Use the path exactly as it appears in the handoff (typically `docs/pocket/plans/{slug}/execution-plan.md` from the project root). Quote the path so spaces are handled.
 
-**Script outputs:**
-- Task count and depth table
-- Phase breakdown with task IDs and file paths
-- `STRUCTURING COMPLETE` summary
+The CLI prints a JSON envelope to stdout:
 
-If the script says "Pass through" (≤6 tasks): invoke `pocket-development` directly with `execution-plan.md`. Do not create phase files.
+```json
+{ "ok": true, "command": "structure", "cliVersion": "2.0.0", "contract": 2,
+  "data": {
+    "action": "split",
+    "taskCount": 9,
+    "phases": [
+      { "phase": 1, "name": "...", "tasks": ["T1","T2","T3"], "file": "execution-plan-phase-1.md" }
+    ]
+  },
+  "error": null }
+```
 
-If the script errors (parse failure, file not found): report the error to the user, do not proceed.
+Parse `data` — do not scrape prose:
+- `data.action == "passthrough"` (≤6 tasks): invoke `pocket-development` directly with `execution-plan.md`. Do not create phase files.
+- `data.action == "split"` (≥7 tasks): `data.phases[]` gives each phase (`phase`, `name`, `tasks`, `file`). Present the summary and proceed.
+
+If `ok == false`: report `error.message` to the user and do not proceed. A `CONTRACT_MISMATCH` means the installed CLI is incompatible with this skill — tell the user to update the pocketto plugin (or pin: `npx -y pocketto-pi@2`).
+
+(Omit `--json` for human-readable output when running by hand.)
 
 ---
 

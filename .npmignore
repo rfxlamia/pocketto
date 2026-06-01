@@ -1,16 +1,10 @@
-# Python cache
-__pycache__/
-**/__pycache__/
-*.pyc
-*.pyo
-*.cpython-*.pyc
-
 # Claude/Pi local config
 .claude/
 .pi/
 .claude-plugin/
 
-# Dev files
+# Dev / test
+test/
 *.swp
 *.swo
 .DS_Store

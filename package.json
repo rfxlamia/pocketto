@@ -1,6 +1,6 @@
 {
   "name": "pocketto-pi",
-  "version": "1.2.2",
+  "version": "2.0.0",
   "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows for Pi.",
   "keywords": [
     "pi-package",
@@ -21,13 +21,17 @@
   "publishConfig": {
     "access": "public"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "skills/**",
     "!skills/**/__pycache__/**",
-    "bin/",
+    "cli/**",
     "README.md"
   ],
   "scripts": {
+    "test": "node --test test/cli.test.js",
     "prepublishOnly": "echo 'Publishing pocketto to npm...'"
   },
   "pi": {
@@ -37,9 +41,6 @@
     "extensions": []
   },
   "bin": {
-    "pocket-log-init": "./bin/pocket-log-init",
-    "pocket-log-update": "./bin/pocket-log-update",
-    "pocket-log-close": "./bin/pocket-log-close",
-    "pocket-structure": "./bin/pocket-structure"
+    "pocketto-pi": "./cli/index.js"
   }
 }
