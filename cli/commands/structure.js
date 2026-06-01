@@ -75,14 +75,20 @@ function parseAnnotation(annotation) {
 
 function computeDepths(tasks) {
   const depths = {};
+  const visiting = new Set();
   function depthOf(tid) {
     if (tid in depths) return depths[tid];
     if (!(tid in tasks)) throw new CliError('UNKNOWN_TASK_REF', `Unknown task reference: ${tid}`);
+    if (visiting.has(tid)) {
+      throw new CliError('CYCLE_DETECTED', `Circular dependency involving: ${tid}`);
+    }
+    visiting.add(tid);
     const task = tasks[tid];
     let d;
     if (task.parallelTarget) d = depthOf(task.parallelTarget);
     else if (task.deps.length === 0) d = 0;
     else d = Math.max(...task.deps.map((dep) => depthOf(dep))) + 1;
+    visiting.delete(tid);
     depths[tid] = d;
     return d;
   }

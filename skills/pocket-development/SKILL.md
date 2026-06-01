@@ -14,14 +14,14 @@ Precise subagent delegation for task-by-task development execution. POCKET ensur
 **Run this before the first task, every session:**
 
 ```bash
-ls "<plan_dir>/log.json" 2>/dev/null || \
-  npx -y pocketto-pi log init "<plan_dir>" --json --contract 2
+npx -y pocketto-pi log init "<plan_dir>" --json --contract 2
 ```
 
-No install step or PATH setup — `npx` resolves the cross-platform binary. Replace `<plan_dir>` with the folder containing your `execution-plan.md` or `execution-plan-phase-N.md` file (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`).
+No install step, PATH setup, or shell-specific guard — `npx` resolves the cross-platform binary and `log init` is idempotent, so this is safe to run unconditionally every session. Replace `<plan_dir>` with the folder containing your `execution-plan.md` or `execution-plan-phase-N.md` file (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`).
 
-- If `log.json` exists → continue
-- If not → the CLI creates it automatically from the plan files in that directory (and migrates tasks into an existing task-less `log.json`)
+- No `log.json` yet → creates it from the plan files in that directory
+- `log.json` exists but tasks missing → migrates tasks into existing phases (status preserved)
+- `log.json` already complete → reports "no migration needed" and writes nothing
 
 Full command reference and update/close commands: see **Execution Log** section below.
 

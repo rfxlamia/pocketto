@@ -270,3 +270,76 @@ test('contract handshake fails loudly on mismatch', () => {
   // Matching contract passes.
   assert.equal(json(['structure', plan, '--contract', '2', '--json']).ok, true);
 });
+
+test('a value-taking flag as the last arg fails instead of being silently dropped', () => {
+  const dir = tmp();
+  const plan = writePlan(dir, SMALL_PLAN);
+  // --contract with no value must NOT silently skip the handshake.
+  const c = run(['structure', plan, '--json', '--contract'], { expectFail: true });
+  assert.equal(JSON.parse(c.stdout.trim()).error.code, 'MISSING_VALUE');
+
+  // --task with no value must NOT silently fall back to a phase-level update.
+  writePlan(dir, NINE_TASK_PLAN);
+  run(['structure', path.join(dir, 'execution-plan.md')]);
+  run(['log', 'init', dir]);
+  const t = run(['log', 'update', dir, 'execution-plan-phase-1.md', 'DONE', '--json', '--task'], { expectFail: true });
+  assert.equal(JSON.parse(t.stdout.trim()).error.code, 'MISSING_VALUE');
+});
+
+test('structure reports a clean error on circular dependencies (no stack overflow)', () => {
+  const dir = tmp();
+  // Needs >= 7 tasks so the splitter (and computeDepths) actually runs;
+  // T6 <-> T7 form the cycle.
+  const cyclic = `# EXECUTION PLAN — Cyclic
+
+**Date:** 2026-06-01
+**Spec:** x.md
+
+## Pocket Packets
+
+---
+
+### Task 1: A [prereq]
+body
+---
+### Task 2: B [depends: T1]
+body
+---
+### Task 3: C [depends: T1]
+body
+---
+### Task 4: D [depends: T2]
+body
+---
+### Task 5: E [depends: T3]
+body
+---
+### Task 6: F [depends: T7]
+body
+---
+### Task 7: G [depends: T6]
+body
+
+## Plan Summary
+`;
+  const plan = writePlan(dir, cyclic);
+  const res = run(['structure', plan, '--json'], { expectFail: true });
+  assert.equal(JSON.parse(res.stdout.trim()).error.code, 'CYCLE_DETECTED');
+});
+
+test('log update/close accept a plan file argument, not just the directory', () => {
+  const dir = tmp();
+  const planFile = writePlan(dir, NINE_TASK_PLAN);
+  run(['structure', planFile]);
+  run(['log', 'init', dir]);
+
+  // Pass the plan FILE (not the dir) — should resolve to the directory's log.json.
+  const upd = json(['log', 'update', planFile, 'execution-plan-phase-1.md', 'DONE', '--task', 'T1', '--json']);
+  assert.equal(upd.ok, true);
+  assert.equal(upd.data.newStatus, 'DONE');
+
+  for (const f of ['execution-plan-phase-1.md', 'execution-plan-phase-2.md', 'execution-plan-phase-3.md']) {
+    run(['log', 'update', planFile, f, 'DONE']);
+  }
+  assert.equal(json(['log', 'close', planFile, '--json']).ok, true);
+});

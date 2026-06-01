@@ -20,16 +20,26 @@ function parseArgs(argv) {
   const positionals = [];
   const flags = { json: false, dryRun: false, task: null, contract: null, version: false, help: false };
 
+  // A flag that takes a value must actually have one — guard against it being
+  // the last token (`argv[++i]` === undefined) or another flag, which would
+  // otherwise be silently dropped.
+  const requireValue = (value, name) => {
+    if (value === undefined || value === '' || value.startsWith('--')) {
+      throw new CliError('MISSING_VALUE', `${name} requires a value.`);
+    }
+    return value;
+  };
+
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') flags.json = true;
     else if (a === '--dry-run') flags.dryRun = true;
     else if (a === '--version' || a === '-v') flags.version = true;
     else if (a === '--help' || a === '-h') flags.help = true;
-    else if (a === '--task') flags.task = argv[++i];
-    else if (a.startsWith('--task=')) flags.task = a.slice('--task='.length);
-    else if (a === '--contract') flags.contract = argv[++i];
-    else if (a.startsWith('--contract=')) flags.contract = a.slice('--contract='.length);
+    else if (a === '--task') flags.task = requireValue(argv[++i], '--task');
+    else if (a.startsWith('--task=')) flags.task = requireValue(a.slice('--task='.length), '--task');
+    else if (a === '--contract') flags.contract = requireValue(argv[++i], '--contract');
+    else if (a.startsWith('--contract=')) flags.contract = requireValue(a.slice('--contract='.length), '--contract');
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -40,7 +50,7 @@ function parseArgs(argv) {
 // A mismatch fails loudly with guidance instead of silently emitting output
 // the skill can't parse.
 function checkContract(requested) {
-  if (requested == null) return;
+  if (requested === null) return; // flag not supplied (a missing value is caught at parse time)
   const r = Number(requested);
   if (!Number.isInteger(r)) {
     throw new CliError('BAD_CONTRACT', `--contract must be an integer, got '${requested}'.`);
@@ -79,13 +89,16 @@ Flags:
   --version, -v     Print version + contract
   --help, -h        Show this help`;
 
+// Set process.exitCode and let the process exit naturally rather than calling
+// process.exit(), which can abandon a pending async stdout write (and truncate
+// the --json envelope) when output is piped.
 function emitSuccess(command, result, json) {
   if (json) {
     process.stdout.write(JSON.stringify(ok(command, result.data)) + '\n');
   } else {
     process.stdout.write(result.human.join('\n') + '\n');
   }
-  process.exit(result.exit ?? 0);
+  process.exitCode = result.exit ?? 0;
 }
 
 function emitError(command, err, json) {
@@ -97,28 +110,30 @@ function emitError(command, err, json) {
   } else {
     process.stderr.write((err.human || `Error: ${message}`) + '\n');
   }
-  process.exit(exitCode);
+  process.exitCode = exitCode;
 }
 
 function main() {
   const argv = process.argv.slice(2);
+  const wantsJson = argv.includes('--json');
 
   let parsed;
   try {
     parsed = parseArgs(argv);
   } catch (err) {
-    emitError('cli', err, false);
+    emitError('cli', err, wantsJson);
     return;
   }
   const { positionals, flags } = parsed;
 
   if (flags.version) {
     process.stdout.write(`pocketto-pi ${CLI_VERSION} (contract ${CONTRACT})\n`);
-    process.exit(0);
+    return;
   }
   if (flags.help || positionals.length === 0) {
     process.stdout.write(HELP + '\n');
-    process.exit(positionals.length === 0 ? 1 : 0);
+    if (positionals.length === 0) process.exitCode = 1;
+    return;
   }
 
   const command = positionals[0];

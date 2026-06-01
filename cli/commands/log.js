@@ -160,7 +160,8 @@ function update(positionals, taskId) {
   if (positionals.length !== 3) {
     throw new CliError('USAGE', 'Usage: pocketto-pi log update <plan_dir> <phase_file> <status> [--task <task_id>]');
   }
-  const [planDir, phaseFile, statusArg] = positionals;
+  const [planDirArg, phaseFile, statusArg] = positionals;
+  const planDir = resolvePlanDir(planDirArg); // accept a plan file or its directory, like `init`
   const newStatus = statusArg.toUpperCase();
   if (!VALID_SET.has(newStatus)) {
     throw new CliError('BAD_STATUS', `status must be one of [${VALID_STATUSES.join(', ')}], got '${statusArg}'.`);
@@ -243,7 +244,7 @@ function close(positionals) {
   if (positionals.length !== 1) {
     throw new CliError('USAGE', 'Usage: pocketto-pi log close <plan_dir>');
   }
-  const planDir = positionals[0];
+  const planDir = resolvePlanDir(positionals[0]); // accept a plan file or its directory, like `init`
   const logPath = path.join(planDir, 'log.json');
   if (!existsSync(logPath)) {
     throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
