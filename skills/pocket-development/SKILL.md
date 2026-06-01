@@ -14,28 +14,16 @@ Precise subagent delegation for task-by-task development execution. POCKET ensur
 **Run this before the first task, every session:**
 
 ```bash
-# Ensure pocket scripts are in PATH (auto-installs on first use)
-if ! command -v pocket-log-init &>/dev/null; then
-  _src="$(find ~/.claude/plugins/cache -maxdepth 7 -name 'pocket-log-init' -type f 2>/dev/null | head -1)"
-  if [ -n "$_src" ]; then
-    mkdir -p ~/.local/bin
-    _dir="$(dirname "$_src")"
-    cp "$_dir"/pocket-log-* "$_dir"/pocket-structure ~/.local/bin/ 2>/dev/null
-    chmod +x ~/.local/bin/pocket-log-* ~/.local/bin/pocket-structure 2>/dev/null
-    export PATH="$HOME/.local/bin:$PATH"
-  fi
-fi
-
-ls <plan_dir>/log.json 2>/dev/null || \
-  pocket-log-init <plan_dir>
+ls "<plan_dir>/log.json" 2>/dev/null || \
+  npx -y pocketto-pi log init "<plan_dir>" --json --contract 2
 ```
 
-Replace `<plan_dir>` with the folder containing your `execution-plan.md` or `execution-plan-phase-N.md` file (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`).
+No install step or PATH setup — `npx` resolves the cross-platform binary. Replace `<plan_dir>` with the folder containing your `execution-plan.md` or `execution-plan-phase-N.md` file (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`).
 
 - If `log.json` exists → continue
-- If not → script creates it automatically from the plan files in that directory
+- If not → the CLI creates it automatically from the plan files in that directory (and migrates tasks into an existing task-less `log.json`)
 
-Full script reference and update/close commands: see **Execution Log** section below.
+Full command reference and update/close commands: see **Execution Log** section below.
 
 ---
 
@@ -456,7 +444,7 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
 Merge commit SHA becomes that task's `done_sha` in log.json — **schema stays linear**, pocket-review preflight unchanged.
 
 ```bash
-pocket-log-update <plan_dir> <phase_file> DONE --task <task_id>
+npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --task <task_id> --json --contract 2
 # Captures HEAD (= merge_sha) as done_sha
 ```
 
@@ -505,7 +493,7 @@ Plan: T5, T6, T7 — parallel group after T4
    git merge --no-ff task/T6 → done_sha[T6] = HEAD
    git merge --no-ff task/T7 → done_sha[T7] = HEAD
 
-7. pocket-log-update for each → log stays linear
+7. `pocketto-pi log update` for each → log stays linear
 
 8. Cleanup: remove worktrees, delete branches
 
@@ -628,43 +616,43 @@ Every BLOCKED status must include:
 
 ## Execution Log
 
-Three scripts manage the log — agent runs commands, no inline file editing. Applies to all plans; Script 3 (close) is Type B only.
+The `pocketto-pi` CLI manages the log — the agent runs commands, no inline file editing. Applies to all plans; `log close` is Type B only. Every call takes `--json --contract 2`; parse `data` and check `ok`.
 
-### Script 2 — Update status
+### `log update` — Update status
 
 Update a **phase**:
 ```bash
-pocket-log-update <plan_dir> <phase_file> <status>
+npx -y pocketto-pi log update <plan_dir> <phase_file> <status> --json --contract 2
 ```
 
 Update a **task within a phase** (add `--task <task_id>`):
 ```bash
-pocket-log-update <plan_dir> <phase_file> <status> --task T1
+npx -y pocketto-pi log update <plan_dir> <phase_file> <status> --task T1 --json --contract 2
 ```
 
 Task status: `WAITING` → `DONE` | `BLOCKED`
 Phase status: `WAITING` → `REVIEW` → `DONE` | `BLOCKED`
 
-### Script 3 — Close (after all phases complete)
+### `log close` — Close (after all phases complete)
 
 ```bash
-pocket-log-close <plan_dir>
+npx -y pocketto-pi log close <plan_dir> --json --contract 2
 ```
 
-Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Exits non-zero if any phase not DONE.
+Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns `ok: false` (exit non-zero) if any phase is not DONE.
 
 ### When to run
 
 | Moment | Command |
 |--------|---------|
-| Session start (no `log.json`) | Script 1 — see **Startup** section above |
-| Session start (log.json exists, tasks missing) | Script 1 — auto-migrates tasks into existing phases |
-| Quick audit passes for a task | Script 2 `--task TN` → `DONE` |
-| Unresolvable BLOCKED (task) | Script 2 `--task TN` → `BLOCKED` |
-| All tasks in phase DONE → emit PHASE_COMPLETE handoff | Script 2 (phase) → `REVIEW` |
-| pocket-review passes (user runs it separately) | Script 2 (phase) → `DONE` |
-| Unresolvable BLOCKED (phase) | Script 2 (phase) → `BLOCKED` |
-| All phases complete (Type B only) | Script 3 (close) |
+| Session start (no `log.json`) | `log init` — see **Startup** section above |
+| Session start (log.json exists, tasks missing) | `log init` — auto-migrates tasks into existing phases |
+| Quick audit passes for a task | `log update --task TN` → `DONE` |
+| Unresolvable BLOCKED (task) | `log update --task TN` → `BLOCKED` |
+| All tasks in phase DONE → emit PHASE_COMPLETE handoff | `log update` (phase) → `REVIEW` |
+| pocket-review passes (user runs it separately) | `log update` (phase) → `DONE` |
+| Unresolvable BLOCKED (phase) | `log update` (phase) → `BLOCKED` |
+| All phases complete (Type B only) | `log close` |
 
 **IMPORTANT:** NEVER set task status to `DONE` before quick audit (git log + tests + DELIVERABLE check) completes. NEVER set task status to `REVIEW` — that status is for phases only.
 

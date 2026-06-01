@@ -134,18 +134,24 @@ Brand-aware design system generator that acts as Head of Brand. Translates abstr
 - `docs/pocket/rule/creative-brief-preview.html` — visual preview for alignment
 - `.claude/rules/pocket-branding.md` — enforcement rule for future UI work
 
-## CLI Tools
+## CLI
 
-The plugin adds these executables to PATH (used by `pocket-development`):
+The `pocket-structuring` and `pocket-development` skills drive a single cross-platform
+Node CLI, run via `npx` — no install step, PATH setup, or Python required. Works the same
+on Windows, macOS, and Linux. Requires Node.js ≥ 18 (already part of the npm toolchain).
 
 | Command | Usage |
 |---------|-------|
-| `pocket-log-init <plan_dir>` | Initialize `log.json` for a plan directory |
-| `pocket-log-update <plan_dir> <phase_file> <status> [--task TN]` | Update phase or task status |
-| `pocket-log-close <plan_dir>` | Finalize log after all phases complete |
-| `pocket-structure <execution-plan.md>` | Split plan into phase files |
+| `npx pocketto-pi structure <execution-plan.md> [--dry-run]` | Split a plan into phase files (passthrough if < 7 tasks) |
+| `npx pocketto-pi log init <plan_dir>` | Initialize `log.json` for a plan directory (migrates task-less logs) |
+| `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN]` | Update phase or task status |
+| `npx pocketto-pi log close <plan_dir>` | Finalize log after all phases complete |
 
 Status values: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
+
+Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contract, data, error }` —
+that skills parse instead of scraping text. Add `--contract <N>` for a version handshake: a
+mismatch fails loudly with guidance rather than emitting output an older skill can't read.
 
 ---
 
