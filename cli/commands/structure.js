@@ -37,7 +37,7 @@ function parseTasks(text) {
   const sectionEnd = summaryMatch ? summaryMatch.index : text.length;
   const section = text.slice(sectionStart, sectionEnd);
 
-  const headerRe = /^### Task (\d+): (.+?) \[(.+?)\]\s*$/gm;
+  const headerRe = /^### Task (\d+): (.+?) (\[[^\]]+\](?:\s*\[[^\]]+\])*)\s*$/gm;
   const matches = [...section.matchAll(headerRe)];
 
   const tasks = {};
@@ -60,15 +60,26 @@ function parseTasks(text) {
 }
 
 function parseAnnotation(annotation) {
-  if (annotation === 'prereq') return { deps: [], parallelTarget: null };
-  if (annotation.startsWith('depends:')) {
-    const raw = annotation.slice('depends:'.length).trim();
-    return { deps: raw.split(',').map((d) => d.trim()), parallelTarget: null };
+  // annotation is the full bracket string, e.g. "[prereq]" or "[depends: T2] [parallel: T3]"
+  const brackets = [...annotation.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1].trim());
+  let deps = [];
+  let parallelTarget = null;
+  for (const part of brackets) {
+    if (part === 'prereq') {
+      // no-op — no dependencies
+    } else if (part.startsWith('depends:')) {
+      // accumulate and deduplicate across multiple [depends:] brackets; filter empty strings
+      const incoming = part.slice('depends:'.length).trim().split(',')
+        .map((d) => d.trim()).filter(Boolean);
+      deps = [...new Set([...deps, ...incoming])];
+    } else if (part.startsWith('parallel:')) {
+      // last [parallel:] wins; ignore empty values
+      // when parallel: and depends: both present, computeDepths uses parallelTarget only
+      const target = part.slice('parallel:'.length).trim();
+      if (target) parallelTarget = target;
+    }
   }
-  if (annotation.startsWith('parallel:')) {
-    return { deps: [], parallelTarget: annotation.slice('parallel:'.length).trim() };
-  }
-  return { deps: [], parallelTarget: null };
+  return { deps, parallelTarget };
 }
 
 // ─── DEPTH COMPUTATION ──────────────────────────────────────────────────────
@@ -144,14 +155,14 @@ function writePhaseFile(phaseIdx, totalPhases, phaseTaskIds, name, tasks, plan, 
     : 'All phases complete — proceed to final validation';
 
   const taskListLines = phaseTaskIds
-    .map((tid) => `${tid}: ${tasks[tid].name} [${tasks[tid].annotation}]`)
+    .map((tid) => `${tid}: ${tasks[tid].name} ${tasks[tid].annotation}`)
     .join('\n');
   const taskIdsStr = phaseTaskIds.join(', ');
 
   const packetsStr = phaseTaskIds
     .map((tid) => {
       const t = tasks[tid];
-      return `### Task ${t.num}: ${t.name} [${t.annotation}]\n\n${t.body}`;
+      return `### Task ${t.num}: ${t.name} ${t.annotation}\n\n${t.body}`;
     })
     .join('\n\n---\n\n');
 
