@@ -68,10 +68,15 @@ function parseAnnotation(annotation) {
     if (part === 'prereq') {
       // no-op — no dependencies
     } else if (part.startsWith('depends:')) {
-      deps = part.slice('depends:'.length).trim().split(',').map((d) => d.trim());
+      // accumulate and deduplicate across multiple [depends:] brackets; filter empty strings
+      const incoming = part.slice('depends:'.length).trim().split(',')
+        .map((d) => d.trim()).filter(Boolean);
+      deps = [...new Set([...deps, ...incoming])];
     } else if (part.startsWith('parallel:')) {
+      // last [parallel:] wins; ignore empty values
       // when parallel: and depends: both present, computeDepths uses parallelTarget only
-      parallelTarget = part.slice('parallel:'.length).trim();
+      const target = part.slice('parallel:'.length).trim();
+      if (target) parallelTarget = target;
     }
   }
   return { deps, parallelTarget };
