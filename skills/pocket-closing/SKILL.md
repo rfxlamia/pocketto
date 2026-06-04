@@ -11,7 +11,7 @@ The terminal stage of the Pocket pipeline. Invoked directly by the user after po
 
 ## Position in Pocket Bundle
 
-```
+```text
 pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review → POCKET-CLOSING
                                                                                                     ↑
                                                                                           User invokes here
@@ -22,12 +22,12 @@ pocket-closing is **invoked directly by the user** — not by pocket-review. poc
 
 ## Invocation
 
-```
+```text
 /pocketto:pocket-closing <path-to-execution-plan-or-plan-dir>
 ```
 
 Examples:
-```
+```text
 /pocketto:pocket-closing docs/pocket/plans/2026-06-03-typing-dna/
 /pocketto:pocket-closing docs/pocket/plans/2026-05-28-auth/execution-plan.md
 /pocketto:pocket-closing docs/pocket/plans/2026-05-28-auth/execution-plan-phase-2.md
@@ -52,14 +52,14 @@ Run ALL steps before changing any state. Failure in steps 1–3 → `CLOSE_BLOCK
 
 ### Step 1: Resolve plan_dir and target phases
 
-```
+```text
 If invoked with a file path → plan_dir = parent dir, target = that phase file
 If invoked with a dir path  → plan_dir = dir, target = every phase in log.json
 ```
 
 ### Step 2: Read log.json
 
-```
+```text
 <plan_dir>/log.json
 ```
 
@@ -78,10 +78,19 @@ Read every `reviews/<task_id>-review.json`. For each reviewable task in each tar
 
 | Condition | Reconciliation |
 |-----------|----------------|
-| Task is `DONE` + `done_sha` + has a matching review file | Reviewable — record its `overall` verdict |
-| Task is `DONE` + `done_sha` but NO review file | `CLOSE_BLOCKED` — "T{id} has no verdict. Run pocket-review before closing." |
+| `DONE` + `done_sha` + review file **current for that `done_sha`** | Reviewable — record its `overall` verdict |
+| `DONE` + `done_sha` + review file **stale** (predates the current `done_sha`) | `CLOSE_BLOCKED` — "T{id} verdict is stale: reviewed before the current done_sha. Re-run pocket-review." |
+| `DONE` + `done_sha` but NO review file | `CLOSE_BLOCKED` — "T{id} has no verdict. Run pocket-review before closing." |
 | Task is not `DONE` / missing `done_sha` | Not reviewable — was skipped by pocket-review; note and exclude from the gate |
 | `reviews/` dir absent or empty | `CLOSE_BLOCKED` — "No reviews found. Run pocket-review first." |
+
+**Freshness check (mandatory).** A review proves a verdict only for the SHA it actually reviewed. If a task is re-implemented after review, its `done_sha` advances but the old verdict lingers — closing on it would accept code that was never reviewed at the SHA being closed. For each reviewable task, confirm the verdict is current:
+
+```bash
+git show -s --format=%cI <task.done_sha>     # committer time of the reviewed commit
+```
+
+The verdict is current iff the review's `timestamp` is **at or after** that commit time (compare as UTC instants). If the commit at `done_sha` is newer than the review → stale → `CLOSE_BLOCKED`. If the review file records the reviewed SHA explicitly, require an exact match instead — it is stronger than the timestamp proxy.
 
 Reconciliation details, REVIEW_BLOCKED stub handling, and observation extraction: load `references/verdict-reconciliation.md`.
 
@@ -132,7 +141,7 @@ On `CLOSED` only, write `<plan_dir>/closeout.md` — the artifact that ends the 
 
 Then emit the terminal report:
 
-```
+```text
 PLAN CLOSED — <plan_dir>
 ──────────────────────────────────────────
 Phases : N — all DONE
@@ -154,16 +163,18 @@ Closeout: <plan_dir>/closeout.md
 
 ## Iron Laws
 
-```
+```text
 1. NO CLOSE WITH A FAILING VERDICT
    Any REVIEW_FAIL or REVIEW_BLOCKED in a target phase → CLOSE_BLOCKED.
    WHY: Closing translates review results into an accept decision.
    Closing over a failure ships unreviewed-bad code as "done".
 
-2. NO CLOSE WITHOUT A VERDICT
-   Every reviewable task (DONE + done_sha) must have a review file.
-   WHY: A DONE task with no verdict was never reviewed. Closing it
-   asserts a review that did not happen.
+2. NO CLOSE WITHOUT A CURRENT VERDICT
+   Every reviewable task (DONE + done_sha) must have a review file whose
+   verdict was produced for that exact done_sha — not an earlier one.
+   WHY: A DONE task with no verdict, or one whose code changed after the
+   review, was never reviewed at the SHA being closed. Closing it asserts
+   a review that did not happen.
 
 3. NO CODE READING BY MAIN AGENT
    pocket-closing reconciles verdicts; it never re-reviews implementation.

@@ -73,7 +73,7 @@ phase DONE
    │  pocket-review          USER triggers · parallel review subagents    [PHASE_REVIEWED / BLOCKED]
    ▼
 reviews written
-   │  pocket-closing         USER triggers · gate on verdicts · log close [CLOSED / PHASE_ADVANCED / BLOCKED]
+   │  pocket-closing         USER triggers · gate on verdicts · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
    ▼
 plan closed (fix findings & loop phases until every phase is DONE)
 ```
