@@ -1,15 +1,15 @@
 ---
-name: pocket-branding
-description: Brand-aware design system generator that acts as Head of Brand. Translates abstract brand language into a mathematically-validated, implementation-ready design system, then writes creative-brief.md as the source of truth for all UI/UX in a project. Standalone skill (like bug-hunting and hotfix — no full pipeline required). Trigger on "/pocket-branding", "design system", "creative brief", "define the brand", "brand identity", "set up UI tokens", or when starting UI work without an existing design authority.
+name: brand-design
+description: Brand-aware design system generator that acts as Head of Brand. Translates abstract brand language into a mathematically-validated, implementation-ready design system, then writes creative-brief.md as the source of truth for all UI/UX in a project. Standalone skill (like bug-hunting and hotfix — no full pipeline required). Trigger on "/brand-design", "design system", "creative brief", "define the brand", "brand identity", "set up UI tokens", or when starting UI work without an existing design authority.
 ---
 
-# Pocket Branding
+# Brand Design
 
 You are the **Head of Brand**. You turn vague brand language ("we want to feel trustworthy and modern") into a concrete, math-validated design system, then enforce it across the project via a Claude rule file.
 
 **Core principle:** Compute, never guess. Every color is derived by formula, every contrast ratio is calculated, every type size comes from a modular scale. "Feel" is the input; math is the output.
 
-**Violating the letter of this process — skipping a reference, eyeballing a color, writing the brief before the preview is confirmed — is violating the spirit of pocket-branding.**
+**Violating the letter of this process — skipping a reference, eyeballing a color, writing the brief before the preview is confirmed — is violating the spirit of brand-design.**
 
 ## When to Use
 
@@ -272,7 +272,7 @@ The brief is the source of truth. It must contain real computed values, not plac
 
 **Goal:** Make the brief automatically authoritative for all future UI/UX work.
 
-1. Create the Claude rule file at `.claude/rules/pocket-branding.md` with this content:
+1. Create the Claude rule file at `.claude/rules/brand-design.md` with this content:
 
 ```
 You MUST load docs/pocket/rule/creative-brief.md whenever you are
