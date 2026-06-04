@@ -55,9 +55,17 @@ Two kinds of skills:
 - **What:** Post-phase batch reviewer. Main agent runs preflight (validates log.json, computes per-task SHA ranges) and dispatches **parallel** reviewer subagents — one per task — then collects results into `reviews/`. No review loop: fix and re-run.
 - **Input:** A completed phase/plan with `log.json` (all target tasks DONE with `done_sha`).
 - **Output:** Per-task review JSON (`<plan_dir>/reviews/<task>-review.json`) + a summary table. States: `PHASE_REVIEWED` or `PHASE_BLOCKED`.
-- **Handoff:** Terminal in this repo. (The pipeline diagram names a later `pocket-closing` log-closeout step, which is **not yet a skill here**.)
+- **Handoff:** Hands off to `pocket-closing` — the user runs it after reviews are written.
 - **Use when:** **The user** invokes it after pocket-development finishes a phase/flat plan: `/pocketto:pocket-review <plan_dir>`.
 - **Skip when:** During development (pocket-development does its own per-task quick audit; full review is the separate post-phase step).
+
+### pocket-closing
+- **What:** Terminal stage. Main agent is **reconciler + closer only** — it never reviews code. Reads `log.json` + every `reviews/*.json`, gates the close on review verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` blocks), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes a closeout summary. State changes go through `pocketto-pi log` only — no hand-editing.
+- **Input:** A reviewed phase/plan: `log.json` plus `reviews/<task>-review.json` for every reviewable task.
+- **Output:** `log.json` header set to `DONE` + `date_completed`; `<plan_dir>/closeout.md`. States: `CLOSED`, `PHASE_ADVANCED`, `CLOSE_BLOCKED`, `ALREADY_CLOSED`.
+- **Handoff:** Terminal — this is where the pipeline ends. For phased plans, `PHASE_ADVANCED` points back to pocket-development/pocket-review for the next phase.
+- **Use when:** **The user** invokes it after pocket-review writes verdicts: `/pocketto:pocket-closing <plan_dir>`.
+- **Skip when:** Any task is still `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed — fix and re-review first.
 
 ---
 

@@ -21,7 +21,7 @@ Each stage produces a concrete artifact (pitch doc → spec → execution plan �
 
 | Kind | Skills | Use for |
 |------|--------|---------|
-| **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-review | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
+| **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-review · pocket-closing | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
 | **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · pocket-help | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
 
 The `pocket-*` prefix marks a skill as part of the chained pipeline. `bug-hunting`, `hotfix`, and `brand-design` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks.
@@ -38,6 +38,7 @@ Match your situation to one skill. Open only that skill.
 | Execution plan ready — sequence/phase it | `pocket-structuring` | chained |
 | Plan or phase file ready — execute task-by-task | `pocket-development` | chained |
 | A phase/plan is DONE — review it | `pocket-review` | chained |
+| Reviews all pass — close out the plan | `pocket-closing` | chained |
 | A bug, a failure, or "audit this code" | `bug-hunting` | standalone |
 | Small-to-medium change, full pipeline is overkill | `hotfix` | standalone |
 | Design system / brand identity / UI tokens | `brand-design` | standalone |
@@ -71,7 +72,10 @@ plan / phase file
 phase DONE
    │  pocket-review          USER triggers · parallel review subagents    [PHASE_REVIEWED / BLOCKED]
    ▼
-fix findings → continue phases until the whole plan is complete
+reviews written
+   │  pocket-closing         USER triggers · gate on verdicts · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
+   ▼
+plan closed (fix findings & loop phases until every phase is DONE)
 ```
 
 **Handoff facts that matter (so you don't double-invoke or stall):**
@@ -79,9 +83,10 @@ fix findings → continue phases until the whole plan is complete
 - `pocket-planning` **auto-invokes** `pocket-structuring` after you approve the plan.
 - `pocket-structuring` runs for **every** plan: ≤6 tasks pass straight through to `pocket-development`; ≥7 tasks are split into phase files handed off **one at a time**.
 - `pocket-development` does **NOT** call `pocket-review`. It emits a `PHASE_COMPLETE` handoff; **you** invoke `pocket-review` afterward.
+- `pocket-review` does **NOT** call `pocket-closing` and does **NOT** touch `log.json`. It writes verdicts; **you** invoke `pocket-closing` to gate on them and close the plan.
 - `pocket-pitching` does **not** auto-chain — it presents handoff options and you choose whether to start `pocket-grinding`.
 
-> The pipeline diagram inside `pocket-review` and `pocket-development` also names a final `pocket-closing` step (log closeout). That terminal step is referenced by the design but is **not yet a skill in this repo** — today the chain ends at `pocket-review`.
+> `pocket-closing` is the terminal stage: it reconciles review verdicts, advances `REVIEW → DONE`, runs `log close`, and writes a `closeout.md`. Without it a fully reviewed plan stays in `IN_PROGRESS`/`REVIEW` limbo. Any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task makes it `CLOSE_BLOCKED` — fix and re-review first.
 
 For the flow walked stage-by-stage with a worked example and every gate, load `references/end-to-end-flow.md`.
 
