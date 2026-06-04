@@ -107,6 +107,26 @@ function computeDepths(tasks) {
   return depths;
 }
 
+// ─── EXECUTION FLOW ──────────────────────────────────────────────────────────
+
+// Render the execution order as a compact flow, e.g.
+//   T1→T2,T3,T4(PARALLEL)→T5,T6(PARALLEL)→T7
+// Tasks are grouped by dependency depth. A level with >1 task is marked
+// (PARALLEL) because those tasks share a depth and can run concurrently — this
+// reflects depth co-residence, NOT the presence of a [parallel:] annotation.
+function formatExecutionFlow(tasks, depths) {
+  const byDepth = {};
+  for (const [tid, d] of Object.entries(depths)) (byDepth[d] ||= []).push(tid);
+  const levels = Object.keys(byDepth).map(Number).sort((a, b) => a - b);
+  return levels
+    .map((d) => {
+      const ids = byDepth[d].sort((a, b) => tasks[a].num - tasks[b].num);
+      const joined = ids.join(',');
+      return ids.length > 1 ? `${joined}(PARALLEL)` : joined;
+    })
+    .join('→');
+}
+
 // ─── PHASE SPLITTING ────────────────────────────────────────────────────────
 
 function splitPhases(tasks, depths) {
@@ -236,7 +256,14 @@ function run({ planArg, dryRun }) {
   }
 
   if (count < THRESHOLD) {
+    // Validate task structure even for passthrough plans: computeDepths surfaces
+    // dangling [depends:] refs (UNKNOWN_TASK_REF) and cycles (CYCLE_DETECTED)
+    // early, instead of letting them slip through to pocket-development.
+    const depths = computeDepths(tasks);
+    const executionFlow = formatExecutionFlow(tasks, depths);
     human.push(
+      '',
+      `Execution flow: ${executionFlow}`,
       '',
       `Plan has ${count} tasks (<${THRESHOLD}). Pass through to pocket-development directly.`,
       `File: ${planPath}`,
@@ -253,6 +280,7 @@ function run({ planArg, dryRun }) {
         threshold: THRESHOLD,
         action: 'passthrough',
         dryRun: !!dryRun,
+        executionFlow,
         planFile: planPath,
         phases: [],
       },
@@ -276,6 +304,9 @@ function run({ planArg, dryRun }) {
     }
   }
   human.push('');
+
+  const executionFlow = formatExecutionFlow(tasks, depths);
+  human.push(`Execution flow: ${executionFlow}`, '');
 
   const phaseGroups = splitPhases(tasks, depths);
   const total = phaseGroups.length;
@@ -324,6 +355,7 @@ function run({ planArg, dryRun }) {
       threshold: THRESHOLD,
       action: 'split',
       dryRun: !!dryRun,
+      executionFlow,
       phaseCount: total,
       depthTable,
       phases,

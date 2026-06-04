@@ -31,16 +31,16 @@ Two kinds of skills:
 - **What:** Converts a spec into a TDD-structured execution plan. Scans codebase, maps files, decomposes acceptance criteria into bounded tasks, writes full 7-field Pocket Packets (red → green → commit), then runs a spec-reviewer and a test-architect subagent.
 - **Input:** A completed pocket-grinding spec (path + acceptance criteria + architecture constraints + design decision).
 - **Output:** An execution plan of Pocket Packets with tests designed (`docs/pocket/plans/<date>-<slug>/execution-plan.md`).
-- **Handoff:** **Auto-invokes `pocket-structuring`** after the user approves the plan.
+- **Handoff:** After the user approves, validates the plan with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
 - **Use when:** A spec exists and needs to become executable tasks; "create plan", "build plan".
 - **Skip when:** No spec yet (→ pocket-grinding), or re-running a task already in execution (→ pocket-development directly).
 
 ### pocket-structuring
-- **What:** Bridges planning and development for **every** plan. Runs a CLI (`npx pocketto-pi structure`) that counts tasks and decides: passthrough or phase-split. The CLI counts exactly — never estimate.
+- **What:** Sequences execution for **split (≥7-task)** plans. Runs a CLI (`npx pocketto-pi structure`) that counts tasks and decides: passthrough or phase-split. The CLI counts exactly — never estimate.
 - **Input:** A completed execution plan from pocket-planning.
 - **Output:** Either nothing extra (passthrough), or a set of bounded phase files (`execution-plan-phase-N.md`).
 - **Handoff:** ≤6 tasks → invokes `pocket-development` directly with the flat plan. ≥7 tasks → hands phase files to `pocket-development` **one at a time**, gating each phase's completion before the next.
-- **Use when:** pocket-planning produced a plan (any size). Always runs — the universal gate lives here.
+- **Use when:** pocket-planning routed a ≥7-task (split) plan here, or a user invokes it directly (any size — ≤6 passes straight through to pocket-development).
 - **Skip when:** Never skip for ≥7-task plans. Bypass requires the exact phrase `OVERRIDE: skip structuring`.
 
 ### pocket-development
