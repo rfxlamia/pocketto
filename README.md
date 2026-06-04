@@ -2,7 +2,9 @@
 
 > Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows.
 
-Provides 9 skills for systematic, structured development — from raw idea to shipped code.
+Provides 10 skills for systematic, structured development — from raw idea to shipped code.
+
+New here? Start with [`pocketto:pocket-help`](#pockettopocket-help) — a compact onboarding and routing guide to the whole system. It explains what Pocket is and which skill to reach for, without loading every skill into context.
 
 ## Installation
 
@@ -38,13 +40,17 @@ Use skills with the `pocketto:` namespace:
 
 ## Skills
 
-### The Pocket Pipeline
+Pocket has two kinds of skills:
+
+- **Chained skills** (`pocket-*`) — the multi-stage pipeline. Each stage invokes the next at handoff, carrying spec, plan, and acceptance criteria forward. Use these for real features and non-trivial work.
+- **Standalone skills** (`pocket-help`, `bug-hunting`, `hotfix`, `brand-design`) — lighter, single-purpose, no pipeline. Reach for these for everyday work.
+
+### The Pocket Pipeline (chained)
 
 Skills are designed to chain together in sequence:
 
 ```
 pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review
-                                                                                ↑ invoked internally ↑
 ```
 
 | Skill | Trigger |
@@ -52,10 +58,18 @@ pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring �
 | `pocket-pitching` | Rough idea, no clear problem yet |
 | `pocket-grinding` | Clear problem, need spec + acceptance criteria |
 | `pocket-planning` | Spec ready, need execution plan |
-| `pocket-structuring` | Plan has ≥7 tasks, needs phase splitting |
+| `pocket-structuring` | Plan ready (any size) — passthrough ≤6 tasks, phase-split ≥7 |
 | `pocket-development` | Plan ready, execute task-by-task via subagents |
-| `pocket-review` | Called internally by pocket-development after each task |
-| `pocket-branding` | Design system, creative brief, brand identity, UI tokens |
+| `pocket-review` | User-triggered after a phase/plan is DONE |
+
+### Standalone skills
+
+| Skill | Trigger |
+|-------|---------|
+| `pocket-help` | "What is Pocket?", which skill to use, how the flow works |
+| `bug-hunting` | Fix a bug, debug a failure, audit code for hidden bugs |
+| `hotfix` | Small-to-medium change where the full pipeline is overkill |
+| `brand-design` | Design system, creative brief, brand identity, UI tokens |
 
 ---
 
@@ -101,9 +115,9 @@ Precise subagent delegation for task-by-task execution. Every delegation require
 
 ### `pocketto:pocket-review`
 
-Independent two-stage review: spec compliance (Stage 1) then code quality (Stage 2). Called automatically by `pocket-development` after each implementer reports DONE. Returns `REVIEW_PASS`, `REVIEW_FAIL`, or `REVIEW_BLOCKED`.
+Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — `pocket-development` does NOT call it. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED` (per task: `REVIEW_PASS` / `REVIEW_FAIL`).
 
-**Trigger:** Invoked internally by `pocket-development` — not called directly.
+**Trigger:** `/pocketto:pocket-review <plan_dir>` — invoked by the user after a phase/plan is DONE.
 
 ---
 
@@ -123,16 +137,24 @@ Fast iteration workflow for small-to-medium changes. Enforces brief-plan + subag
 
 ---
 
-### `pocketto:pocket-branding`
+### `pocketto:brand-design`
 
 Brand-aware design system generator that acts as Head of Brand. Translates abstract brand language into a mathematically-validated, implementation-ready design system, then writes `creative-brief.md` as the source of truth for all UI/UX in a project. Standalone skill (like bug-hunting and hotfix — no full pipeline required).
 
-**Trigger:** "pocket-branding", "design system", "creative brief", "define the brand", "brand identity", "set up UI tokens"
+**Trigger:** "brand-design", "design system", "creative brief", "define the brand", "brand identity", "set up UI tokens"
 
 **Deliverables:**
 - `docs/pocket/rule/creative-brief.md` — the design system source of truth
 - `docs/pocket/rule/creative-brief-preview.html` — visual preview for alignment
-- `.claude/rules/pocket-branding.md` — enforcement rule for future UI work
+- `.claude/rules/brand-design.md` — enforcement rule for future UI work
+
+---
+
+### `pocketto:pocket-help`
+
+Compact onboarding and routing guide for the whole Pocket system. Explains what Pocket is, when it beats lighter Superpowers-style flows, which skill to invoke for the situation, and the full idea→reviewed-code flow — all without loading every individual skill into context. Frames itself as an entry point, not a replacement for the detailed skills.
+
+**Trigger:** "what is pocket", "how do I use pocket", "which pocket skill", "pocket-help", or any onboarding/routing question about the Pocket ecosystem.
 
 ## CLI
 

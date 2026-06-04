@@ -2,7 +2,7 @@
 
 Load this during **Step 4 (Atomic Design Definition)**. The atom scope is fixed; the state
 set is fixed; the output format is fixed. This is what makes components predictable across
-every project pocket-branding touches.
+every project brand-design touches.
 
 ## Contents
 - [The 4 Atoms (fixed scope)](#the-4-atoms-fixed-scope)
