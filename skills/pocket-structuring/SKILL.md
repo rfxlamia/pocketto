@@ -9,6 +9,8 @@ Bridges pocket-planning and pocket-development. Runs a CLI that parses the execu
 
 **Core principle:** Large plans executed flat = attention drift + context blowout. Phase boundaries are checkpoints, not ceremony.
 
+**Why this skill is not merged into pocket-planning:** pocket-planning *produces* the plan; pocket-structuring *sequences execution* (phasing + per-phase handoff loop to pocket-development). Small plans (≤6 tasks) still route through here so the Hard Gate and override protocol remain active for all plans regardless of size. Collapsing this into pocket-planning would fold execution-orchestration into a planning skill and remove the universal gate.
+
 ## When to Use
 
 - pocket-planning has produced an execution plan and invoked this skill
