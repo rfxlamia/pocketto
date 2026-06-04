@@ -47,8 +47,10 @@ GATE 3: Design Decision section must be present in spec.
 GATE 4: Spec Reviewer must APPROVE before Test-Architect runs.
         Issues Found → fix plan, re-run reviewer. Do not skip.
 
-GATE 5: User must approve the final plan before pocket-structuring is invoked.
-        Do not invoke pocket-structuring before user explicitly approves.
+GATE 5: User must approve the final plan before ANY downstream handoff —
+        pocket-structuring (split, ≥7 tasks) OR pocket-development (passthrough, ≤6 tasks).
+        Running `structure --dry-run` is validation only and never authorizes a handoff.
+        Do not invoke either skill before the user explicitly approves.
 ```
 
 ---
@@ -453,31 +455,65 @@ Apply test-architect's changes to the plan before Phase 7.
 
 ## Phase 7: Output Execution Plan
 
-**Goal:** Present finalized plan, get user approval, invoke pocket.
+**Goal:** Save the plan, validate it parses, then get user approval and route to exactly one downstream skill.
+
+### Step 1: Save the plan
 
 Save plan to: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
 
 → Load `references/plan-template.md` for the full execution plan document format.
 
-### User Approval Gate
+### Step 2: Validate via dry-run (MANDATORY, non-authorizing)
 
-> "Plan complete — N tasks, TDD-structured, spec-reviewed, tests designed.
-> Saved to docs/pocket/plans/…
-> Dependency order shown is recommended — pocket-structuring enforces phase sequencing.
-> Ready to hand off to pocket-structuring?"
+Run the CLI against the **saved** path to confirm the plan parses, conforms to the
+`### Task N: name [annotation]` template, has a valid dependency order, and to capture
+its routing decision — **without writing any files**:
 
-Wait for confirmation. Apply any changes requested.
+```bash
+npx -y pocketto-pi structure "docs/pocket/plans/{date}-{slug}/execution-plan.md" --dry-run --json --contract 2
+```
 
-### Invoke Pocket-Structuring (MANDATORY)
+Parse the JSON envelope — do not scrape prose:
+- **`ok == false`** → **STOP. Do not present the approval gate.** Report `error.message` to the
+  user (e.g. `NO_TASKS`, `UNKNOWN_TASK_REF`, `CYCLE_DETECTED` — the plan is malformed or has a
+  bad/cyclic dependency). Fix the plan, then re-run this step.
+- **`ok == true`** → capture `data.action` (`"passthrough"` | `"split"`) and `data.executionFlow`
+  (the run-order graph, e.g. `T1→T2,T3(PARALLEL)→T4`). This dry-run writes nothing and never
+  authorizes a handoff — it only validates and decides the route.
 
-**DO NOT STOP AFTER USER APPROVAL.**
+### Step 3: User Approval Gate (branch-aware)
 
-Invoke the `pocket-structuring` skill (use the Skill tool: `pocket-structuring`) with:
-- Execution plan path: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
-- Task count (from Phase 3)
-- Spec file path
+Present the result, showing the execution flow and the route the dry-run selected:
 
-`pocket-structuring` handles both passthrough (≤6 tasks) and split (≥7 tasks) — always invoke it.
+- **Passthrough (`data.action == "passthrough"`, ≤6 tasks):**
+  > "Plan complete — N tasks, TDD-structured, spec-reviewed, tests designed.
+  > Saved to docs/pocket/plans/…
+  > Execution flow: {data.executionFlow}
+  > N tasks (≤6) — no phase-splitting needed. Ready to hand off directly to pocket-development?"
+
+- **Split (`data.action == "split"`, ≥7 tasks):**
+  > "Plan complete — N tasks, TDD-structured, spec-reviewed, tests designed.
+  > Saved to docs/pocket/plans/…
+  > Execution flow: {data.executionFlow}
+  > Dependency order shown is recommended — pocket-structuring enforces phase sequencing.
+  > N tasks (≥7) — ready to hand off to pocket-structuring for phasing?"
+
+Wait for confirmation. Apply any changes requested (re-run Step 2 if the plan changed).
+
+### Step 4: Route to exactly one target (MANDATORY)
+
+**DO NOT STOP AFTER USER APPROVAL.** Route on `data.action` — invoke exactly one skill:
+
+- **`passthrough`** → invoke the `pocket-development` skill (use the Skill tool: `pocket-development`)
+  directly with the flat plan `docs/pocket/plans/{date}-{slug}/execution-plan.md`. Do not invoke
+  pocket-structuring — there are no phases to split.
+- **`split`** → invoke the `pocket-structuring` skill (use the Skill tool: `pocket-structuring`) with:
+  - Execution plan path: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
+  - Task count (from Phase 3)
+  - Spec file path
+
+  pocket-structuring re-parses the plan from disk and writes the phase files, so any edit made
+  between approval and structuring is re-validated there (self-healing).
 
 ---
 

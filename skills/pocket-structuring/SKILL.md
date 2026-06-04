@@ -9,14 +9,15 @@ Bridges pocket-planning and pocket-development. Runs a CLI that parses the execu
 
 **Core principle:** Large plans executed flat = attention drift + context blowout. Phase boundaries are checkpoints, not ceremony.
 
-**Why this skill is not merged into pocket-planning:** pocket-planning *produces* the plan; pocket-structuring *sequences execution* (phasing + per-phase handoff loop to pocket-development). Small plans (≤6 tasks) still route through here so the Hard Gate and override protocol remain active for all plans regardless of size. Collapsing this into pocket-planning would fold execution-orchestration into a planning skill and remove the universal gate.
+**Why this skill is not merged into pocket-planning:** pocket-planning *produces* the plan; pocket-structuring *sequences execution* (phasing + per-phase handoff loop to pocket-development). pocket-planning routes only **split** plans (≥7 tasks) here; passthrough plans (≤6 tasks) go straight to pocket-development. When pocket-structuring **is invoked directly** (e.g. the user runs it by hand), the passthrough handler and the Hard Gate / override protocol still apply for any task count. Collapsing this into pocket-planning would fold execution-orchestration into a planning skill and remove the phase-splitting gate.
 
 ## When to Use
 
-- pocket-planning has produced an execution plan and invoked this skill (any task count)
-- Plan has ≥7 tasks → CLI splits into bounded phase files
-- Plan has ≤6 tasks → CLI passthrough; pocket-development invoked directly (no phase files created)
+- pocket-planning produced a **split** plan (≥7 tasks) and invoked this skill → CLI splits into bounded phase files
+- User invokes this skill directly for any task count (≥7 → split; ≤6 → CLI passthrough, pocket-development invoked directly, no phase files created)
 - User says "structure the plan", "split into phases", "break this up"
+
+(For ≤6-task plans, pocket-planning hands off straight to pocket-development — it does not route through this skill. The passthrough handler below remains for direct invocation.)
 
 Do NOT use:
 - Without a completed execution plan from pocket-planning

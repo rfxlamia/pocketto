@@ -61,7 +61,7 @@ clear problem
    │  pocket-grinding        BDD discovery → spec + GWT acceptance       [auto-invokes planning]
    ▼
 approved spec
-   │  pocket-planning        TDD plan → Pocket Packets, tests designed   [auto-invokes structuring]
+   │  pocket-planning        TDD plan → Pocket Packets, tests designed   [validates, routes ≤6→dev · ≥7→structuring]
    ▼
 execution plan
    │  pocket-structuring     ≤6 tasks: passthrough · ≥7: split to phases [hands phases one at a time]
@@ -80,8 +80,8 @@ plan closed (fix findings & loop phases until every phase is DONE)
 
 **Handoff facts that matter (so you don't double-invoke or stall):**
 - `pocket-grinding` **auto-invokes** `pocket-planning` after you approve the spec.
-- `pocket-planning` **auto-invokes** `pocket-structuring` after you approve the plan.
-- `pocket-structuring` runs for **every** plan: ≤6 tasks pass straight through to `pocket-development`; ≥7 tasks are split into phase files handed off **one at a time**.
+- `pocket-planning`, after you approve the plan, validates it with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
+- `pocket-structuring` runs only for **≥7-task (split)** plans from planning: it splits them into phase files handed off **one at a time**. (Invoked directly, it also handles ≤6-task passthrough.)
 - `pocket-development` does **NOT** call `pocket-review`. It emits a `PHASE_COMPLETE` handoff; **you** invoke `pocket-review` afterward.
 - `pocket-review` does **NOT** call `pocket-closing` and does **NOT** touch `log.json`. It writes verdicts; **you** invoke `pocket-closing` to gate on them and close the plan.
 - `pocket-pitching` does **not** auto-chain — it presents handoff options and you choose whether to start `pocket-grinding`.

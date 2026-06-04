@@ -30,7 +30,7 @@ Scan context → lock scope → question from three lenses (Business / Developer
 Preflight the codebase → parse the spec → map files → decompose into bounded tasks → write 7-field Pocket Packets (each: failing test → minimal code → commit) → run a spec-reviewer subagent, then a test-architect subagent.
 - **Gates:** Handoff inputs verified; spec-reviewer must APPROVE before test-architect runs; user approves the final plan.
 - **Produces:** `docs/pocket/plans/<date>-<slug>/execution-plan.md`.
-- **Next:** **Auto-invokes `pocket-structuring`** after approval.
+- **Next:** After approval, validates the plan with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
 
 ### 4. pocket-structuring — phase
 Runs `npx pocketto-pi structure <plan>` — the CLI counts tasks exactly and decides.
@@ -60,7 +60,7 @@ Main agent is **delegator + auditor only** — it never writes implementation co
 
 1. **Idea is fuzzy** ("auth feels fragile, maybe refresh tokens?") → `pocket-pitching`. Explores directions (rotate vs sliding-window vs short-lived access). User picks "rotating refresh tokens" → chooses to start grinding.
 2. **`pocket-grinding`** locks scope (in: refresh endpoint + rotation; out: SSO), questions the three lenses, writes GWT scenarios ("Given an expired access token and valid refresh token, When /refresh is called, Then a new pair is issued and the old refresh token is revoked"), validates architecture. User approves → grinding **auto-invokes** planning.
-3. **`pocket-planning`** preflights the auth module, maps files, decomposes into 8 tasks (schema, endpoint, rotation logic, revocation, tests, etc.), writes Pocket Packets, runs spec-reviewer + test-architect. User approves → **auto-invokes** structuring.
+3. **`pocket-planning`** preflights the auth module, maps files, decomposes into 8 tasks (schema, endpoint, rotation logic, revocation, tests, etc.), writes Pocket Packets, runs spec-reviewer + test-architect. User approves → validates via `structure --dry-run` → 8 tasks (≥7) → routes to **structuring**.
 4. **`pocket-structuring`** runs the CLI → 8 tasks ⇒ **split** into Phase 1 (schema + scaffolding) and Phase 2 (endpoint + rotation + revocation). Hands Phase 1 to development.
 5. **`pocket-development`** executes Phase 1 task-by-task (packet → spawn → quick audit → log DONE), emits `PHASE_COMPLETE`.
 6. **User** runs `/pocketto:pocket-review <plan_dir>/execution-plan-phase-1.md`. Reviewers pass → structuring proceeds to Phase 2 → development → review again.
