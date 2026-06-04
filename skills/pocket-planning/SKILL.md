@@ -472,29 +472,12 @@ Wait for confirmation. Apply any changes requested.
 
 **DO NOT STOP AFTER USER APPROVAL.**
 
-**Step 1 — Identify invocation method:**
-Determine how skills or agents are dispatched in your current environment.
-- In Claude Code: use the `Skill` tool to invoke `pocket-structuring`.
-- In other agent platforms: use your platform's skill or agent dispatch mechanism.
-- If no dispatch mechanism exists: load and follow the `pocket-structuring` skill directly in this session.
-
-**Step 2 — Load pocket-structuring skill:**
-Load the `pocket-structuring` skill (already loaded at session start) and follow it completely.
-
-**Step 3 — Pass this context to pocket-structuring:**
+Invoke the `pocket-structuring` skill (use the Skill tool: `pocket-structuring`) with:
 - Execution plan path: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
-- Task count
-- Spec file path (for cross-reference)
+- Task count (from Phase 3)
+- Spec file path
 
-**Verification:** After invoking pocket-structuring, confirm it has:
-- [ ] Read the execution plan
-- [ ] Started processing (Phase split or pass-through to pocket-development)
-
-If pocket-structuring did not start → re-invoke with explicit instruction to begin.
-
-pocket-structuring will:
-- Pass through to pocket-development directly if plan has ≤6 tasks
-- Split into bounded phase files if plan has ≥7 tasks, then invoke pocket-development per phase
+`pocket-structuring` handles both passthrough (≤6 tasks) and split (≥7 tasks) — always invoke it.
 
 ---
 

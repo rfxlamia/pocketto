@@ -1,6 +1,6 @@
 ---
 name: pocket-structuring
-description: Splits a pocket-planning execution plan into sequential phase files before pocket-development. Use when pocket-planning hands off a plan with ≥7 tasks. Trigger on "structure plan", "split plan", or when pocket-planning invokes this. Produces phase files ready for pocket-development, one at a time.
+description: Bridges pocket-planning and pocket-development for all execution plans. Use when pocket-planning hands off any execution plan. Routes ≤6-task plans as a passthrough to pocket-development; splits ≥7-task plans into phase files. Trigger on "structure plan", "split plan", or when pocket-planning invokes this.
 ---
 
 # Pocket Structuring
@@ -9,15 +9,17 @@ Bridges pocket-planning and pocket-development. Runs a CLI that parses the execu
 
 **Core principle:** Large plans executed flat = attention drift + context blowout. Phase boundaries are checkpoints, not ceremony.
 
+**Why this skill is not merged into pocket-planning:** pocket-planning *produces* the plan; pocket-structuring *sequences execution* (phasing + per-phase handoff loop to pocket-development). Small plans (≤6 tasks) still route through here so the Hard Gate and override protocol remain active for all plans regardless of size. Collapsing this into pocket-planning would fold execution-orchestration into a planning skill and remove the universal gate.
+
 ## When to Use
 
-- pocket-planning has produced an execution plan and invoked this skill
-- Plan has ≥7 tasks (including integration test tasks)
+- pocket-planning has produced an execution plan and invoked this skill (any task count)
+- Plan has ≥7 tasks → CLI splits into bounded phase files
+- Plan has ≤6 tasks → CLI passthrough; pocket-development invoked directly (no phase files created)
 - User says "structure the plan", "split into phases", "break this up"
 
 Do NOT use:
 - Without a completed execution plan from pocket-planning
-- Plans with ≤6 tasks → pass through directly to pocket-development
 
 ## Hard Gates
 
