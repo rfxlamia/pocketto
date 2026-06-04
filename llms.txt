@@ -1,0 +1,45 @@
+# Pocketto
+
+> Structured AI coding workflows for Claude Code and Pi. 11 skills take work
+> from a rough idea to reviewed, shipped code without the agent skipping steps:
+> a 7-stage chained pipeline plus 4 standalone skills, backed by one
+> cross-platform Node CLI. Skills use the `pocketto:` namespace.
+
+Core ideas: plan before code (specs + acceptance criteria + TDD plans),
+delegate with contracts (every subagent gets a "Pocket Packet" — objective,
+verification, stop conditions; no packet, no spawn), and gate before done
+(reviews + a hard close step so finished work never rots in IN_PROGRESS limbo).
+
+## Pipeline skills (chained — each stage hands off to the next)
+
+- [pocket-pitching](skills/pocket-pitching/SKILL.md): Pre-grinding problem exploration when the problem is unformed; diverge→converge, produces a pitch doc.
+- [pocket-grinding](skills/pocket-grinding/SKILL.md): BDD-driven discovery producing a spec + acceptance criteria; invokes pocket-planning at handoff.
+- [pocket-planning](skills/pocket-planning/SKILL.md): Converts a spec into a TDD-structured execution plan of Pocket Packets.
+- [pocket-structuring](skills/pocket-structuring/SKILL.md): Splits a plan into sequential phase files (passthrough <7 tasks, phase-split ≥7).
+- [pocket-development](skills/pocket-development/SKILL.md): Task-by-task subagent delegation; enforces 6 iron laws, no packet = no spawn.
+- [pocket-review](skills/pocket-review/SKILL.md): User-triggered parallel reviewers (spec compliance + code quality); returns PHASE_REVIEWED or PHASE_BLOCKED.
+- [pocket-closing](skills/pocket-closing/SKILL.md): User-triggered terminal stage; reconciles reviews vs log.json, gates the close, advances phases, writes closeout.md.
+
+## Standalone skills (no pipeline needed)
+
+- [pocket-help](skills/pocket-help/SKILL.md): Compact onboarding + routing — what Pocket is and which skill to use, without loading every skill.
+- [bug-hunting](skills/bug-hunting/SKILL.md): Systematic debugging with confirmed root cause before any fix; reactive and proactive modes.
+- [hotfix](skills/hotfix/SKILL.md): Fast iteration for small-to-medium changes with brief-plan + subagent-review gates.
+- [brand-design](skills/brand-design/SKILL.md): Brand-aware design system generator; writes creative-brief.md as the UI/UX source of truth.
+
+## CLI (pocketto-pi, run via npx, Node ≥18)
+
+- `npx pocketto-pi structure <execution-plan.md> [--dry-run]`: split a plan into phase files.
+- `npx pocketto-pi log init <plan_dir>`: initialize log.json for a plan directory.
+- `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN]`: update phase/task status (WAITING → REVIEW → DONE | BLOCKED).
+- `npx pocketto-pi log close <plan_dir>`: finalize log after all phases complete.
+- Add `--json` for a stable output envelope, `--contract <N>` for a version handshake.
+
+## Install
+
+- Pi: `pi install git:github.com/rfxlamia/pocketto` or `pi install npm:pocketto-pi`
+- Claude Code: `/plugin marketplace add rfxlamia/pocketto` then `/plugin install pocketto@pocketto` then `/reload-plugins`
+
+## Optional
+
+- [Full README](README.md): hero, badges, quickstart, diagram, and the full skill reference.

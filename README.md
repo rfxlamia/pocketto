@@ -1,26 +1,46 @@
-# pocketto
+<div align="center">
 
-> Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows.
+# 🪐 Pocketto
 
-Provides 11 skills for systematic, structured development — from raw idea to shipped code.
+**Structured AI coding workflows for [Claude Code](https://docs.claude.com/en/docs/claude-code) and [Pi](https://github.com/badlogic/pi-mono).**
+From a rough idea to reviewed, shipped code — without the agent improvising.
 
-New here? Start with [`pocketto:pocket-help`](#pockettopocket-help) — a compact onboarding and routing guide to the whole system. It explains what Pocket is and which skill to reach for, without loading every skill into context.
+[![npm](https://img.shields.io/npm/v/pocketto-pi?color=cb3837&logo=npm)](https://www.npmjs.com/package/pocketto-pi)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](https://docs.claude.com/en/docs/claude-code)
+[![Node](https://img.shields.io/badge/node-%E2%89%A518-3c873a?logo=node.js&logoColor=white)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](#license)
 
-## Installation
+</div>
 
-### Pi (Pocket)
+---
+
+## Why Pocketto?
+
+Coding agents are great at *writing* code and bad at *not skipping steps*. Pocketto adds the missing discipline:
+
+- **Plan before code.** Specs, acceptance criteria, and TDD-structured plans come before a single line is written.
+- **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
+- **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
+
+11 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work.
+
+<p align="center">
+  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development → review → closing, plus standalone skills (pocket-help, bug-hunting, hotfix, brand-design)" width="100%">
+</p>
+
+## Install
+
+<table>
+<tr><th>Pi</th><th>Claude Code</th></tr>
+<tr><td>
 
 ```bash
 pi install git:github.com/rfxlamia/pocketto
-```
-
-Or from npm:
-
-```bash
+# or
 pi install npm:pocketto-pi
 ```
 
-### Claude Code
+</td><td>
 
 ```bash
 /plugin marketplace add rfxlamia/pocketto
@@ -28,164 +48,113 @@ pi install npm:pocketto-pi
 /reload-plugins
 ```
 
-Use skills with the `pocketto:` namespace:
+</td></tr>
+</table>
 
-```
-/pocketto:pocket-grinding
-/pocketto:pocket-planning
-/pocketto:pocket-development
-```
+> **New here?** Start with [`pocket-help`](#standalone-skills) — a compact router that explains what Pocket is and which skill to reach for, without loading every skill into context.
 
----
+## Quickstart
 
-## Skills
+Run a feature through the full pipeline — each stage hands off to the next:
 
-Pocket has two kinds of skills:
-
-- **Chained skills** (`pocket-*`) — the multi-stage pipeline. Each stage invokes the next at handoff, carrying spec, plan, and acceptance criteria forward. Use these for real features and non-trivial work.
-- **Standalone skills** (`pocket-help`, `bug-hunting`, `hotfix`, `brand-design`) — lighter, single-purpose, no pipeline. Reach for these for everyday work.
-
-### The Pocket Pipeline (chained)
-
-Skills are designed to chain together in sequence:
-
-```
-pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review → pocket-closing
+```bash
+/pocketto:pocket-grinding   "add dark mode toggle"   # → spec + acceptance criteria
+/pocketto:pocket-planning                            # → TDD execution plan
+/pocketto:pocket-development                          # → subagents build it, task by task
+/pocketto:pocket-review     <plan_dir>               # → parallel reviewers gate the work
+/pocketto:pocket-closing    <plan_dir>               # → reconcile, close, summarize
 ```
 
-| Skill | Trigger |
-|-------|---------|
-| `pocket-pitching` | Rough idea, no clear problem yet |
-| `pocket-grinding` | Clear problem, need spec + acceptance criteria |
-| `pocket-planning` | Spec ready, need execution plan |
-| `pocket-structuring` | Plan ready (any size) — passthrough ≤6 tasks, phase-split ≥7 |
-| `pocket-development` | Plan ready, execute task-by-task via subagents |
-| `pocket-review` | User-triggered after a phase/plan is DONE |
-| `pocket-closing` | User-triggered after reviews are written — gate, close, summarize |
+Or just fix something:
+
+```bash
+/pocketto:bug-hunting   "checkout total is off by one cent"
+/pocketto:hotfix        "bump the rate-limit window to 60s"
+```
+
+## The 11 skills
+
+### Pipeline (chained)
+
+Each stage invokes the next at handoff, carrying spec, plan, and acceptance criteria forward. Use these for real features and non-trivial work.
+
+| # | Skill | When to reach for it |
+|---|-------|----------------------|
+| 1 | `pocket-pitching` | Rough idea, no clear problem yet |
+| 2 | `pocket-grinding` | Clear problem — need a spec + acceptance criteria |
+| 3 | `pocket-planning` | Spec ready — need an execution plan |
+| 4 | `pocket-structuring` | Plan ready — passthrough ≤6 tasks, phase-split ≥7 |
+| 5 | `pocket-development` | Plan ready — execute task-by-task via subagents |
+| 6 | `pocket-review` | After a phase/plan is DONE (user-triggered) |
+| 7 | `pocket-closing` | After reviews pass — gate, close, summarize |
 
 ### Standalone skills
 
-| Skill | Trigger |
-|-------|---------|
+Lighter, single-purpose, no pipeline. Reach for these for everyday work.
+
+| Skill | When to reach for it |
+|-------|----------------------|
 | `pocket-help` | "What is Pocket?", which skill to use, how the flow works |
 | `bug-hunting` | Fix a bug, debug a failure, audit code for hidden bugs |
 | `hotfix` | Small-to-medium change where the full pipeline is overkill |
 | `brand-design` | Design system, creative brief, brand identity, UI tokens |
 
----
+<details>
+<summary><b>📖 Full skill reference</b> — what each skill actually does</summary>
 
-### `pocketto:pocket-pitching`
+<br>
 
-Pre-grinding problem exploration. Use **before** `pocket-grinding` when the problem is unformed or needs exploration. Guides diverge→converge with structured brainstorming methods and LLM-to-LLM curation, then produces a pitch exploration doc.
+**`pocket-pitching`** — Pre-grinding problem exploration. Use **before** `pocket-grinding` when the problem is unformed. Guides diverge→converge with structured brainstorming and LLM-to-LLM curation, then produces a pitch exploration doc.
+*Trigger:* "pitch this", "explore this idea", "I have a rough idea".
 
-**Trigger:** "pitch this", "explore this idea", "I have a rough idea"
+**`pocket-grinding`** — BDD-driven feature/fix discovery before any implementation. Use when planning a feature, designing a fix, or exploring options. Invokes `pocket-planning` at handoff.
+*Trigger:* "pocket-grinding", "brainstorm", "think through", "plan this", "before we build".
 
----
+**`pocket-planning`** — Converts a `pocket-grinding` spec into a TDD-structured execution plan of full Pocket Packets. Outputs tasks ready to dispatch via `pocket-development`.
+*Trigger:* "create plan", "build plan", or invoked by `pocket-grinding`.
 
-### `pocketto:pocket-grinding`
+**`pocket-structuring`** — Splits a `pocket-planning` plan into sequential phase files. Passthrough below 7 tasks, phase-split at ≥7. Produces phase files for `pocket-development`, one at a time.
+*Trigger:* "structure plan", "split plan", or invoked by `pocket-planning`.
 
-BDD-driven feature/fix discovery before any implementation. Use when planning a feature, designing a fix, or exploring options before building. Invokes `pocket-planning` at handoff.
+**`pocket-development`** — Precise subagent delegation for task-by-task execution. Every delegation requires a Pocket Packet — a structured contract with objective, verification criteria, and stop conditions. Enforces 6 iron laws: no packet = no spawn.
+*Trigger:* "execute plan", "delegate tasks", "dispatch subagents".
 
-**Trigger:** "pocket-grinding", "brainstorm", "think through", "plan this", "before we build"
+**`pocket-review`** — Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — it does NOT auto-call. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED`.
+*Trigger:* `/pocketto:pocket-review <plan_dir>`.
 
----
+**`pocket-closing`** — Terminal stage. **User-triggered** after `pocket-review` writes verdicts. Reconciles every `reviews/*.json` against `log.json`, gates the close on verdicts (any fail or unreviewed task → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE`, runs `log close`, and writes `closeout.md`. Returns `CLOSED`, `PHASE_ADVANCED`, `CLOSE_BLOCKED`, or `ALREADY_CLOSED`.
+*Trigger:* `/pocketto:pocket-closing <plan_dir>`.
 
-### `pocketto:pocket-planning`
+**`bug-hunting`** — Systematic debugging with confirmed root cause before any fix. Reactive (fix known bug) and proactive (hunt hidden bugs) modes. Enforces: claim ≠ evidence ≠ root cause ≠ fix.
+*Trigger:* "fix bug", "debug", "why is X broken", or proactive code review.
 
-Converts a `pocket-grinding` spec into a TDD-structured execution plan of full Pocket Packets. Outputs tasks ready to dispatch via `pocket-development`.
+**`hotfix`** — Fast iteration for small-to-medium changes. Enforces brief-plan + subagent-review gates before implementation — accuracy without full pipeline ceremony.
+*Trigger:* "quick fix", "small change", "just update X".
 
-**Trigger:** "create plan", "build plan", or invoked by `pocket-grinding`
+**`brand-design`** — Brand-aware design system generator that acts as Head of Brand. Translates abstract brand language into a mathematically-validated, implementation-ready design system, then writes `creative-brief.md` as the source of truth for all UI/UX.
+*Trigger:* "brand-design", "design system", "creative brief", "brand identity", "set up UI tokens".
+*Deliverables:* `docs/pocket/rule/creative-brief.md`, `creative-brief-preview.html`, `.claude/rules/brand-design.md`.
 
----
+**`pocket-help`** — Compact onboarding and routing guide for the whole system. Explains what Pocket is, when it beats lighter flows, and which skill to invoke — without loading every skill into context.
+*Trigger:* "what is pocket", "how do I use pocket", "which pocket skill", "pocket-help".
 
-### `pocketto:pocket-structuring`
-
-Splits a `pocket-planning` execution plan into sequential phase files. Use when the plan has ≥7 tasks. Produces phase files for `pocket-development`, one at a time.
-
-**Trigger:** "structure plan", "split plan", or invoked by `pocket-planning`
-
----
-
-### `pocketto:pocket-development`
-
-Precise subagent delegation for task-by-task execution. Every delegation requires a Pocket Packet — a structured contract with objective, verification criteria, and stop conditions. Enforces 6 iron laws: no packet = no spawn.
-
-**Trigger:** "execute plan", "delegate tasks", "dispatch subagents"
-
----
-
-### `pocketto:pocket-review`
-
-Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — `pocket-development` does NOT call it. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED` (per task: `REVIEW_PASS` / `REVIEW_FAIL`).
-
-**Trigger:** `/pocketto:pocket-review <plan_dir>` — invoked by the user after a phase/plan is DONE.
-
----
-
-### `pocketto:pocket-closing`
-
-Terminal stage. **User-triggered** after `pocket-review` writes verdicts — `pocket-review` does NOT call it and does NOT touch `log.json`. Reconciles every `reviews/*.json` against `log.json`, gates the close on verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE` via the `pocketto-pi log` CLI, runs `log close` (header → `DONE` + `date_completed`), and writes `<plan_dir>/closeout.md`. Returns `CLOSED`, `PHASE_ADVANCED` (phased plan, more phases remain), `CLOSE_BLOCKED`, or `ALREADY_CLOSED`. Closes the loop so a finished plan no longer sits in `IN_PROGRESS`/`REVIEW` limbo.
-
-**Trigger:** `/pocketto:pocket-closing <plan_dir>` — invoked by the user after reviews pass.
-
----
-
-### `pocketto:bug-hunting`
-
-Systematic debugging with confirmed root cause before any fix. Two modes: reactive (fix known bug) and proactive (hunt for hidden bugs). Enforces the rule: claim ≠ evidence ≠ root cause ≠ fix.
-
-**Trigger:** "fix bug", "debug", "why is X broken", or proactive code review
-
----
-
-### `pocketto:hotfix`
-
-Fast iteration workflow for small-to-medium changes. Enforces brief-plan + subagent-review gates before implementation — accuracy without full pocket pipeline ceremony.
-
-**Trigger:** "quick fix", "small change", "just update X"
-
----
-
-### `pocketto:brand-design`
-
-Brand-aware design system generator that acts as Head of Brand. Translates abstract brand language into a mathematically-validated, implementation-ready design system, then writes `creative-brief.md` as the source of truth for all UI/UX in a project. Standalone skill (like bug-hunting and hotfix — no full pipeline required).
-
-**Trigger:** "brand-design", "design system", "creative brief", "define the brand", "brand identity", "set up UI tokens"
-
-**Deliverables:**
-- `docs/pocket/rule/creative-brief.md` — the design system source of truth
-- `docs/pocket/rule/creative-brief-preview.html` — visual preview for alignment
-- `.claude/rules/brand-design.md` — enforcement rule for future UI work
-
----
-
-### `pocketto:pocket-help`
-
-Compact onboarding and routing guide for the whole Pocket system. Explains what Pocket is, when it beats lighter Superpowers-style flows, which skill to invoke for the situation, and the full idea→reviewed-code flow — all without loading every individual skill into context. Frames itself as an entry point, not a replacement for the detailed skills.
-
-**Trigger:** "what is pocket", "how do I use pocket", "which pocket skill", "pocket-help", or any onboarding/routing question about the Pocket ecosystem.
+</details>
 
 ## CLI
 
-The `pocket-structuring` and `pocket-development` skills drive a single cross-platform
-Node CLI, run via `npx` — no install step, PATH setup, or Python required. Works the same
-on Windows, macOS, and Linux. Requires Node.js ≥ 18 (already part of the npm toolchain).
+The `pocket-structuring` and `pocket-development` skills drive a single cross-platform Node CLI, run via `npx` — no install, PATH setup, or Python required. Works the same on Windows, macOS, and Linux. Requires Node.js ≥ 18.
 
-| Command | Usage |
-|---------|-------|
+| Command | What it does |
+|---------|--------------|
 | `npx pocketto-pi structure <execution-plan.md> [--dry-run]` | Split a plan into phase files (passthrough if < 7 tasks) |
-| `npx pocketto-pi log init <plan_dir>` | Initialize `log.json` for a plan directory (migrates task-less logs) |
+| `npx pocketto-pi log init <plan_dir>` | Initialize `log.json` for a plan directory |
 | `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN]` | Update phase or task status |
 | `npx pocketto-pi log close <plan_dir>` | Finalize log after all phases complete |
 
-Status values: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
+Status flow: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
 
-Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contract, data, error }` —
-that skills parse instead of scraping text. Add `--contract <N>` for a version handshake: a
-mismatch fails loudly with guidance rather than emitting output an older skill can't read.
-
----
+Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contract, data, error }` — that skills parse instead of scraping text. Add `--contract <N>` for a version handshake that fails loudly on mismatch rather than emitting output an older skill can't read.
 
 ## License
 
-MIT
+[MIT](LICENSE) © [rfxlamia](https://github.com/rfxlamia)

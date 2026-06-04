@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 380" font-family="'Virgil','Excalifont','Segoe Print','Comic Sans MS',cursive" width="980" height="380">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1e1e1e"/>
+    </marker>
+    <style>
+      .box { stroke:#1e1e1e; stroke-width:2; rx:14; ry:14; stroke-linejoin:round; }
+      .lbl { fill:#1e1e1e; font-size:15px; text-anchor:middle; dominant-baseline:central; }
+      .sub { fill:#1e1e1e; font-size:13px; text-anchor:middle; dominant-baseline:central; }
+      .badge { fill:#ffffff; stroke:#1e1e1e; stroke-width:1.5; }
+      .num { fill:#1e1e1e; font-size:12px; text-anchor:middle; dominant-baseline:central; }
+      .hdr { fill:#1e1e1e; font-size:16px; }
+      .flow { stroke:#1e1e1e; stroke-width:2; fill:none; }
+      .caption { fill:#495057; font-size:13px; text-anchor:middle; }
+    </style>
+  </defs>
+
+  <!-- ===== Pipeline header ===== -->
+  <text class="hdr" x="20" y="34">The Pocket Pipeline · idea → reviewed, shipped code</text>
+
+  <!-- ===== Pipeline boxes ===== -->
+  <!-- 1 pitching -->
+  <rect class="box" x="20"  y="56" width="112" height="74" fill="#d0bfff"/>
+  <text class="lbl" x="76"  y="93">pitching</text>
+  <circle class="badge" cx="34" cy="70" r="11"/><text class="num" x="34" y="70">1</text>
+
+  <!-- 2 grinding -->
+  <rect class="box" x="153" y="56" width="112" height="74" fill="#a5d8ff"/>
+  <text class="lbl" x="209" y="93">grinding</text>
+  <circle class="badge" cx="167" cy="70" r="11"/><text class="num" x="167" y="70">2</text>
+
+  <!-- 3 planning -->
+  <rect class="box" x="286" y="56" width="112" height="74" fill="#99e9f2"/>
+  <text class="lbl" x="342" y="93">planning</text>
+  <circle class="badge" cx="300" cy="70" r="11"/><text class="num" x="300" y="70">3</text>
+
+  <!-- 4 structuring -->
+  <rect class="box" x="419" y="56" width="112" height="74" fill="#b2f2bb"/>
+  <text class="lbl" x="475" y="93">structuring</text>
+  <circle class="badge" cx="433" cy="70" r="11"/><text class="num" x="433" y="70">4</text>
+
+  <!-- 5 development -->
+  <rect class="box" x="552" y="56" width="112" height="74" fill="#ffec99"/>
+  <text class="lbl" x="608" y="93">development</text>
+  <circle class="badge" cx="566" cy="70" r="11"/><text class="num" x="566" y="70">5</text>
+
+  <!-- 6 review -->
+  <rect class="box" x="685" y="56" width="112" height="74" fill="#ffd8a8"/>
+  <text class="lbl" x="741" y="93">review</text>
+  <circle class="badge" cx="699" cy="70" r="11"/><text class="num" x="699" y="70">6</text>
+
+  <!-- 7 closing -->
+  <rect class="box" x="818" y="56" width="112" height="74" fill="#ffc9c9"/>
+  <text class="lbl" x="874" y="93">closing</text>
+  <circle class="badge" cx="832" cy="70" r="11"/><text class="num" x="832" y="70">7</text>
+
+  <!-- arrows between pipeline boxes -->
+  <line class="flow" x1="134" y1="93" x2="151" y2="93" marker-end="url(#arrow)"/>
+  <line class="flow" x1="267" y1="93" x2="284" y2="93" marker-end="url(#arrow)"/>
+  <line class="flow" x1="400" y1="93" x2="417" y2="93" marker-end="url(#arrow)"/>
+  <line class="flow" x1="533" y1="93" x2="550" y2="93" marker-end="url(#arrow)"/>
+  <line class="flow" x1="666" y1="93" x2="683" y2="93" marker-end="url(#arrow)"/>
+  <line class="flow" x1="799" y1="93" x2="816" y2="93" marker-end="url(#arrow)"/>
+
+  <text class="caption" x="475" y="150">each stage hands off spec + plan + acceptance criteria to the next</text>
+
+  <!-- ===== Standalone header ===== -->
+  <text class="hdr" x="20" y="220">Standalone · grab any one, no pipeline needed</text>
+
+  <!-- standalone boxes -->
+  <rect class="box" x="20"  y="244" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="130" y="270">pocket-help</text>
+  <text class="sub" x="130" y="291" fill="#495057">what is Pocket / routing</text>
+
+  <rect class="box" x="260" y="244" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="370" y="270">bug-hunting</text>
+  <text class="sub" x="370" y="291" fill="#495057">root cause before fix</text>
+
+  <rect class="box" x="500" y="244" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="610" y="270">hotfix</text>
+  <text class="sub" x="610" y="291" fill="#495057">small change, plan-reviewed</text>
+
+  <rect class="box" x="740" y="244" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="850" y="270">brand-design</text>
+  <text class="sub" x="850" y="291" fill="#495057">design system + brief</text>
+
+  <text class="caption" x="490" y="344">11 skills total · works in Claude Code and Pi</text>
+</svg>

@@ -28,6 +28,8 @@
     "skills/**",
     "!skills/**/__pycache__/**",
     "cli/**",
+    "assets/**",
+    "llms.txt",
     "README.md"
   ],
   "scripts": {
