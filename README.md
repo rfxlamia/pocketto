@@ -4,7 +4,7 @@
 
 Provides 10 skills for systematic, structured development — from raw idea to shipped code.
 
-New here? Start with [`pocketto:pocket-help`](#pocketto-pocket-help) — a compact onboarding and routing guide to the whole system. It explains what Pocket is and which skill to reach for, without loading every skill into context.
+New here? Start with [`pocketto:pocket-help`](#pockettopocket-help) — a compact onboarding and routing guide to the whole system. It explains what Pocket is and which skill to reach for, without loading every skill into context.
 
 ## Installation
 
@@ -115,9 +115,9 @@ Precise subagent delegation for task-by-task execution. Every delegation require
 
 ### `pocketto:pocket-review`
 
-Independent two-stage review: spec compliance (Stage 1) then code quality (Stage 2). Called automatically by `pocket-development` after each implementer reports DONE. Returns `REVIEW_PASS`, `REVIEW_FAIL`, or `REVIEW_BLOCKED`.
+Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — `pocket-development` does NOT call it. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED` (per task: `REVIEW_PASS` / `REVIEW_FAIL`).
 
-**Trigger:** Invoked internally by `pocket-development` — not called directly.
+**Trigger:** `/pocketto:pocket-review <plan_dir>` — invoked by the user after a phase/plan is DONE.
 
 ---
 

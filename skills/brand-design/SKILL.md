@@ -289,7 +289,7 @@ ln -s ../../docs/pocket/rule/creative-brief.md .claude/rules/design-system.md
 
 3. Confirm to the user what was produced: brief path, preview path, rule file path.
 
-Pocket-branding is complete when the brief exists, the preview was confirmed, and the rule
+Brand-design is complete when the brief exists, the preview was confirmed, and the rule
 file is in place.
 
 ---
