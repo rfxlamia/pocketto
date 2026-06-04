@@ -2,7 +2,7 @@
 
 > Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows.
 
-Provides 10 skills for systematic, structured development — from raw idea to shipped code.
+Provides 11 skills for systematic, structured development — from raw idea to shipped code.
 
 New here? Start with [`pocketto:pocket-help`](#pockettopocket-help) — a compact onboarding and routing guide to the whole system. It explains what Pocket is and which skill to reach for, without loading every skill into context.
 
@@ -50,7 +50,7 @@ Pocket has two kinds of skills:
 Skills are designed to chain together in sequence:
 
 ```
-pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review
+pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review → pocket-closing
 ```
 
 | Skill | Trigger |
@@ -61,6 +61,7 @@ pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring �
 | `pocket-structuring` | Plan ready (any size) — passthrough ≤6 tasks, phase-split ≥7 |
 | `pocket-development` | Plan ready, execute task-by-task via subagents |
 | `pocket-review` | User-triggered after a phase/plan is DONE |
+| `pocket-closing` | User-triggered after reviews are written — gate, close, summarize |
 
 ### Standalone skills
 
@@ -118,6 +119,14 @@ Precise subagent delegation for task-by-task execution. Every delegation require
 Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — `pocket-development` does NOT call it. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED` (per task: `REVIEW_PASS` / `REVIEW_FAIL`).
 
 **Trigger:** `/pocketto:pocket-review <plan_dir>` — invoked by the user after a phase/plan is DONE.
+
+---
+
+### `pocketto:pocket-closing`
+
+Terminal stage. **User-triggered** after `pocket-review` writes verdicts — `pocket-review` does NOT call it and does NOT touch `log.json`. Reconciles every `reviews/*.json` against `log.json`, gates the close on verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE` via the `pocketto-pi log` CLI, runs `log close` (header → `DONE` + `date_completed`), and writes `<plan_dir>/closeout.md`. Returns `CLOSED`, `PHASE_ADVANCED` (phased plan, more phases remain), `CLOSE_BLOCKED`, or `ALREADY_CLOSED`. Closes the loop so a finished plan no longer sits in `IN_PROGRESS`/`REVIEW` limbo.
+
+**Trigger:** `/pocketto:pocket-closing <plan_dir>` — invoked by the user after reviews pass.
 
 ---
 

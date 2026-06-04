@@ -5,8 +5,8 @@ The full chained pipeline, walked stage by stage, with the gates that matter and
 ## The Chain at a Glance
 
 ```
-pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review
-   (explore)        (specify/BDD)      (plan/TDD)         (phase)            (delegate)          (review)
+pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review → pocket-closing
+   (explore)        (specify/BDD)      (plan/TDD)         (phase)            (delegate)          (review)        (close)
 ```
 
 Standalone skills (`bug-hunting`, `hotfix`, `brand-design`) sit *outside* this chain — see `pocket-vs-superpowers.md` for when to leave the pipeline for one of them.
@@ -49,9 +49,12 @@ Main agent is **delegator + auditor only** — it never writes implementation co
 **The user** runs `/pocketto:pocket-review <plan_dir>` after a phase/plan is DONE. Main agent validates `log.json`, computes per-task SHA ranges, and dispatches **parallel** reviewer subagents (one per task), then writes results to `reviews/`.
 - **Output states:** `PHASE_REVIEWED` (each task pass or issues) or `PHASE_BLOCKED` (preflight failed).
 - **No loop:** if a task is `REVIEW_FAIL`, fix the code and re-run review.
-- **Next:** Fix findings, then continue with the next phase (back to stage 5) until the whole plan is complete.
+- **Next:** Fix findings, then continue with the next phase (back to stage 5). When every task in a phase is `REVIEW_PASS`, hand off to `pocket-closing`.
 
-> **About `pocket-closing`:** the diagrams in pocket-review and pocket-development show a final `pocket-closing` step (closing out `log.json`). It is part of the intended design but is **not yet a skill in this repo** — today the chain terminates at pocket-review.
+### 7. pocket-closing — close (user-triggered)
+**The user** runs `/pocketto:pocket-closing <plan_dir>` after reviews are written. Main agent is **reconciler + closer only** — it reads `log.json` + every `reviews/*.json`, gates the close on verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes `closeout.md`.
+- **Output states:** `CLOSED` (header `DONE` + `date_completed`), `PHASE_ADVANCED` (one phase done, plan continues), `CLOSE_BLOCKED`, or `ALREADY_CLOSED`.
+- **Closes the loop:** without this stage a finished plan sits in `IN_PROGRESS`/`REVIEW` limbo. This is the terminal step.
 
 ## Worked Example — "Add JWT refresh-token support"
 
@@ -73,5 +76,6 @@ Main agent is **delegator + auditor only** — it never writes implementation co
 | An execution plan | pocket-structuring (or it's already been invoked) |
 | A plan/phase file ready to build | pocket-development |
 | A finished phase to check | pocket-review |
+| Reviews written, all passing | pocket-closing |
 | A bug, not a feature | bug-hunting (leave the pipeline) |
 | A small, clear change | hotfix (leave the pipeline) |
