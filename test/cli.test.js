@@ -166,6 +166,54 @@ test('structure passes through plans below the threshold', () => {
   assert.equal(readdirSync(dir).some((f) => /phase-\d+/.test(f)), false);
 });
 
+test('structure --dry-run surfaces an execution flow for passthrough plans (no files)', () => {
+  const dir = tmp();
+  const plan = writePlan(dir, SMALL_PLAN);
+
+  const env = json(['structure', plan, '--dry-run', '--json']);
+  assert.equal(env.data.action, 'passthrough');
+  assert.equal(env.data.executionFlow, 'T1→T2');
+  // Validation is side-effect-free — no phase files written.
+  assert.equal(readdirSync(dir).some((f) => /phase-\d+/.test(f)), false);
+});
+
+test('structure exposes the depth-based execution flow for split plans', () => {
+  const dir = tmp();
+  const plan = writePlan(dir, NINE_TASK_PLAN);
+
+  const env = json(['structure', plan, '--dry-run', '--json']);
+  assert.equal(env.data.action, 'split');
+  assert.equal(env.data.executionFlow, 'T1→T2,T3,T4(PARALLEL)→T5,T6(PARALLEL)→T7→T8→T9');
+});
+
+test('structure validates passthrough plans: a dangling dependency errors early', () => {
+  const dir = tmp();
+  // 2 tasks (passthrough) but T2 depends on a task that does not exist.
+  const broken = `# EXECUTION PLAN — Broken
+
+**Date:** 2026-06-01
+**Spec:** x.md
+
+## Pocket Packets
+
+---
+
+### Task 1: A [prereq]
+body
+---
+### Task 2: B [depends: T9]
+body
+
+## Plan Summary
+`;
+  const plan = writePlan(dir, broken);
+  const res = run(['structure', plan, '--json'], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.ok, false);
+  assert.equal(env.error.code, 'UNKNOWN_TASK_REF');
+  assert.equal(res.code, 1);
+});
+
 test('structure errors on a plan with no tasks (envelope + exit 1)', () => {
   const dir = tmp();
   const plan = writePlan(dir, '# EXECUTION PLAN — Empty\n\n## Pocket Packets\n\n## Plan Summary\n');
