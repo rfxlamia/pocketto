@@ -35,6 +35,28 @@ npx pocketto-pi doctor                  # check installed vs missing
 
 Recommended (with `--all`): `@juicesharp/rpiv-ask-user-question`, `@tintinweb/pi-tasks`, `@aliou/pi-processes`. Claude Code users get these capabilities from the harness and do not need the Pi extensions.
 
+### Connecting context7 (MCP)
+
+`pi-mcp-adapter` is only the bridge — context7 itself is a hosted MCP server you register once with an API key:
+
+1. Sign up at <https://context7.com/> and create an API key (dashboard → API Keys).
+2. Add it to `~/.pi/agent/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "headers": { "CONTEXT7_API_KEY": "YOUR_API_KEY" }
+    }
+  }
+}
+```
+
+`pi-mcp-adapter` picks this file up automatically (it also supports `${CONTEXT7_API_KEY}` interpolation if you'd rather keep the key in an env var). The hosted server requires the key — without it the tools won't work.
+
+**Stuck on the JSON?** Ask the agent — it can create or edit `~/.pi/agent/mcp.json` for you once you paste in your API key.
+
 ## Two Kinds of Skills
 
 | Kind | Skills | Use for |
