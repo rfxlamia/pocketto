@@ -8,7 +8,7 @@ description: Fast iteration workflow with mandatory subagent plan review. Use wh
 Fast, accurate iteration. Not cowboy coding. Not full superpowers ceremony.
 
 **Use this when:** Small-to-medium changes where brainstorm → spec → plan → review is overkill.
-**Use pocket-grinding instead when:** New feature, new system, architectural decision, unclear requirements.
+**Use pocket-grinding instead when:** New system, architectural decision, unclear/contested requirements, or work spanning many files/phases. (A small, clearly-specified feature addition — e.g. a zoom button or CSV export — stays here in `hotfix`; "it's a feature" alone is not a reason to escalate.)
 
 ---
 

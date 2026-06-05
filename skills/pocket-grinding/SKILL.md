@@ -12,13 +12,14 @@ Production-grade requirement discovery using BDD principles. Gathers project con
 ## When to Use
 
 Trigger this skill when:
-- Planning a new feature (any size — even "simple" ones have hidden assumptions)
+- Planning a feature whose shape or requirements aren't yet clear, or that spans multiple files/phases (small, clearly-specified additions → `hotfix`)
 - Fixing a non-trivial bug with design implications
 - Refactoring a system boundary or changing an API contract
 - User says "let's think through", "plan this", "explore options", "before we build"
 
 Do NOT use for:
 - Trivial single-line fixes (typo, config value, rename)
+- Small, well-understood changes touching only **1–4 files** and resolvable in **1–2 requests** → use `hotfix` instead (Phase 1.5 surfaces this off-ramp mid-flow)
 - Work that already has an approved spec
 
 ## Hard Gates
@@ -65,6 +66,42 @@ GATE 4: POCKET-PLANNING MUST BE INVOKED after user approves spec.
 
 ### Output of Phase 1
 Summarize findings in **3–5 bullets** before proceeding. Do not dump raw file contents — synthesize what matters. Flag unknowns explicitly.
+
+---
+
+## Phase 1.5: Triviality Off-Ramp (Advisory)
+
+**Goal:** Now that the Phase 1 context scan has made task size estimable, check whether the task is small enough that `hotfix` is the better tool — and surface that off-ramp before investing in full discovery.
+
+The full Pocket flow (grinding → planning → structuring → development → review → closing) is heavy ceremony. For genuinely small work it costs more than it returns. Onboarding users often don't know `hotfix` exists and default here for *every* task — this advisory gate names the off-ramp at the moment scope first becomes estimable, so the right tool is suggested without the user having to already know it exists.
+
+### Triviality Heuristic
+
+Estimate from the Phase 1 context scan. The task is **trivial** when BOTH size signals hold:
+- Touches only **1–4 files**, AND
+- Resolvable in **1–2 requests** (no multi-phase work)
+
+AND none of these complexity signals are present:
+- New system, architectural decision, or non-obvious design
+- Unclear or contested requirements (the *ask itself* needs exploration, not just the implementation)
+- API contract / system-boundary changes
+
+> **"New feature" alone does NOT suppress this gate.** A small, clearly-specified feature addition — e.g. "add a zoom in/out button", "add CSV export" — touches few files, is understood in one request, and only needs a preview + 1–2 refine rounds. That is a `hotfix` candidate, not a grinding one. The discriminator is **requirement clarity + size + architectural impact**, not whether the work is labeled a "feature." Suppress the gate only when the requirement is genuinely unclear or the design decision is architectural.
+
+### Action When Triggered
+
+Recommend `hotfix`, explain why, then let the user decide:
+
+> "This looks small — roughly **<N> files**, resolvable in 1–2 requests, with no new architecture. The full Pocket flow is likely overkill here. I'd recommend **`hotfix`** instead: it still enforces a brief-plan + subagent-review gate, so accuracy is preserved, but it skips the multi-phase ceremony.
+>
+> Switch to `hotfix`, or continue with full grinding? (Continue if you expect hidden complexity.)"
+
+**This gate is ADVISORY — non-blocking:**
+- If the user continues → proceed to Phase 2 without further friction (power users, or cases with hidden complexity).
+- If the user switches → invoke `hotfix` and stop the grinding flow here.
+- If the task is **above** the threshold → say nothing about hotfix; proceed silently to Phase 2.
+
+This mirrors the existing `hotfix → pocket-grinding` off-ramp ("Use pocket-grinding instead when: new system, architectural decision, unclear/contested requirements, or work spanning many files/phases"), making the routing relationship **bidirectional**.
 
 ---
 
@@ -298,9 +335,6 @@ Example: `docs/pocket/spec/2026-05-06-user-auth-refactor/session-flow.md`
 - Dir: `YYYY-MM-DD-kebab-slug` (today's date + hyphenated feature name)
 - File: descriptive topic name, lowercase hyphenated
 - Multiple files per dir allowed if session covers distinct sub-topics
-
-For full spec document template with all sections:
-→ Load `references/spec-template.md`
 
 For full spec document template with all sections:
 → Load `references/spec-template.md`
