@@ -270,9 +270,20 @@ The brief is the source of truth. It must contain real computed values, not plac
 
 ## Step 7 — Rule Setup & Enforcement
 
-**Goal:** Make the brief automatically authoritative for all future UI/UX work.
+**Goal:** Make the brief automatically authoritative for all future UI/UX work, via two
+complementary mechanisms:
 
-1. Create the Claude rule file at `.claude/rules/brand-design.md` with this content:
+- **Active injection (primary):** a project-scoped `SessionStart` hook that loads the brief
+  into context at the start of every session. This is deterministic — it does not depend on
+  the agent happening to read a rules file, which is the passive mechanism that "often fails
+  to auto-trigger."
+- **Static fallback:** a `.claude/rules/brand-design.md` rule file. It is durable and
+  greppable, and survives even if `.claude/settings.json` is deleted or the runtime ignores
+  hooks. The hook does the work; the rule file is the safety net.
+
+Both are written.
+
+1. **Write the static rule file** at `.claude/rules/brand-design.md`:
 
 ```
 You MUST load docs/pocket/rule/creative-brief.md whenever you are
@@ -280,17 +291,80 @@ planning or developing UI/UX. This file is the design system authority
 for this project. No UI decision should be made without consulting it.
 ```
 
-2. Provide the symlink instruction to the user (run, or tell them to run):
+2. **Write the SessionStart hook script** at `.claude/hooks/session-start.sh` and make it
+   executable. It prints the enforcement context only when a brief exists, and **always exits
+   0** (a non-zero SessionStart hook surfaces as an error to the user), so projects without a
+   brief are unaffected. The path uses `$CLAUDE_PROJECT_DIR` because a hook's working
+   directory is not guaranteed to be the project root. Do not add `set -e`.
 
 ```bash
-mkdir -p .claude/rules
-ln -s ../../docs/pocket/rule/creative-brief.md .claude/rules/design-system.md
+mkdir -p .claude/hooks
+cat > .claude/hooks/session-start.sh <<'SCRIPT'
+#!/usr/bin/env bash
+# Brand-design enforcement: auto-load the creative brief at session start.
+# Prints nothing and exits 0 when no brief exists, so non-brand projects are unaffected.
+BRIEF="$CLAUDE_PROJECT_DIR/docs/pocket/rule/creative-brief.md"
+if [ -f "$BRIEF" ]; then
+  cat <<'EOF'
+[brand-design] This project has a creative brief at docs/pocket/rule/creative-brief.md.
+It is the design-system authority. Before planning or developing ANY UI/UX, load and obey it.
+No color, type, spacing, or component decision may be made without consulting the brief.
+EOF
+fi
+exit 0
+SCRIPT
+chmod +x .claude/hooks/session-start.sh
 ```
 
-3. Confirm to the user what was produced: brief path, preview path, rule file path.
+3. **Register the hook** in the project's `.claude/settings.json` (the shared, committed file
+   — NOT `settings.local.json`). Run this exact `jq` procedure so the merge is deterministic
+   and **idempotent**: it creates the file if absent, preserves any existing hooks and
+   top-level keys, and appends our entry only when no entry with the same command already
+   exists (so re-running brand-design in Refine Mode never duplicates it). The matcher is
+   `startup|resume|clear` — `compact` is **intentionally excluded** so the block is not
+   re-injected mid-compaction. If `jq` is unavailable, hand-merge an entry of the shape shown
+   below into `.hooks.SessionStart` without clobbering siblings.
 
-Brand-design is complete when the brief exists, the preview was confirmed, and the rule
-file is in place.
+```bash
+SETTINGS=.claude/settings.json
+CMD='$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh'
+[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+tmp=$(mktemp)
+jq --arg cmd "$CMD" '
+  .hooks //= {} | .hooks.SessionStart //= [] |
+  if any(.hooks.SessionStart[]; .hooks[]?.command == $cmd)
+  then .
+  else .hooks.SessionStart += [{
+    matcher: "startup|resume|clear",
+    hooks: [{ type: "command", command: $cmd }]
+  }]
+  end
+' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+```
+
+The registered entry has this shape:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+4. Confirm to the user what was produced: brief path, preview path, rule file path, hook
+   script path, and the `settings.json` registration.
+
+Brand-design is complete when the brief exists, the preview was confirmed, and BOTH
+enforcement mechanisms are in place: the SessionStart hook (registered + executable) and the
+static rule file.
 
 ---
 
@@ -306,8 +380,9 @@ Entered when `docs/pocket/rule/creative-brief.md` already exists (Step 0).
 4. Regenerate docs/pocket/rule/creative-brief-preview.html.
 5. GATE 4: prompt the user to confirm the preview again (verbatim prompt from Step 5).
    Do NOT overwrite the brief until confirmed.
-6. Overwrite creative-brief.md and update the preview HTML. Keep the rule file as-is
-   (re-create it only if missing).
+6. Overwrite creative-brief.md and update the preview HTML. Re-run Step 7's enforcement
+   setup only where something is missing: the `jq` registration and the rule-file/hook writes
+   are idempotent, so re-running them is safe and will not duplicate the hook entry.
 ```
 
 Refine mode never skips the preview confirmation. A scoped change still gets visually
