@@ -11,7 +11,7 @@
       "source": { "source": "url", "url": "https://github.com/rfxlamia/pocketto.git" },
       "description": "Structured subagent delegation, bug hunting, iterative planning, and code review workflows.",
       "category": "productivity",
-      "tags": ["pocket", "development", "delegation", "bug-hunting", "planning"]
+      "tags": ["pocket", "development", "delegation", "bug-hunting", "planning", "structured-research"]
     }
   ]
 }
