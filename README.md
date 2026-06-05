@@ -22,10 +22,10 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 - **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
 - **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
 
-11 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work.
+12 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work.
 
 <p align="center">
-  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development → review → closing, plus standalone skills (pocket-help, bug-hunting, hotfix, brand-design)" width="100%">
+  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development → review → closing, plus standalone skills (pocket-help, bug-hunting, hotfix, brand-design, structured-research)" width="100%">
 </p>
 
 ## Install
@@ -90,7 +90,7 @@ Or just fix something:
 /pocketto:hotfix        "bump the rate-limit window to 60s"
 ```
 
-## The 11 skills
+## The 12 skills
 
 ### Pipeline (chained)
 
@@ -116,6 +116,7 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 | `bug-hunting` | Fix a bug, debug a failure, audit code for hidden bugs |
 | `hotfix` | Small-to-medium change where the full pipeline is overkill |
 | `brand-design` | Design system, creative brief, brand identity, UI tokens |
+| `structured-research` | Validate an explicit assumption before it enters planning |
 
 <details>
 <summary><b>📖 Full skill reference</b> — what each skill actually does</summary>
@@ -155,6 +156,10 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 
 **`pocket-help`** — Compact onboarding and routing guide for the whole system. Explains what Pocket is, when it beats lighter flows, and which skill to invoke — without loading every skill into context.
 *Trigger:* "what is pocket", "how do I use pocket", "which pocket skill", "pocket-help".
+
+**`structured-research`** — Validates an explicit assumption before it leaks into planning or code. Operationalizes the belief into a falsifiable question, recommends a research methodology (non-binding) from a catalog of techniques, gathers cited evidence, then returns a graded verdict — Confirmed / Refuted / Inconclusive — with an advisory recommendation.
+*Trigger:* "structured-research", "validate this assumption", "is it true that", "research whether", "verify my assumption".
+*Deliverables:* `docs/pocket/research/<date>-<slug>/research-report.md`.
 
 </details>
 

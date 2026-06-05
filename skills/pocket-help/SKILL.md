@@ -62,9 +62,9 @@ Recommended (with `--all`): `@juicesharp/rpiv-ask-user-question`, `@tintinweb/pi
 | Kind | Skills | Use for |
 |------|--------|---------|
 | **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-review · pocket-closing | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
-| **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · pocket-help | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
+| **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · structured-research · pocket-help | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
 
-The `pocket-*` prefix marks a skill as part of the chained pipeline. `bug-hunting`, `hotfix`, and `brand-design` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks.
+The `pocket-*` prefix marks a skill as part of the chained pipeline. `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks.
 
 ## Router — Which Skill Right Now?
 
@@ -82,6 +82,7 @@ Match your situation to one skill. Open only that skill.
 | A bug, a failure, or "audit this code" | `bug-hunting` | standalone |
 | Small-to-medium change, full pipeline is overkill | `hotfix` | standalone |
 | Design system / brand identity / UI tokens | `brand-design` | standalone |
+| An assumption to validate before it enters planning | `structured-research` | standalone |
 | "What is Pocket / which skill / how does this flow?" | `pocket-help` (you are here) | standalone |
 
 **Routing rules of thumb:**
@@ -89,6 +90,7 @@ Match your situation to one skill. Open only that skill.
 - Problem is clear but it's a real feature? → start at `pocket-grinding`.
 - It's a quick, well-understood change? → `hotfix` (not the pipeline).
 - Something is broken? → `bug-hunting` (not the pipeline).
+- Holding an unverified assumption? → `structured-research` (validate it before it enters planning).
 - Already have an approved spec? → skip pitching/grinding, start at `pocket-planning`.
 
 ## The End-to-End Flow (chained pipeline)
@@ -146,6 +148,7 @@ Pocket is **overkill** when the change is small and well-understood. Then:
 - known bug / failure → `bug-hunting`
 - quick small-to-medium change → `hotfix`
 - just UI tokens / a brand → `brand-design`
+- an unverified assumption to validate → `structured-research`
 
 For the full comparison and a "which do I reach for?" decision guide, load `references/pocket-vs-superpowers.md`.
 

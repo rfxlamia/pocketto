@@ -68,21 +68,25 @@
   <text class="hdr" x="20" y="220">Standalone · grab any one, no pipeline needed</text>
 
   <!-- standalone boxes -->
-  <rect class="box" x="20"  y="244" width="220" height="64" fill="#f1f3f5"/>
-  <text class="lbl" x="130" y="270">pocket-help</text>
-  <text class="sub" x="130" y="291" fill="#495057">what is Pocket / routing</text>
+  <rect class="box" x="20"  y="244" width="180" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="110" y="270">pocket-help</text>
+  <text class="sub" x="110" y="291" fill="#495057">what is Pocket / routing</text>
 
-  <rect class="box" x="260" y="244" width="220" height="64" fill="#f1f3f5"/>
-  <text class="lbl" x="370" y="270">bug-hunting</text>
-  <text class="sub" x="370" y="291" fill="#495057">root cause before fix</text>
+  <rect class="box" x="210" y="244" width="180" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="300" y="270">bug-hunting</text>
+  <text class="sub" x="300" y="291" fill="#495057">root cause before fix</text>
 
-  <rect class="box" x="500" y="244" width="220" height="64" fill="#f1f3f5"/>
-  <text class="lbl" x="610" y="270">hotfix</text>
-  <text class="sub" x="610" y="291" fill="#495057">small change, plan-reviewed</text>
+  <rect class="box" x="400" y="244" width="180" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="490" y="270">hotfix</text>
+  <text class="sub" x="490" y="291" fill="#495057">small change, reviewed</text>
 
-  <rect class="box" x="740" y="244" width="220" height="64" fill="#f1f3f5"/>
-  <text class="lbl" x="850" y="270">brand-design</text>
-  <text class="sub" x="850" y="291" fill="#495057">design system + brief</text>
+  <rect class="box" x="590" y="244" width="180" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="680" y="270">brand-design</text>
+  <text class="sub" x="680" y="291" fill="#495057">design system + brief</text>
 
-  <text class="caption" x="490" y="344">11 skills total · works in Claude Code and Pi</text>
+  <rect class="box" x="780" y="244" width="180" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="870" y="270">structured-research</text>
+  <text class="sub" x="870" y="291" fill="#495057">validate an assumption</text>
+
+  <text class="caption" x="490" y="344">12 skills total · works in Claude Code and Pi</text>
 </svg>

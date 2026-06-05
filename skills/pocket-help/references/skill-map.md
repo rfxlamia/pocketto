@@ -5,7 +5,7 @@ One block per skill: what it does, what it consumes, what it produces, and when 
 Two kinds of skills:
 
 - **Chained** (`pocket-*`) — pipeline stages that hand off to one another.
-- **Standalone** — `bug-hunting`, `hotfix`, `brand-design`, `pocket-help`. Lighter, single-purpose, no handoff chain. The right choice for most everyday work.
+- **Standalone** — `bug-hunting`, `hotfix`, `brand-design`, `structured-research`, `pocket-help`. Lighter, single-purpose, no handoff chain. The right choice for most everyday work.
 
 ---
 
@@ -98,3 +98,10 @@ Two kinds of skills:
 - **Output:** Orientation + a routing decision pointing you to exactly one skill.
 - **Use when:** New to Pocket, unsure which skill fits, or comparing Pocket to lighter flows.
 - **Skip when:** You already know which stage you're in — open that skill directly.
+
+### structured-research
+- **What:** Validates an explicit assumption against evidence. Operationalizes the belief into a falsifiable question, recommends 1–3 research methods (non-binding) from a catalog (`references/research-methods.csv`), gathers cited evidence, runs a curation gate, then grades the result.
+- **Input:** One explicit assumption the user still treats as unverified (a technical claim, a library's behavior, a "this is probably how X works").
+- **Output:** A graded verdict — Confirmed / Refuted / Inconclusive — with cited evidence and a non-binding recommendation (`docs/pocket/research/<date>-<slug>/research-report.md`).
+- **Use when:** A belief is about to enter planning/development unvalidated; "validate this assumption", "is it true that…", "research whether…".
+- **Skip when:** Generating/exploring ideas (→ pocket-pitching/grinding), fixing a known defect (→ bug-hunting), or the claim is already settled (→ hotfix).
