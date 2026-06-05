@@ -31,6 +31,7 @@ Reach for a **standalone skill** (or a Superpowers-style flow) — not the pipel
 | A known bug or failure | `bug-hunting` | Root-cause discipline without spec/plan ceremony. |
 | A small-to-medium, well-understood change | `hotfix` | Brief plan + one subagent review gate — fast *and* accurate. |
 | Just a design system / brand / UI tokens | `brand-design` | Self-contained; produces a creative brief, no pipeline. |
+| An unverified assumption to validate first | `structured-research` | Grades the assumption against evidence before it enters planning — no spec/plan ceremony. |
 | A one-off script, a trivial edit, a question | plain agent / Superpowers | The pipeline's gates would cost more than the work. |
 
 `hotfix` is the deliberate middle ground: lighter than the full pipeline, but it still refuses to let you skip a brief plan and an independent review — because "simple" changes are where silent bugs hide.
@@ -40,6 +41,7 @@ Reach for a **standalone skill** (or a Superpowers-style flow) — not the pipel
 ```
 Is it broken (a defect)?           → bug-hunting
 Is it only brand / UI tokens?      → brand-design
+Is it an unverified assumption?    → structured-research
 Is it a feature or real change?
    ├─ Small & well-understood?     → hotfix
    ├─ Clear but non-trivial?       → pocket-grinding (enters the pipeline)

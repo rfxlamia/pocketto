@@ -1,8 +1,8 @@
 # Pocketto
 
-> Structured AI coding workflows for Claude Code and Pi. 11 skills take work
+> Structured AI coding workflows for Claude Code and Pi. 12 skills take work
 > from a rough idea to reviewed, shipped code without the agent skipping steps:
-> a 7-stage chained pipeline plus 4 standalone skills, backed by one
+> a 7-stage chained pipeline plus 5 standalone skills, backed by one
 > cross-platform Node CLI. Skills use the `pocketto:` namespace.
 
 Core ideas: plan before code (specs + acceptance criteria + TDD plans),
@@ -26,6 +26,7 @@ verification, stop conditions; no packet, no spawn), and gate before done
 - [bug-hunting](skills/bug-hunting/SKILL.md): Systematic debugging with confirmed root cause before any fix; reactive and proactive modes.
 - [hotfix](skills/hotfix/SKILL.md): Fast iteration for small-to-medium changes with brief-plan + subagent-review gates.
 - [brand-design](skills/brand-design/SKILL.md): Brand-aware design system generator; writes creative-brief.md as the UI/UX source of truth.
+- [structured-research](skills/structured-research/SKILL.md): Validates an explicit assumption with a chosen research methodology; returns a graded, evidence-backed verdict (Confirmed/Refuted/Inconclusive) and a non-binding recommendation.
 
 ## CLI (pocketto-pi, run via npx, Node ≥18)
 
