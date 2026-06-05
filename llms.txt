@@ -33,12 +33,15 @@ verification, stop conditions; no packet, no spawn), and gate before done
 - `npx pocketto-pi log init <plan_dir>`: initialize log.json for a plan directory.
 - `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN]`: update phase/task status (WAITING → REVIEW → DONE | BLOCKED).
 - `npx pocketto-pi log close <plan_dir>`: finalize log after all phases complete.
+- `npx pocketto-pi doctor [--strict]`: check which required/recommended Pi extensions are installed.
+- `npx pocketto-pi setup-extensions [--all]`: install the required Pi extensions (and recommended with `--all`) via `pi install`.
 - Add `--json` for a stable output envelope, `--contract <N>` for a version handshake.
 
 ## Install
 
 - Pi: `pi install git:github.com/rfxlamia/pocketto` or `pi install npm:pocketto-pi`
 - Claude Code: `/plugin marketplace add rfxlamia/pocketto` then `/plugin install pocketto@pocketto` then `/reload-plugins`
+- Pi extensions (advisor, context7, subagents): `npx pocketto-pi setup-extensions` after install — Pocket's skills depend on them.
 
 ## Optional
 

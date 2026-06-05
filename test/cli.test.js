@@ -8,15 +8,21 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 
 const CLI = path.join(__dirname, '..', 'cli', 'index.js');
 
-function run(args, { expectFail = false } = {}) {
+// In-process modules for the extension-setup unit tests (no child process).
+const extensions = require('../cli/lib/extensions');
+const setupExtensions = require('../cli/commands/setup-extensions');
+
+function run(args, { expectFail = false, env } = {}) {
+  // Merge env overrides onto process.env so PATH (needed to spawn `node`) survives.
+  const childEnv = env ? { ...process.env, ...env } : process.env;
   try {
-    const stdout = execFileSync('node', [CLI, ...args], { encoding: 'utf8' });
+    const stdout = execFileSync('node', [CLI, ...args], { encoding: 'utf8', env: childEnv });
     assert.ok(!expectFail, `expected failure but command succeeded: ${args.join(' ')}`);
     return { stdout, code: 0 };
   } catch (err) {
@@ -390,4 +396,188 @@ test('log update/close accept a plan file argument, not just the directory', () 
     run(['log', 'update', planFile, f, 'DONE']);
   }
   assert.equal(json(['log', 'close', planFile, '--json']).ok, true);
+});
+
+// ─── extensions: registry + spec normalization (in-process unit) ──────────────
+
+test('normalizeSpec maps every Pi packages[] spec shape to a bare package name', () => {
+  const { normalizeSpec } = extensions;
+  assert.equal(normalizeSpec('pi-mcp-adapter'), 'pi-mcp-adapter');
+  assert.equal(normalizeSpec('npm:pi-mcp-adapter'), 'pi-mcp-adapter');
+  assert.equal(normalizeSpec('pi-mcp-adapter@2.9.0'), 'pi-mcp-adapter');
+  assert.equal(normalizeSpec('npm:@gotgenes/pi-subagents'), '@gotgenes/pi-subagents');
+  assert.equal(normalizeSpec('npm:@gotgenes/pi-subagents@14'), '@gotgenes/pi-subagents');
+  assert.equal(normalizeSpec('@juicesharp/rpiv-advisor@1.18.2'), '@juicesharp/rpiv-advisor');
+  // Alias form: resolve to the real package on the RHS of the first @npm:/@git:.
+  assert.equal(normalizeSpec('foo@npm:@scope/bar@1.2.3'), '@scope/bar');
+  // git/url specs carry no npm name → out of scope (null).
+  assert.equal(normalizeSpec('git:github.com/org/repo'), null);
+  assert.equal(normalizeSpec('https://github.com/org/repo'), null);
+  assert.equal(normalizeSpec(''), null);
+  assert.equal(normalizeSpec(undefined), null);
+});
+
+test('parseInstalledSpecs dedupes to a name set and ignores unmappable specs', () => {
+  const set = extensions.parseInstalledSpecs([
+    'npm:pi-mcp-adapter@2.9.0',
+    'npm:@gotgenes/pi-subagents',
+    'git:github.com/org/fork', // unmappable → ignored
+    'not-an-array-friend',
+  ]);
+  assert.equal(set.has('pi-mcp-adapter'), true);
+  assert.equal(set.has('@gotgenes/pi-subagents'), true);
+  assert.equal(set.has('not-an-array-friend'), true);
+  assert.equal(set.size, 3);
+  assert.equal(extensions.parseInstalledSpecs(null).size, 0);
+});
+
+// ─── setup-extensions (in-process, injected runner — real `pi` never spawned) ─
+
+// A fake runner recording its calls. `--version` reports pi present unless
+// piMissing; installs succeed unless the spec matches a failPkgs substring.
+function fakeRunner({ piMissing = false, failPkgs = [] } = {}) {
+  const calls = [];
+  const runner = (...args) => {
+    calls.push(args);
+    if (args[0] === '--version') return { status: piMissing ? 127 : 0, stdout: 'pi', stderr: '' };
+    const spec = args[1] || '';
+    const fail = failPkgs.some((f) => spec.includes(f));
+    return { status: fail ? 1 : 0, stdout: '', stderr: fail ? 'install failed' : '' };
+  };
+  runner.calls = calls;
+  return runner;
+}
+
+// A tmp HOME with an optional Pi settings.json (packages[] = given specs).
+function piHome(packages) {
+  const home = tmp();
+  if (packages !== undefined) {
+    mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(path.join(home, '.pi', 'agent', 'settings.json'), JSON.stringify({ packages }, null, 2));
+  }
+  return home;
+}
+
+test('setup-extensions installs the 3 required extensions when none are present', () => {
+  const home = piHome([]); // settings exist but no packages
+  const runner = fakeRunner();
+  const res = setupExtensions.run({ env: { HOME: home }, runner });
+
+  assert.equal(res.command, 'setup-extensions');
+  assert.equal(res.exit, 0);
+  assert.deepEqual(res.data.installed, ['pi-mcp-adapter', '@gotgenes/pi-subagents', '@juicesharp/rpiv-advisor']);
+  assert.deepEqual(res.data.skipped, []);
+  // Precheck + 3 installs, with the npm: scheme on each spec.
+  assert.deepEqual(runner.calls[0], ['--version']);
+  assert.deepEqual(runner.calls.slice(1), [
+    ['install', 'npm:pi-mcp-adapter'],
+    ['install', 'npm:@gotgenes/pi-subagents'],
+    ['install', 'npm:@juicesharp/rpiv-advisor'],
+  ]);
+  // Fake runner never writes settings, so the re-read can't confirm — non-fatal.
+  assert.deepEqual(res.data.unconfirmed, res.data.installed);
+});
+
+test('setup-extensions --all also installs the recommended extensions', () => {
+  const home = piHome([]);
+  const runner = fakeRunner();
+  const res = setupExtensions.run({ env: { HOME: home }, runner, all: true });
+  assert.equal(res.data.installed.length, 6);
+  assert.equal(res.data.installed.includes('@tintinweb/pi-tasks'), true);
+});
+
+test('setup-extensions skips already-installed extensions (idempotent)', () => {
+  const home = piHome(['npm:pi-mcp-adapter@2.9.0']);
+  const runner = fakeRunner();
+  const res = setupExtensions.run({ env: { HOME: home }, runner });
+  assert.deepEqual(res.data.skipped, ['pi-mcp-adapter']);
+  assert.deepEqual(res.data.installed, ['@gotgenes/pi-subagents', '@juicesharp/rpiv-advisor']);
+  // No install call for the already-present package.
+  assert.equal(runner.calls.some((c) => c[1] === 'npm:pi-mcp-adapter'), false);
+});
+
+test('setup-extensions errors cleanly when `pi` is not on PATH', () => {
+  const home = piHome([]);
+  const runner = fakeRunner({ piMissing: true });
+  assert.throws(
+    () => setupExtensions.run({ env: { HOME: home }, runner }),
+    (err) => err.code === 'PI_NOT_FOUND',
+  );
+});
+
+test('setup-extensions reports a failed install and exits nonzero, finishing the rest', () => {
+  const home = piHome([]);
+  const runner = fakeRunner({ failPkgs: ['pi-subagents'] });
+  const res = setupExtensions.run({ env: { HOME: home }, runner });
+  assert.equal(res.exit, 1);
+  assert.equal(res.data.ok, false);
+  assert.deepEqual(res.data.failed, ['@gotgenes/pi-subagents']);
+  // The failure did not abort the remaining install.
+  assert.equal(res.data.installed.includes('@juicesharp/rpiv-advisor'), true);
+});
+
+// ─── doctor (child process, env-overridden HOME — read-only, no `pi`) ─────────
+
+const ALL_SIX = [
+  'npm:pi-mcp-adapter',
+  'npm:@gotgenes/pi-subagents',
+  'npm:@juicesharp/rpiv-advisor',
+  'npm:@juicesharp/rpiv-ask-user-question',
+  'npm:@tintinweb/pi-tasks',
+  'npm:@aliou/pi-processes',
+];
+
+test('doctor reports all-installed (exit 0, --json data.ok true)', () => {
+  const home = piHome(ALL_SIX);
+  const env = json(['doctor', '--json'], { env: { HOME: home, USERPROFILE: home } });
+  assert.equal(env.ok, true);
+  assert.equal(env.command, 'doctor');
+  assert.equal(env.contract, 2);
+  assert.equal(env.data.ok, true);
+  assert.deepEqual(env.data.missingRequired, []);
+  assert.deepEqual(env.data.missingRecommended, []);
+});
+
+test('doctor flags missing extensions but stays exit 0 by default', () => {
+  const home = piHome(['npm:pi-mcp-adapter']); // 2 required + all recommended missing
+  const res = run(['doctor', '--json'], { env: { HOME: home, USERPROFILE: home } });
+  assert.equal(res.code, 0);
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.data.ok, false);
+  assert.deepEqual(env.data.missingRequired, ['@gotgenes/pi-subagents', '@juicesharp/rpiv-advisor']);
+});
+
+test('doctor --strict exits nonzero when a required extension is missing', () => {
+  const home = piHome(['npm:pi-mcp-adapter']);
+  const res = run(['doctor', '--strict', '--json'], { env: { HOME: home, USERPROFILE: home }, expectFail: true });
+  assert.equal(res.code, 1);
+  assert.equal(JSON.parse(res.stdout.trim()).data.ok, false);
+  // --strict with everything present exits 0.
+  const okHome = piHome(ALL_SIX);
+  assert.equal(run(['doctor', '--strict', '--json'], { env: { HOME: okHome, USERPROFILE: okHome } }).code, 0);
+});
+
+test('doctor treats absent or malformed settings.json as none-installed (no crash)', () => {
+  // Absent: tmp HOME with no .pi/ at all.
+  const empty = tmp();
+  const a = JSON.parse(run(['doctor', '--json'], { env: { HOME: empty, USERPROFILE: empty } }).stdout.trim());
+  assert.equal(a.data.ok, false);
+  assert.equal(a.data.missingRequired.length, 3);
+
+  // Malformed JSON.
+  const home = tmp();
+  mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
+  writeFileSync(path.join(home, '.pi', 'agent', 'settings.json'), '{ not valid json');
+  const m = run(['doctor', '--json'], { env: { HOME: home, USERPROFILE: home } });
+  assert.equal(m.code, 0);
+  assert.equal(JSON.parse(m.stdout.trim()).data.missingRequired.length, 3);
+});
+
+test('the new --strict/--all flags are accepted; unknown flags still rejected', () => {
+  const home = piHome(ALL_SIX);
+  // --all is a known flag (no UNKNOWN_FLAG even though doctor ignores it).
+  assert.equal(run(['doctor', '--all', '--json'], { env: { HOME: home, USERPROFILE: home } }).code, 0);
+  // A genuinely unknown flag still throws.
+  const bad = run(['doctor', '--nope', '--json'], { expectFail: true });
+  assert.equal(JSON.parse(bad.stdout.trim()).error.code, 'UNKNOWN_FLAG');
 });

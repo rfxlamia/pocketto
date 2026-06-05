@@ -51,6 +51,24 @@ pi install npm:pocketto-pi
 </td></tr>
 </table>
 
+### Pi extensions (Pi users)
+
+Pocket's skills call Pi extensions for their core features — **advisor** (review gates), **context7** (library docs), and **subagents** (delegation). After installing, pull them in with one command:
+
+```bash
+npx pocketto-pi setup-extensions        # required extensions
+npx pocketto-pi setup-extensions --all  # + recommended extensions
+npx pocketto-pi doctor                  # check what's installed / missing
+```
+
+| Required | Unlocks |
+|----------|---------|
+| `pi-mcp-adapter` | context7 MCP — library-aware code generation |
+| `@gotgenes/pi-subagents` | subagent delegation + parallel reviews |
+| `@juicesharp/rpiv-advisor` | advisor — LLM-to-LLM review/escalation gates |
+
+Recommended (install with `--all`): `@juicesharp/rpiv-ask-user-question`, `@tintinweb/pi-tasks`, `@aliou/pi-processes`.
+
 > **New here?** Start with [`pocket-help`](#standalone-skills) — a compact router that explains what Pocket is and which skill to reach for, without loading every skill into context.
 
 ## Quickstart
