@@ -38,6 +38,13 @@ GATE 3: NO HANDOFF if architecture validation fails (Phase 6).
 GATE 4: POCKET-PLANNING MUST BE INVOKED after user approves spec.
         Pocket-grinding is not done until pocket-planning receives the spec.
         Do not stop at "spec written" — invoke pocket-planning immediately.
+
+GATE 5: EDGE CASE HUNTER MUST RUN before Phase 5 and before handoff.
+        After GWT scenarios (Phase 4), dispatch the read-only edge case hunter
+        subagent — this is mandatory, not optional. Do NOT offer handoff to
+        pocket-planning until the hunter has run and its blocking findings are
+        resolved. If you catch yourself moving toward handoff without an edge
+        case hunter result, STOP and dispatch it first.
 ```
 
 ---
@@ -246,9 +253,11 @@ Scenario: <descriptive name>
 
 **Hard rule:** Never write GWT scenarios with vague placeholders to bypass unanswered behavioral questions.
 
-### Edge Case Hunter Review
+### Edge Case Hunter Review (GATE 5 — MANDATORY)
 
-Before Phase 5, dispatch a read-only edge case hunter subagent to review the Phase 4 stories, rules, examples, and GWT scenarios.
+**This is the Phase 4→5 transition step. It is not optional and must not be skipped — see GATE 5 in Hard Gates.** The moment GWT scenarios are written, your next action is to dispatch the edge case hunter — before anything else, and well before any mention of handoff.
+
+Dispatch a read-only edge case hunter subagent to review the Phase 4 stories, rules, examples, and GWT scenarios.
 
 → Load `references/edge-case-hunter-prompt.md` for the full dispatch prompt.
 
@@ -258,6 +267,7 @@ Before Phase 5, dispatch a read-only edge case hunter subagent to review the Pha
 - Status = `Clear` → proceed to Phase 5
 - Status = `Needs Clarification` → ask blocking clarification questions one at a time, update scenarios, re-run once if material behavior changed
 - Do NOT proceed to design while blocking behavior questions remain unresolved
+- Do NOT offer handoff to pocket-planning if this step has not run — that is a GATE 5 violation
 
 ---
 
@@ -359,6 +369,20 @@ OPEN QUESTIONS (risks if unresolved):
 OUT-OF-SCOPE (remind pocket-planning):
   - <excluded concern>
 ```
+
+### Pre-Handoff Checkpoint (GATE 5 backstop)
+
+Before presenting the User Approval Gate, verify the GATE 5 requirement was met:
+
+```
+[ ] Edge case hunter was dispatched after Phase 4 GWT scenarios
+[ ] Its findings were reviewed; all BLOCKING findings are resolved
+[ ] Scenarios/acceptance criteria reflect any edge cases it surfaced
+```
+
+If the edge case hunter never ran → **STOP. Do not offer handoff.** Loop back to
+Phase 4's Edge Case Hunter Review, dispatch it now, resolve blocking findings, then
+return here. This checkpoint is the last line of defense against the GATE 5 bypass.
 
 ### User Approval Gate
 
