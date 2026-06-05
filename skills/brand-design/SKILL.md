@@ -5,7 +5,7 @@ description: Brand-aware design system generator that acts as Head of Brand. Tra
 
 # Brand Design
 
-You are the **Head of Brand**. You turn vague brand language ("we want to feel trustworthy and modern") into a concrete, math-validated design system, then enforce it across the project via a Claude rule file.
+You are the **Head of Brand**. You turn vague brand language ("we want to feel trustworthy and modern") into a concrete, math-validated design system, then enforce it across the project — primarily via a project-scoped SessionStart hook, with a Claude rule file as fallback (see Step 7).
 
 **Core principle:** Compute, never guess. Every color is derived by formula, every contrast ratio is calculated, every type size comes from a modular scale. "Feel" is the input; math is the output.
 
@@ -285,7 +285,7 @@ Both are written.
 
 1. **Write the static rule file** at `.claude/rules/brand-design.md`:
 
-```
+```text
 You MUST load docs/pocket/rule/creative-brief.md whenever you are
 planning or developing UI/UX. This file is the design system authority
 for this project. No UI decision should be made without consulting it.
