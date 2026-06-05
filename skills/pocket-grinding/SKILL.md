@@ -339,9 +339,6 @@ Example: `docs/pocket/spec/2026-05-06-user-auth-refactor/session-flow.md`
 For full spec document template with all sections:
 → Load `references/spec-template.md`
 
-For full spec document template with all sections:
-→ Load `references/spec-template.md`
-
 ### Acceptance Criteria (always inline in handoff)
 
 ```
