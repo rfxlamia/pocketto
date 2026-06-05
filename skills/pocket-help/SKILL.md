@@ -115,7 +115,7 @@ phase DONE
    │  pocket-review          USER triggers · parallel review subagents    [PHASE_REVIEWED / BLOCKED]
    ▼
 reviews written
-   │  pocket-closing         USER triggers · gate on verdicts · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
+   │  pocket-closing         USER or review auto-chains · gate · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
    ▼
 plan closed (fix findings & loop phases until every phase is DONE)
 ```
@@ -125,7 +125,7 @@ plan closed (fix findings & loop phases until every phase is DONE)
 - `pocket-planning`, after you approve the plan, validates it with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
 - `pocket-structuring` runs only for **≥7-task (split)** plans from planning: it splits them into phase files handed off **one at a time**. (Invoked directly, it also handles ≤6-task passthrough.)
 - `pocket-development` does **NOT** call `pocket-review`. It emits a `PHASE_COMPLETE` handoff; **you** invoke `pocket-review` afterward.
-- `pocket-review` does **NOT** call `pocket-closing` and does **NOT** touch `log.json`. It writes verdicts; **you** invoke `pocket-closing` to gate on them and close the plan.
+- `pocket-review` **auto-chains** to `pocket-closing` after **one confirmation** when every task is `REVIEW_PASS` — it still does **NOT** touch `log.json` (closing owns that). On any `REVIEW_FAIL`/`REVIEW_BLOCKED` (or `PHASE_BLOCKED`) it does **not** chain; fix and re-review. You can also invoke `pocket-closing` directly.
 - `pocket-pitching` does **not** auto-chain — it presents handoff options and you choose whether to start `pocket-grinding`.
 
 > `pocket-closing` is the terminal stage: it reconciles review verdicts, advances `REVIEW → DONE`, runs `log close`, and writes a `closeout.md`. Without it a fully reviewed plan stays in `IN_PROGRESS`/`REVIEW` limbo. Any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task makes it `CLOSE_BLOCKED` — fix and re-review first.

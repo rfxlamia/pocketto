@@ -1,6 +1,6 @@
 ---
 name: pocket-review
-description: Post-phase batch reviewer. User invokes after pocket-development marks all phase tasks DONE. Main agent runs preflight and dispatches parallel reviewer subagents (one per task). Returns PHASE_REVIEWED or PHASE_BLOCKED.
+description: Post-phase batch reviewer. User invokes after pocket-development marks all phase tasks DONE. Main agent runs preflight and dispatches parallel reviewer subagents (one per task). Returns PHASE_REVIEWED or PHASE_BLOCKED; on an all-REVIEW_PASS phase it chains to pocket-closing after one confirmation.
 ---
 
 # Pocket Review
@@ -19,6 +19,8 @@ pocket-grinding → pocket-planning → pocket-structuring → pocket-developmen
 ```
 
 pocket-review is **invoked directly by the user** — not by pocket-development. When pocket-development finishes a phase, it emits a handoff message. The user then spawns pocket-review.
+
+On the other side, pocket-review **chains forward** to pocket-closing. When every reviewable task is `REVIEW_PASS`, it surfaces one confirmation and then invokes pocket-closing (see [Chain to pocket-closing](#chain-to-pocket-closing-conditional)) — the same auto-invoke-behind-one-confirmation pattern pocket-grinding uses for pocket-planning, not a silent close. It still never touches `log.json`; closing owns that.
 
 ## Invocation
 
@@ -141,11 +143,50 @@ Pass: 1  Issues: 1  Skipped: 1
 
 3. For each REVIEW_FAIL task, print the `fix_instructions` from the report.
 
+## Chain to pocket-closing (conditional)
+
+After the summary table is printed, decide whether to chain into pocket-closing. This is the `review → closing` handoff — the same auto-invoke-behind-one-confirmation pattern pocket-grinding uses for pocket-planning, **not** a silent close.
+
+**Chain ONLY when ALL of these hold:**
+- Output state is `PHASE_REVIEWED` (preflight passed — never on `PHASE_BLOCKED`).
+- Every reviewable task is `REVIEW_PASS` — **zero** `REVIEW_FAIL`, **zero** `REVIEW_BLOCKED` in the summary.
+- Skipped tasks (no file changes / not DONE) do **not** block the chain — they were never reviewable.
+
+If ANY task is `REVIEW_FAIL` or `REVIEW_BLOCKED`, or the run ended `PHASE_BLOCKED` → **do NOT chain.** Print the fix path (fix the code → re-run pocket-review) and stop. Closing is gated on clean verdicts; chaining a failing phase would only hit `CLOSE_BLOCKED`.
+
+### Confirmation checkpoint (single prompt)
+
+When the all-pass condition holds, surface the result and ask **once** before any state changes:
+
+> "All N tasks passed review (summary above). Close `<phase_file>` now? This advances `REVIEW → DONE`, runs `log close`, and writes `closeout.md`. (yes / not yet)"
+
+- **yes** → invoke pocket-closing (next).
+- **not yet / no** → stop here. The user can run `/pocketto:pocket-closing <path>` later. State is unchanged.
+
+Wait for the answer. Do **not** proceed on silence.
+
+### Invoke pocket-closing
+
+On confirmation:
+
+**Step 1 — Identify invocation method:**
+- In Claude Code: use the `Skill` tool to invoke `pocket-closing`.
+- In other agent platforms: use your platform's skill/agent dispatch mechanism.
+- If no dispatch mechanism exists: load and follow the `pocket-closing` skill directly in this session.
+
+**Step 2 — Pass the plan path:** the same `<plan_dir>` / `<phase_file>` this review ran against.
+
+**Step 3 — Let pocket-closing own the close.** It re-runs its own preflight, verdict gate, freshness check, Advance State, and `log close` from scratch. pocket-review does NOT pre-advance state or touch `log.json` (the Main Agent Role table and Iron Laws are unchanged) — it only hands off the path.
+
+**Freshness is satisfied by construction.** Because the chain fires in the same session immediately after the reviews were written, every verdict is current for its task's `done_sha` — pocket-closing's freshness gate (its Iron Law 2) passes naturally.
+
+**Phased plans:** if pocket-closing returns `PHASE_ADVANCED` (other phases remain), the plan is not finished — route back to pocket-development for the next phase. Do NOT loop back into closing.
+
 ## Output States
 
 | State | Meaning |
 |-------|---------|
-| PHASE_REVIEWED | All reviewable tasks reviewed — pass or issues |
+| PHASE_REVIEWED | All reviewable tasks reviewed. All `REVIEW_PASS` → chain to pocket-closing (one confirmation). Any issue → stop, fix, re-run |
 | PHASE_BLOCKED | Preflight failed — cannot review |
 
 **No review loop in batch mode.** If issues are found (REVIEW_FAIL in JSON), fix the code and re-run pocket-review.
