@@ -7,6 +7,8 @@
 //   pocketto-pi log init   <plan_dir>                      [--json]
 //   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
 //   pocketto-pi log close  <plan_dir>                      [--json]
+//   pocketto-pi doctor                                     [--strict] [--json]
+//   pocketto-pi setup-extensions                           [--all] [--json]
 //
 // Skills always pass --json (stable envelope) and --contract <N> (version
 // handshake). Humans get readable text by default.
@@ -15,10 +17,12 @@ const { ok, fail, CliError } = require('./lib/envelope');
 const { CLI_VERSION, CONTRACT } = require('./lib/version');
 const structure = require('./commands/structure');
 const log = require('./commands/log');
+const doctor = require('./commands/doctor');
+const setupExtensions = require('./commands/setup-extensions');
 
 function parseArgs(argv) {
   const positionals = [];
-  const flags = { json: false, dryRun: false, task: null, contract: null, version: false, help: false };
+  const flags = { json: false, dryRun: false, task: null, contract: null, version: false, help: false, strict: false, all: false, recommended: false };
 
   // A flag that takes a value must actually have one — guard against it being
   // the last token (`argv[++i]` === undefined) or another flag, which would
@@ -40,6 +44,9 @@ function parseArgs(argv) {
     else if (a.startsWith('--task=')) flags.task = requireValue(a.slice('--task='.length), '--task');
     else if (a === '--contract') flags.contract = requireValue(argv[++i], '--contract');
     else if (a.startsWith('--contract=')) flags.contract = requireValue(a.slice('--contract='.length), '--contract');
+    else if (a === '--strict') flags.strict = true;
+    else if (a === '--all') flags.all = true;
+    else if (a === '--recommended') flags.recommended = true;
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -78,6 +85,8 @@ Usage:
   pocketto-pi log init   <plan_dir>                       [--json]
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
+  pocketto-pi doctor                                      [--strict] [--json]
+  pocketto-pi setup-extensions                            [--all] [--json]
 
 Status values: WAITING | REVIEW | DONE | BLOCKED
 
@@ -86,6 +95,8 @@ Flags:
   --contract <N>    Assert the expected output contract (version handshake)
   --dry-run         (structure) compute + summarize without writing files
   --task <id>       (log update) update a task within a phase, e.g. --task T1
+  --strict          (doctor) exit nonzero when a required extension is missing
+  --all             (setup-extensions) also install the recommended extensions
   --version, -v     Print version + contract
   --help, -h        Show this help`;
 
@@ -145,8 +156,14 @@ function main() {
     } else if (command === 'log') {
       const result = log.run({ sub: positionals[1], positionals: positionals.slice(2), task: flags.task });
       emitSuccess(result.command, result, flags.json);
+    } else if (command === 'doctor') {
+      const result = doctor.run({ strict: flags.strict });
+      emitSuccess(result.command, result, flags.json);
+    } else if (command === 'setup-extensions') {
+      const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
+      emitSuccess(result.command, result, flags.json);
     } else {
-      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log.`);
+      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | doctor | setup-extensions.`);
     }
   } catch (err) {
     emitError(command, err, flags.json);

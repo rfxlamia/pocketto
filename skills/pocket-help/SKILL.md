@@ -17,6 +17,24 @@ Pocket is a set of skills for **systematic, structured development** — from a 
 
 Each stage produces a concrete artifact (pitch doc → spec → execution plan → phase files → commits → review reports) that the next stage consumes. Gates between stages force confirmation before proceeding, which is what keeps a long build from drifting.
 
+## Prerequisites — Pi extensions
+
+On Pi, Pocket's skills call extensions for their core features. Without them, skills hit dead-ends when they try to call `advisor()`, `subagent()`, or `context7_*` tools. Install them once after installing Pocket:
+
+```bash
+npx pocketto-pi setup-extensions        # required
+npx pocketto-pi setup-extensions --all  # + recommended
+npx pocketto-pi doctor                  # check installed vs missing
+```
+
+| Required | Feature it powers |
+|----------|-------------------|
+| `pi-mcp-adapter` | context7 — library-aware code generation |
+| `@gotgenes/pi-subagents` | subagent delegation + parallel reviews |
+| `@juicesharp/rpiv-advisor` | advisor — LLM-to-LLM review/escalation gates |
+
+Recommended (with `--all`): `@juicesharp/rpiv-ask-user-question`, `@tintinweb/pi-tasks`, `@aliou/pi-processes`. Claude Code users get these capabilities from the harness and do not need the Pi extensions.
+
 ## Two Kinds of Skills
 
 | Kind | Skills | Use for |
