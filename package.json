@@ -16,7 +16,10 @@
     "name": "rfxlamia",
     "url": "https://github.com/rfxlamia"
   },
-  "repository": "https://github.com/rfxlamia/pocketto",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rfxlamia/pocketto.git"
+  },
   "license": "MIT",
   "publishConfig": {
     "access": "public"
@@ -43,6 +46,6 @@
     "extensions": []
   },
   "bin": {
-    "pocketto-pi": "./cli/index.js"
+    "pocketto-pi": "cli/index.js"
   }
 }
