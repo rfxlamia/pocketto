@@ -271,6 +271,30 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
 }
 ```
 
+## Example: REVIEW_PASS (skip stub — no file changes)
+
+Written by the main agent in preflight (Step 5) for any `DONE + done_sha` task whose SHA range contains no file changes. No subagent is dispatched for these tasks.
+
+```json
+{
+  "task_id": "T2",
+  "task_name": "Update config defaults",
+  "cycle": 1,
+  "timestamp": "2026-05-08T12:05:00Z",
+  "reviewer_mode": "read-only",
+  "reviewer_config": "batch-parallel",
+  "stage_1": { "status": "PASS", "issues": [], "concerns_addressed": [] },
+  "stage_2": { "status": "PASS", "strengths": [], "issues": [], "assessment": "Approved" },
+  "overall": "REVIEW_PASS",
+  "fix_instructions": "",
+  "loop_info": { "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0 },
+  "skip_reason": "no_file_changes",
+  "reviewed_sha": "cde3456fgh7890"
+}
+```
+
+`skip_reason: "no_file_changes"` identifies this as an auto-generated stub, not a subagent review. `reviewed_sha` is the task's `done_sha` — pocket-closing uses it for the exact-SHA freshness check (stronger than the timestamp proxy).
+
 ## File Naming
 
 **Batch mode (pocket-review, post-phase):**

@@ -84,9 +84,9 @@ files_changed = git diff --name-only <prev_sha>..<task.done_sha>
 |-----------|--------|
 | `task.status != "DONE"` | Skip — log: `"T{id} not DONE (status: {status}) — skipped"` |
 | `task.done_sha` missing or null | Skip — log: `"T{id} missing done_sha — skipped"` |
-| `files_changed` is empty | Skip — log: `"T{id} SHA range <prev>..<done> has no file changes — skipped"` |
+| `files_changed` is empty | Flag for skip stub (see **Skip stub** in Step 5). Do NOT add to reviewable list; do NOT dispatch a subagent. Log: `"T{id} SHA range <prev>..<done> has no file changes — stub pending"` |
 
-If zero tasks are reviewable → `PHASE_BLOCKED: "No reviewable tasks found. Ensure all tasks are DONE with done_sha."`.
+If zero tasks are reviewable (no non-empty-diff DONE tasks found) → `PHASE_BLOCKED: "No reviewable tasks found. Ensure all tasks are DONE with done_sha."`. Empty-diff tasks flagged for stubs do **not** count toward this threshold.
 
 ### Step 4: Extract task context from plan file
 
@@ -100,6 +100,30 @@ For each reviewable task, read the plan file and extract:
 ```bash
 mkdir -p <plan_dir>/reviews/
 ```
+
+Then write a **REVIEW_PASS skip stub** for every empty-diff task flagged in Step 3.
+
+**Skip stub.** For each `DONE + done_sha` task whose SHA range has no file changes, write this JSON to `reviews/<task_id>-review.json` **before dispatching subagents**:
+
+```json
+{
+  "task_id": "<task_id>",
+  "task_name": "<task_name>",
+  "cycle": 1,
+  "timestamp": "<UTC ISO 8601 now>",
+  "reviewer_mode": "read-only",
+  "reviewer_config": "batch-parallel",
+  "stage_1": { "status": "PASS", "issues": [], "concerns_addressed": [] },
+  "stage_2": { "status": "PASS", "strengths": [], "issues": [], "assessment": "Approved" },
+  "overall": "REVIEW_PASS",
+  "fix_instructions": "",
+  "loop_info": { "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0 },
+  "skip_reason": "no_file_changes",
+  "reviewed_sha": "<task.done_sha>"
+}
+```
+
+`reviewed_sha` enables pocket-closing's exact-SHA freshness check (stronger than the timestamp proxy). `skip_reason` marks the file as an auto-generated stub — not a subagent review. Without this stub, pocket-closing treats any `DONE + done_sha` task with no review file as `CLOSE_BLOCKED`.
 
 ### Step 6: Load reviewer reference file paths
 
@@ -136,7 +160,7 @@ PHASE REVIEW COMPLETE — <phase_file>
 ──────────────────────────────────────────
 T1  <task_name>          REVIEW_PASS
 T2  <task_name>          REVIEW_FAIL   ← issues found
-T3  <task_name>          skipped (no file changes)
+T3  <task_name>          skipped (no file changes — REVIEW_PASS stub written)
 ──────────────────────────────────────────
 Pass: 1  Issues: 1  Skipped: 1
 ```
@@ -150,7 +174,8 @@ After the summary table is printed, decide whether to chain into pocket-closing.
 **Chain ONLY when ALL of these hold:**
 - Output state is `PHASE_REVIEWED` (preflight passed — never on `PHASE_BLOCKED`).
 - Every reviewable task is `REVIEW_PASS` — **zero** `REVIEW_FAIL`, **zero** `REVIEW_BLOCKED` in the summary.
-- Skipped tasks (no file changes / not DONE) do **not** block the chain — they were never reviewable.
+- Tasks skipped because `not DONE` or missing `done_sha` do **not** block the chain — pocket-closing excludes them from its gate too (they have no `done_sha` to reconcile).
+- Tasks skipped because of empty diff (`DONE + done_sha + no file changes`) received a REVIEW_PASS skip stub in Step 5 — pocket-closing will find the file and reconcile them as REVIEW_PASS; they do not block closing.
 
 If ANY task is `REVIEW_FAIL` or `REVIEW_BLOCKED`, or the run ended `PHASE_BLOCKED` → **do NOT chain.** Print the fix path (fix the code → re-run pocket-review) and stop. Closing is gated on clean verdicts; chaining a failing phase would only hit `CLOSE_BLOCKED`.
 
