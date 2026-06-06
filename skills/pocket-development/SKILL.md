@@ -433,20 +433,26 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
               -m "Merge <task_id> (parallel group)"
 
     # On conflict:
-    git merge --abort
-    → BLOCKED: category=parallel-conflict
-      Reason:   <task_id> conflicts with already-merged <prev_task>
-      Files:    <conflicting files>
-      Unblock:  User decides resolution strategy
-      Halt — worktrees retained for diagnosis
+    #   git merge --abort
+    #   → BLOCKED: category=parallel-conflict
+    #       Reason:   <task_id> conflicts with already-merged <prev_task>
+    #       Files:    <conflicting files>
+    #       Unblock:  User decides resolution strategy
+    #       Halt — worktrees retained for diagnosis (do NOT log update)
+
+    # Merge succeeded → log THIS task NOW, before the next merge. HEAD is
+    # this task's merge commit, so done_sha = that commit.
+    npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --task <task_id> --json --contract 2
 ```
+
+[CRITICAL] One task per loop iteration: `git merge` then `log update`, then the
+next task. NEVER merge the whole group first and log afterwards — every
+`log update` would capture the final merge commit, collapsing all tasks onto a
+single `done_sha`. That silently empties pocket-review's per-task diff range
+(`<prev_sha>..<done_sha>`) for the 2nd+ task, so it goes unreviewed. The CLI
+warns when it detects a duplicate `done_sha` across sibling tasks in a phase.
 
 Merge commit SHA becomes that task's `done_sha` in log.json — **schema stays linear**, pocket-review preflight unchanged.
-
-```bash
-npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --task <task_id> --json --contract 2
-# Captures HEAD (= merge_sha) as done_sha
-```
 
 ### Cleanup (main agent, after group fully merged + logged)
 
@@ -488,14 +494,14 @@ Plan: T5, T6, T7 — parallel group after T4
 
 5. All return DONE → audit each in its worktree → all pass
 
-6. Main agent merges sequentially:
-   git merge --no-ff task/T5 → done_sha[T5] = HEAD
-   git merge --no-ff task/T6 → done_sha[T6] = HEAD
-   git merge --no-ff task/T7 → done_sha[T7] = HEAD
+6. Main agent merges sequentially, logging each task BEFORE the next merge
+   (one merge + one log update per iteration — never merge all three then log):
+   git merge --no-ff task/T5  →  log update --task T5 DONE   # done_sha[T5] = T5 merge commit
+   git merge --no-ff task/T6  →  log update --task T6 DONE   # done_sha[T6] = T6 merge commit
+   git merge --no-ff task/T7  →  log update --task T7 DONE   # done_sha[T7] = T7 merge commit
+   → each done_sha is a distinct merge commit; log stays linear
 
-7. `pocketto-pi log update` for each → log stays linear
-
-8. Cleanup: remove worktrees, delete branches
+7. Cleanup: remove worktrees, delete branches
 
 9. Continue to T9 (deps now satisfied)
 ```
@@ -724,6 +730,7 @@ When delegation pressure threatens to bypass structure:
 - Accept vague escalation ("I'm stuck" without reason)
 - Dispatch a parallel group without creating worktrees first — collision risk on `git status`, `git log`, lockfiles, shared registries
 - Merge a parallel group before ALL tasks in the group audit-pass — partial merges create ambiguous parent SHAs for the rest
+- Merge the whole parallel group, THEN `log update` each task — every update captures the final merge commit, collapsing all tasks onto one `done_sha` and silently voiding their per-task review scope. Merge + log one task at a time
 
 **If agent asks questions:**
 - Answer clearly and completely
