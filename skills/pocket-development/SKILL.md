@@ -503,7 +503,7 @@ Plan: T5, T6, T7 — parallel group after T4
 
 7. Cleanup: remove worktrees, delete branches
 
-9. Continue to T9 (deps now satisfied)
+8. Continue to T9 (deps now satisfied)
 ```
 
 ## Sandwich Prompt Rules
