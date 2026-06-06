@@ -200,12 +200,33 @@ function update(positionals, taskId) {
     }
     const oldStatus = task.status;
     task.status = newStatus;
+    let shaCollision = null;
     if (newStatus === 'DONE') {
       const sha = getGitSha(planDir);
-      if (sha) task.done_sha = sha;
+      if (sha) {
+        task.done_sha = sha;
+        // A sibling task in this phase already carries this exact SHA — the
+        // signature of a collapsed parallel-group merge. When parallel tasks
+        // are merged in a batch and only logged afterwards, every `log update`
+        // captures the same final HEAD (one merge commit) instead of each
+        // task's own merge commit, which silently empties pocket-review's
+        // per-task diff range (<prev_sha>..<done_sha>) for the 2nd+ task.
+        // Warn, but don't fail — the status change itself is legitimate.
+        const dupes = (phase.tasks || [])
+          .filter((t) => t.id !== task.id && t.done_sha === sha)
+          .map((t) => t.id);
+        if (dupes.length) shaCollision = dupes;
+      }
     }
     writeLog(logPath, log);
     human = [`Updated ${phaseFile} / ${task.id} (${task.name}): ${oldStatus} → ${newStatus}`];
+    if (shaCollision) {
+      human.push(
+        `⚠ done_sha ${task.done_sha} is already recorded for ${shaCollision.join(', ')} in this phase.`,
+        `  Parallel-group tasks must be merged and logged one at a time (merge → log update),`,
+        `  so each captures its own merge commit. See pocket-development → Group Merge.`,
+      );
+    }
     data = {
       planDir,
       phaseFile,
@@ -215,6 +236,7 @@ function update(positionals, taskId) {
       oldStatus,
       newStatus,
       doneSha: task.done_sha || null,
+      shaCollision,
     };
   } else {
     const oldStatus = phase.status;
