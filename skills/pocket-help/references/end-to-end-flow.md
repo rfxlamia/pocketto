@@ -49,10 +49,10 @@ Main agent is **delegator + auditor only** — it never writes implementation co
 **The user** runs `/pocketto:pocket-review <plan_dir>` after a phase/plan is DONE. Main agent validates `log.json`, computes per-task SHA ranges, and dispatches **parallel** reviewer subagents (one per task), then writes results to `reviews/`.
 - **Output states:** `PHASE_REVIEWED` (each task pass or issues) or `PHASE_BLOCKED` (preflight failed).
 - **No loop:** if a task is `REVIEW_FAIL`, fix the code and re-run review.
-- **Next:** Fix findings, then continue with the next phase (back to stage 5). When every task in a phase is `REVIEW_PASS`, hand off to `pocket-closing`.
+- **Next:** Fix findings, then continue with the next phase (back to stage 5). When every task in a phase is `REVIEW_PASS`, pocket-review **auto-chains to `pocket-closing`** after one confirmation (it does not chain if anything failed).
 
-### 7. pocket-closing — close (user-triggered)
-**The user** runs `/pocketto:pocket-closing <plan_dir>` after reviews are written. Main agent is **reconciler + closer only** — it reads `log.json` + every `reviews/*.json`, gates the close on verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes `closeout.md`.
+### 7. pocket-closing — close (auto-chained or user-triggered)
+Reached automatically when pocket-review chains here on an all-`REVIEW_PASS` phase (after a single confirmation), or run directly by the user: `/pocketto:pocket-closing <plan_dir>`. Main agent is **reconciler + closer only** — it reads `log.json` + every `reviews/*.json`, gates the close on verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes `closeout.md`.
 - **Output states:** `CLOSED` (header `DONE` + `date_completed`), `PHASE_ADVANCED` (one phase done, plan continues), `CLOSE_BLOCKED`, or `ALREADY_CLOSED`.
 - **Closes the loop:** without this stage a finished plan sits in `IN_PROGRESS`/`REVIEW` limbo. This is the terminal step.
 

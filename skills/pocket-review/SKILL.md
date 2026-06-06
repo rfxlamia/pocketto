@@ -1,6 +1,6 @@
 ---
 name: pocket-review
-description: Post-phase batch reviewer. User invokes after pocket-development marks all phase tasks DONE. Main agent runs preflight and dispatches parallel reviewer subagents (one per task). Returns PHASE_REVIEWED or PHASE_BLOCKED.
+description: Post-phase batch reviewer. User invokes after pocket-development marks all phase tasks DONE. Main agent runs preflight and dispatches parallel reviewer subagents (one per task). Returns PHASE_REVIEWED or PHASE_BLOCKED; on an all-REVIEW_PASS phase it chains to pocket-closing after one confirmation.
 ---
 
 # Pocket Review
@@ -19,6 +19,8 @@ pocket-grinding → pocket-planning → pocket-structuring → pocket-developmen
 ```
 
 pocket-review is **invoked directly by the user** — not by pocket-development. When pocket-development finishes a phase, it emits a handoff message. The user then spawns pocket-review.
+
+On the other side, pocket-review **chains forward** to pocket-closing. When every reviewable task is `REVIEW_PASS`, it surfaces one confirmation and then invokes pocket-closing (see [Chain to pocket-closing](#chain-to-pocket-closing-conditional)) — the same auto-invoke-behind-one-confirmation pattern pocket-grinding uses for pocket-planning, not a silent close. It still never touches `log.json`; closing owns that.
 
 ## Invocation
 
@@ -82,9 +84,9 @@ files_changed = git diff --name-only <prev_sha>..<task.done_sha>
 |-----------|--------|
 | `task.status != "DONE"` | Skip — log: `"T{id} not DONE (status: {status}) — skipped"` |
 | `task.done_sha` missing or null | Skip — log: `"T{id} missing done_sha — skipped"` |
-| `files_changed` is empty | Skip — log: `"T{id} SHA range <prev>..<done> has no file changes — skipped"` |
+| `files_changed` is empty | Flag for skip stub (see **Skip stub** in Step 5). Do NOT add to reviewable list; do NOT dispatch a subagent. Log: `"T{id} SHA range <prev>..<done> has no file changes — stub pending"` |
 
-If zero tasks are reviewable → `PHASE_BLOCKED: "No reviewable tasks found. Ensure all tasks are DONE with done_sha."`.
+If zero tasks are reviewable (no non-empty-diff DONE tasks found) → `PHASE_BLOCKED: "No reviewable tasks found. Ensure all tasks are DONE with done_sha."`. Empty-diff tasks flagged for stubs do **not** count toward this threshold.
 
 ### Step 4: Extract task context from plan file
 
@@ -98,6 +100,30 @@ For each reviewable task, read the plan file and extract:
 ```bash
 mkdir -p <plan_dir>/reviews/
 ```
+
+Then write a **REVIEW_PASS skip stub** for every empty-diff task flagged in Step 3.
+
+**Skip stub.** For each `DONE + done_sha` task whose SHA range has no file changes, write this JSON to `reviews/<task_id>-review.json` **before dispatching subagents**:
+
+```json
+{
+  "task_id": "<task_id>",
+  "task_name": "<task_name>",
+  "cycle": 1,
+  "timestamp": "<UTC ISO 8601 now>",
+  "reviewer_mode": "read-only",
+  "reviewer_config": "batch-parallel",
+  "stage_1": { "status": "PASS", "issues": [], "concerns_addressed": [] },
+  "stage_2": { "status": "PASS", "strengths": [], "issues": [], "assessment": "Approved" },
+  "overall": "REVIEW_PASS",
+  "fix_instructions": "",
+  "loop_info": { "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0 },
+  "skip_reason": "no_file_changes",
+  "reviewed_sha": "<task.done_sha>"
+}
+```
+
+`reviewed_sha` enables pocket-closing's exact-SHA freshness check (stronger than the timestamp proxy). `skip_reason` marks the file as an auto-generated stub — not a subagent review. Without this stub, pocket-closing treats any `DONE + done_sha` task with no review file as `CLOSE_BLOCKED`.
 
 ### Step 6: Load reviewer reference file paths
 
@@ -134,18 +160,58 @@ PHASE REVIEW COMPLETE — <phase_file>
 ──────────────────────────────────────────
 T1  <task_name>          REVIEW_PASS
 T2  <task_name>          REVIEW_FAIL   ← issues found
-T3  <task_name>          skipped (no file changes)
+T3  <task_name>          skipped (no file changes — REVIEW_PASS stub written)
 ──────────────────────────────────────────
 Pass: 1  Issues: 1  Skipped: 1
 ```
 
 3. For each REVIEW_FAIL task, print the `fix_instructions` from the report.
 
+## Chain to pocket-closing (conditional)
+
+After the summary table is printed, decide whether to chain into pocket-closing. This is the `review → closing` handoff — the same auto-invoke-behind-one-confirmation pattern pocket-grinding uses for pocket-planning, **not** a silent close.
+
+**Chain ONLY when ALL of these hold:**
+- Output state is `PHASE_REVIEWED` (preflight passed — never on `PHASE_BLOCKED`).
+- Every reviewable task is `REVIEW_PASS` — **zero** `REVIEW_FAIL`, **zero** `REVIEW_BLOCKED` in the summary.
+- Tasks skipped because `not DONE` or missing `done_sha` do **not** block the chain — pocket-closing excludes them from its gate too (they have no `done_sha` to reconcile).
+- Tasks skipped because of empty diff (`DONE + done_sha + no file changes`) received a REVIEW_PASS skip stub in Step 5 — pocket-closing will find the file and reconcile them as REVIEW_PASS; they do not block closing.
+
+If ANY task is `REVIEW_FAIL` or `REVIEW_BLOCKED`, or the run ended `PHASE_BLOCKED` → **do NOT chain.** Print the fix path (fix the code → re-run pocket-review) and stop. Closing is gated on clean verdicts; chaining a failing phase would only hit `CLOSE_BLOCKED`.
+
+### Confirmation checkpoint (single prompt)
+
+When the all-pass condition holds, surface the result and ask **once** before any state changes:
+
+> "All N tasks passed review (summary above). Close `<phase_file>` now? This advances `REVIEW → DONE`, runs `log close`, and writes `closeout.md`. (yes / not yet)"
+
+- **yes** → invoke pocket-closing (next).
+- **not yet / no** → stop here. The user can run `/pocketto:pocket-closing <path>` later. State is unchanged.
+
+Wait for the answer. Do **not** proceed on silence.
+
+### Invoke pocket-closing
+
+On confirmation:
+
+**Step 1 — Identify invocation method:**
+- In Claude Code: use the `Skill` tool to invoke `pocket-closing`.
+- In other agent platforms: use your platform's skill/agent dispatch mechanism.
+- If no dispatch mechanism exists: load and follow the `pocket-closing` skill directly in this session.
+
+**Step 2 — Pass the plan path:** the same `<plan_dir>` / `<phase_file>` this review ran against.
+
+**Step 3 — Let pocket-closing own the close.** It re-runs its own preflight, verdict gate, freshness check, Advance State, and `log close` from scratch. pocket-review does NOT pre-advance state or touch `log.json` (the Main Agent Role table and Iron Laws are unchanged) — it only hands off the path.
+
+**Freshness is satisfied by construction.** Because the chain fires in the same session immediately after the reviews were written, every verdict is current for its task's `done_sha` — pocket-closing's freshness gate (its Iron Law 2) passes naturally.
+
+**Phased plans:** if pocket-closing returns `PHASE_ADVANCED` (other phases remain), the plan is not finished — route back to pocket-development for the next phase. Do NOT loop back into closing.
+
 ## Output States
 
 | State | Meaning |
 |-------|---------|
-| PHASE_REVIEWED | All reviewable tasks reviewed — pass or issues |
+| PHASE_REVIEWED | All reviewable tasks reviewed. All `REVIEW_PASS` → chain to pocket-closing (one confirmation). Any issue → stop, fix, re-run |
 | PHASE_BLOCKED | Preflight failed — cannot review |
 
 **No review loop in batch mode.** If issues are found (REVIEW_FAIL in JSON), fix the code and re-run pocket-review.
