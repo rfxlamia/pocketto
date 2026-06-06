@@ -294,6 +294,60 @@ test('log update rejects an invalid status', () => {
   assert.equal(JSON.parse(res.stdout.trim()).error.code, 'BAD_STATUS');
 });
 
+function hasGit() {
+  try {
+    execFileSync('git', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function git(dir, args) {
+  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+function gitInitRepo(dir) {
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 'test@example.com']);
+  git(dir, ['config', 'user.name', 'Test']);
+  git(dir, ['config', 'commit.gpgsign', 'false']);
+  git(dir, ['commit', '--allow-empty', '-q', '-m', 'init']);
+}
+
+// Issue #28: when a parallel group is merged in a batch and logged afterwards,
+// every `log update --task` captures the same HEAD (one merge commit), so the
+// 2nd+ task reuses a sibling's done_sha. The CLI must surface that collision.
+test('log update warns when a task reuses a sibling done_sha (collapsed parallel merge)', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writePlan(dir, NINE_TASK_PLAN);
+  run(['structure', path.join(dir, 'execution-plan.md')]);
+  gitInitRepo(dir); // done_sha is only captured inside a real repo
+  run(['log', 'init', dir]);
+
+  const phase = 'execution-plan-phase-1.md'; // contains T1..T4
+
+  // T2 DONE → captures the current commit; first writer, so no collision.
+  const t2 = json(['log', 'update', dir, phase, 'DONE', '--task', 'T2', '--json']);
+  assert.ok(t2.data.doneSha, 'expected a real done_sha inside a git repo');
+  assert.equal(t2.data.shaCollision, null);
+
+  // T3 DONE with NO new commit → same HEAD → same done_sha → collision on T2.
+  const t3 = json(['log', 'update', dir, phase, 'DONE', '--task', 'T3', '--json']);
+  assert.equal(t3.data.doneSha, t2.data.doneSha);
+  assert.deepEqual(t3.data.shaCollision, ['T2']);
+
+  // Advance HEAD, then T4 DONE → distinct done_sha → no collision.
+  git(dir, ['commit', '--allow-empty', '-q', '-m', 'advance']);
+  const t4 = json(['log', 'update', dir, phase, 'DONE', '--task', 'T4', '--json']);
+  assert.notEqual(t4.data.doneSha, t2.data.doneSha);
+  assert.equal(t4.data.shaCollision, null);
+
+  // The human (non-JSON) path surfaces the warning too.
+  const human = run(['log', 'update', dir, phase, 'DONE', '--task', 'T3']).stdout;
+  assert.match(human, /done_sha .* is already recorded for/);
+});
+
 test('log close refuses while phases are not DONE, then finalizes when all DONE', () => {
   const dir = tmp();
   writePlan(dir, NINE_TASK_PLAN);
