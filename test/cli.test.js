@@ -208,6 +208,118 @@ test('mode parses CRLF config the same as LF config', () => {
   assert.deepEqual(crlf.data, lf.data);
 });
 
+function gitInitRepoWithRemote(dir, remoteUrl = 'https://github.com/example/repo.git') {
+  gitInitRepo(dir);
+  git(dir, ['remote', 'add', 'origin', remoteUrl]);
+}
+
+test('mode init writes AGENTS.md and .gitattributes when a git remote exists', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', '# Existing notes\n\nKeep this.\n');
+  gitInitRepoWithRemote(dir);
+
+  const env = json([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--json',
+  ]);
+  assert.equal(env.ok, true);
+  assert.equal(env.command, 'mode');
+  assert.deepEqual(env.data.wrote, ['AGENTS.md', '.gitattributes']);
+  assert.equal(env.data.enterprise, true);
+  assert.equal(env.data.branch_strategy, 'branch');
+  assert.equal(env.data.create_pr, true);
+
+  const agents = readFileSync(path.join(dir, 'AGENTS.md'), 'utf8');
+  assert.match(agents, /# Existing notes/);
+  assert.match(agents, /Keep this\./);
+  assert.match(agents, /## Pocket Enterprise/);
+  assert.equal((agents.match(/## Pocket Enterprise/g) || []).length, 1);
+  assert.ok(!agents.includes('\r'), 'AGENTS.md must be LF-only');
+
+  const attrs = readFileSync(path.join(dir, '.gitattributes'), 'utf8');
+  assert.match(attrs, /log\.json/);
+  assert.match(attrs, /AGENTS\.md/);
+  assert.match(attrs, /\*\.json/);
+  assert.match(attrs, /docs\/pocket\/plans/);
+  assert.match(attrs, /docs\/pocket\/spec/);
+  assert.ok(!attrs.includes('\r'), '.gitattributes must be LF-only');
+
+  const read = json(['mode', dir, '--json']);
+  assert.equal(read.data.enterprise, true);
+  assert.equal(read.data.branch_strategy, 'branch');
+  assert.equal(read.data.create_pr, true);
+});
+
+test('mode init fails without a git remote and writes nothing', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', '# Notes\n');
+  gitInitRepo(dir);
+
+  const before = readFileSync(path.join(dir, 'AGENTS.md'), 'utf8');
+  const res = run([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--json',
+  ], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.ok, false);
+  assert.equal(env.error.code, 'NO_GIT_REMOTE');
+  assert.equal(readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), before);
+  assert.equal(existsSync(path.join(dir, '.gitattributes')), false);
+});
+
+test('mode init is idempotent on re-run', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  gitInitRepoWithRemote(dir);
+  const args = [
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'false',
+    '--json',
+  ];
+  json(args);
+  const first = readFileSync(path.join(dir, 'AGENTS.md'), 'utf8');
+  json(args);
+  const second = readFileSync(path.join(dir, 'AGENTS.md'), 'utf8');
+  assert.equal(first, second);
+  assert.equal((second.match(/## Pocket Enterprise/g) || []).length, 1);
+});
+
+test('mode init rejects missing required flags', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  gitInitRepoWithRemote(dir);
+
+  const res = run(['mode', 'init', dir, '--enterprise', 'true', '--json'], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.ok, false);
+  assert.equal(env.error.code, 'MODE_CONFIG_INVALID');
+  assert.match(env.error.message, /branch_strategy|create_pr/);
+});
+
+test('mode init rejects invalid enum values', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  gitInitRepoWithRemote(dir);
+
+  const res = run([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'feature',
+    '--create-pr', 'true',
+    '--json',
+  ], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.ok, false);
+  assert.equal(env.error.code, 'MODE_CONFIG_INVALID');
+  assert.match(env.error.message, /branch_strategy/);
+  assert.equal(existsSync(path.join(dir, 'AGENTS.md')), false);
+});
+
 const NINE_TASK_PLAN = `# EXECUTION PLAN — Auth refactor
 
 **Date:** 2026-05-08

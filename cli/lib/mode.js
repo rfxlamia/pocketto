@@ -131,8 +131,40 @@ function detectMode(targetDir = process.cwd()) {
   return active || { ...DEFAULT_MODE };
 }
 
+function validateInitFields({ enterprise, branchStrategy, createPr }) {
+  if (enterprise === null || enterprise === undefined || !BOOLS.has(enterprise)) {
+    invalid('enterprise is required and must be one of: true, false.');
+  }
+
+  const ent = enterprise === 'true';
+  if (ent) {
+    if (branchStrategy === null || branchStrategy === undefined) {
+      invalid('enterprise true requires branch_strategy.');
+    }
+    enumValue('branch_strategy', branchStrategy, BRANCH_STRATEGIES, 'init');
+    if (createPr === null || createPr === undefined) {
+      invalid('enterprise true requires create_pr.');
+    }
+    boolValue('create_pr', createPr, 'init');
+  } else {
+    if (branchStrategy !== null && branchStrategy !== undefined) {
+      enumValue('branch_strategy', branchStrategy, BRANCH_STRATEGIES, 'init');
+    }
+    if (createPr !== null && createPr !== undefined) {
+      boolValue('create_pr', createPr, 'init');
+    }
+  }
+
+  return {
+    enterprise: ent,
+    branch_strategy: ent ? branchStrategy : (branchStrategy ?? null),
+    create_pr: ent ? createPr === 'true' : (createPr === null || createPr === undefined ? null : createPr === 'true'),
+  };
+}
+
 module.exports = {
   DEFAULT_MODE,
   detectMode,
   parseConfig,
+  validateInitFields,
 };

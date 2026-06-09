@@ -11,6 +11,7 @@
 //   pocketto-pi meta set   <dir> <field> <value>           [--json]
 //   pocketto-pi doctor                                     [--strict] [--json]
 //   pocketto-pi mode [<dir>]                               [--json]
+//   pocketto-pi mode init [<dir>]                          [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--json]
 //   pocketto-pi setup-extensions                           [--all] [--json]
 //
 // Skills always pass --json (stable envelope) and --contract <N> (version
@@ -27,7 +28,20 @@ const setupExtensions = require('./commands/setup-extensions');
 
 function parseArgs(argv) {
   const positionals = [];
-  const flags = { json: false, dryRun: false, task: null, contract: null, version: false, help: false, strict: false, all: false, recommended: false };
+  const flags = {
+    json: false,
+    dryRun: false,
+    task: null,
+    contract: null,
+    version: false,
+    help: false,
+    strict: false,
+    all: false,
+    recommended: false,
+    enterprise: null,
+    branchStrategy: null,
+    createPr: null,
+  };
 
   // A flag that takes a value must actually have one — guard against it being
   // the last token (`argv[++i]` === undefined) or another flag, which would
@@ -52,6 +66,12 @@ function parseArgs(argv) {
     else if (a === '--strict') flags.strict = true;
     else if (a === '--all') flags.all = true;
     else if (a === '--recommended') flags.recommended = true;
+    else if (a === '--enterprise') flags.enterprise = requireValue(argv[++i], '--enterprise');
+    else if (a.startsWith('--enterprise=')) flags.enterprise = requireValue(a.slice('--enterprise='.length), '--enterprise');
+    else if (a === '--branch-strategy') flags.branchStrategy = requireValue(argv[++i], '--branch-strategy');
+    else if (a.startsWith('--branch-strategy=')) flags.branchStrategy = requireValue(a.slice('--branch-strategy='.length), '--branch-strategy');
+    else if (a === '--create-pr') flags.createPr = requireValue(argv[++i], '--create-pr');
+    else if (a.startsWith('--create-pr=')) flags.createPr = requireValue(a.slice('--create-pr='.length), '--create-pr');
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -94,6 +114,7 @@ Usage:
   pocketto-pi meta set   <dir> <field> <value>            [--json]
   pocketto-pi doctor                                      [--strict] [--json]
   pocketto-pi mode [<dir>]                                [--json]
+  pocketto-pi mode init [<dir>]                           [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--json]
   pocketto-pi setup-extensions                            [--all] [--json]
 
 Status values: WAITING | REVIEW | DONE | BLOCKED
@@ -171,7 +192,12 @@ function main() {
       const result = doctor.run({ strict: flags.strict });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'mode') {
-      const result = mode.run({ positionals: positionals.slice(1) });
+      const result = mode.run({
+        positionals: positionals.slice(1),
+        enterprise: flags.enterprise,
+        branchStrategy: flags.branchStrategy,
+        createPr: flags.createPr,
+      });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'setup-extensions') {
       const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
