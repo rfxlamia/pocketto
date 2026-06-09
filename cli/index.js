@@ -7,6 +7,8 @@
 //   pocketto-pi log init   <plan_dir>                      [--json]
 //   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
 //   pocketto-pi log close  <plan_dir>                      [--json]
+//   pocketto-pi meta get   <dir> <field>                   [--json]
+//   pocketto-pi meta set   <dir> <field> <value>           [--json]
 //   pocketto-pi doctor                                     [--strict] [--json]
 //   pocketto-pi mode [<dir>]                               [--json]
 //   pocketto-pi setup-extensions                           [--all] [--json]
@@ -18,6 +20,7 @@ const { ok, fail, CliError } = require('./lib/envelope');
 const { CLI_VERSION, CONTRACT } = require('./lib/version');
 const structure = require('./commands/structure');
 const log = require('./commands/log');
+const meta = require('./commands/meta');
 const doctor = require('./commands/doctor');
 const mode = require('./commands/mode');
 const setupExtensions = require('./commands/setup-extensions');
@@ -87,6 +90,8 @@ Usage:
   pocketto-pi log init   <plan_dir>                       [--json]
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
+  pocketto-pi meta get   <dir> <field>                    [--json]
+  pocketto-pi meta set   <dir> <field> <value>            [--json]
   pocketto-pi doctor                                      [--strict] [--json]
   pocketto-pi mode [<dir>]                                [--json]
   pocketto-pi setup-extensions                            [--all] [--json]
@@ -159,6 +164,9 @@ function main() {
     } else if (command === 'log') {
       const result = log.run({ sub: positionals[1], positionals: positionals.slice(2), task: flags.task });
       emitSuccess(result.command, result, flags.json);
+    } else if (command === 'meta') {
+      const result = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
+      emitSuccess(result.command, result, flags.json);
     } else if (command === 'doctor') {
       const result = doctor.run({ strict: flags.strict });
       emitSuccess(result.command, result, flags.json);
@@ -169,7 +177,7 @@ function main() {
       const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
       emitSuccess(result.command, result, flags.json);
     } else {
-      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | doctor | mode | setup-extensions.`);
+      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | meta | doctor | mode | setup-extensions.`);
     }
   } catch (err) {
     emitError(command, err, flags.json);

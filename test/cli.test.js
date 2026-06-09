@@ -571,6 +571,71 @@ test('log update/close accept a plan file argument, not just the directory', () 
   assert.equal(json(['log', 'close', planFile, '--json']).ok, true);
 });
 
+test('meta set creates .pocket-meta.json with stable direct-write serialization', () => {
+  const dir = tmp();
+
+  const env = json(['meta', 'set', dir, 'github_issue.number', '42', '--json']);
+  assert.equal(env.ok, true);
+  assert.equal(env.command, 'meta set');
+  assert.equal(env.data.field, 'github_issue.number');
+  assert.equal(env.data.value, 42);
+
+  const metaPath = path.join(dir, '.pocket-meta.json');
+  const content = readFileSync(metaPath, 'utf8');
+  assert.match(content, /\n$/);
+  assert.match(content, /^  "github_issue":/m);
+
+  const parsed = JSON.parse(content);
+  assert.equal(parsed.github_issue.number, 42);
+  assert.equal(content, JSON.stringify(parsed, null, 2) + '\n');
+});
+
+test('meta get round-trips values from .pocket-meta.json', () => {
+  const dir = tmp();
+  json(['meta', 'set', dir, 'github_issue.url', 'https://github.com/acme/project/issues/42', '--json']);
+
+  const env = json(['meta', 'get', dir, 'github_issue.url', '--json']);
+  assert.equal(env.ok, true);
+  assert.equal(env.command, 'meta get');
+  assert.equal(env.data.field, 'github_issue.url');
+  assert.equal(env.data.value, 'https://github.com/acme/project/issues/42');
+});
+
+test('meta successive writes preserve earlier values and nested phase data', () => {
+  const dir = tmp();
+  json(['meta', 'set', dir, 'github_issue.number', '42', '--json']);
+  json(['meta', 'set', dir, 'github_issue.created_at', '2026-06-09T00:00:00Z', '--json']);
+  json(['meta', 'set', dir, 'phases.phase-1.github_pr.number', '7', '--json']);
+  json(['meta', 'set', dir, 'phases.phase-1.fingerprints', '["a","b"]', '--json']);
+  json(['meta', 'set', dir, 'external_tracker', 'JIRA-123', '--json']);
+
+  const meta = JSON.parse(readFileSync(path.join(dir, '.pocket-meta.json'), 'utf8'));
+  assert.equal(meta.github_issue.number, 42);
+  assert.equal(meta.github_issue.created_at, '2026-06-09T00:00:00Z');
+  assert.equal(meta.phases['phase-1'].github_pr.number, 7);
+  assert.deepEqual(meta.phases['phase-1'].fingerprints, ['a', 'b']);
+  assert.equal(meta.external_tracker, 'JIRA-123');
+});
+
+test('meta read normalizes CRLF before JSON parse', () => {
+  const dir = tmp();
+  const metaPath = path.join(dir, '.pocket-meta.json');
+  writeFileSync(metaPath, '{\r\n  "github_issue": {\r\n    "number": 42\r\n  }\r\n}\r\n');
+
+  const env = json(['meta', 'get', dir, 'github_issue.number', '--json']);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.value, 42);
+});
+
+test('meta direct-write content equals JSON.stringify(parsed, null, 2) plus newline', () => {
+  const dir = tmp();
+  json(['meta', 'set', dir, 'phases.phase-2.github_pr.url', 'https://github.com/acme/project/pull/8', '--json']);
+
+  const content = readFileSync(path.join(dir, '.pocket-meta.json'), 'utf8');
+  const parsed = JSON.parse(content);
+  assert.equal(content, JSON.stringify(parsed, null, 2) + '\n');
+});
+
 // ─── extensions: registry + spec normalization (in-process unit) ──────────────
 
 test('normalizeSpec maps every Pi packages[] spec shape to a bare package name', () => {
