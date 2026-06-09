@@ -39,6 +39,125 @@ function tmp() {
   return mkdtempSync(path.join(tmpdir(), 'pocketto-'));
 }
 
+function writeModeConfig(dir, file, body) {
+  writeFileSync(path.join(dir, file), body);
+}
+
+function enterpriseBlock(lines, eol = '\n') {
+  return ['# Local Agent Notes', '', '## Pocket Enterprise', '', '```', ...lines, '```', ''].join(eol);
+}
+
+test('mode defaults to local mode when no Pocket Enterprise heading exists', () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', '# Notes\n\nNo enterprise config here.\n');
+
+  const env = json(['mode', dir, '--json']);
+  assert.equal(env.ok, true);
+  assert.equal(env.command, 'mode');
+  assert.deepEqual(env.data, {
+    enterprise: false,
+    branch_strategy: null,
+    create_pr: null,
+    source: null,
+  });
+});
+
+test('mode uses CLAUDE.md as a whole-heading override over AGENTS.md', () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', enterpriseBlock([
+    'enterprise: true',
+    'branch_strategy: branch',
+    'create_pr: true',
+  ]));
+  writeModeConfig(dir, 'CLAUDE.md', enterpriseBlock([
+    'enterprise: false',
+    'branch_strategy: main-local',
+    'create_pr: false',
+  ]));
+
+  const env = json(['mode', dir, '--json']);
+  assert.deepEqual(env.data, {
+    enterprise: false,
+    branch_strategy: 'main-local',
+    create_pr: false,
+    source: 'CLAUDE.md',
+  });
+});
+
+test('mode errors when enterprise true is missing a required field', () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', enterpriseBlock([
+    'enterprise: true',
+    'branch_strategy: branch',
+  ]));
+
+  const res = run(['mode', dir, '--json'], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.ok, false);
+  assert.equal(env.error.code, 'MODE_CONFIG_INVALID');
+  assert.match(env.error.message, /create_pr/);
+  assert.equal(res.code, 1);
+});
+
+test('mode errors on unknown enum values in active config', () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', enterpriseBlock([
+    'enterprise: true',
+    'branch_strategy: feature',
+    'create_pr: true',
+  ]));
+
+  const res = run(['mode', dir, '--json'], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.error.code, 'MODE_CONFIG_INVALID');
+  assert.match(env.error.message, /branch_strategy/);
+});
+
+test('mode does not fall back to AGENTS.md when CLAUDE.md override is malformed', () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', enterpriseBlock([
+    'enterprise: true',
+    'branch_strategy: branch',
+    'create_pr: true',
+  ]));
+  writeModeConfig(dir, 'CLAUDE.md', [
+    '# Local Agent Notes',
+    '',
+    '## Pocket Enterprise',
+    '',
+    '```',
+    'enterprise: true',
+    'branch_strategy: main-local',
+  ].join('\n'));
+
+  const res = run(['mode', dir, '--json'], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.error.code, 'MODE_CONFIG_INVALID');
+  assert.match(env.error.message, /fenced block/i);
+});
+
+test('mode parses CRLF config the same as LF config', () => {
+  const lfDir = tmp();
+  const crlfDir = tmp();
+  const lines = [
+    'enterprise: true',
+    'branch_strategy: branch # inline comments are ignored',
+    'create_pr: false',
+  ];
+  writeModeConfig(lfDir, 'AGENTS.md', enterpriseBlock(lines, '\n'));
+  writeModeConfig(crlfDir, 'AGENTS.md', enterpriseBlock(lines, '\r\n'));
+
+  const lf = json(['mode', lfDir, '--json']);
+  const crlf = json(['mode', crlfDir, '--json']);
+  assert.deepEqual(lf.data, {
+    enterprise: true,
+    branch_strategy: 'branch',
+    create_pr: false,
+    source: 'AGENTS.md',
+  });
+  assert.deepEqual(crlf.data, lf.data);
+});
+
 const NINE_TASK_PLAN = `# EXECUTION PLAN — Auth refactor
 
 **Date:** 2026-05-08

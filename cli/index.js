@@ -8,6 +8,7 @@
 //   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
 //   pocketto-pi log close  <plan_dir>                      [--json]
 //   pocketto-pi doctor                                     [--strict] [--json]
+//   pocketto-pi mode [<dir>]                               [--json]
 //   pocketto-pi setup-extensions                           [--all] [--json]
 //
 // Skills always pass --json (stable envelope) and --contract <N> (version
@@ -18,6 +19,7 @@ const { CLI_VERSION, CONTRACT } = require('./lib/version');
 const structure = require('./commands/structure');
 const log = require('./commands/log');
 const doctor = require('./commands/doctor');
+const mode = require('./commands/mode');
 const setupExtensions = require('./commands/setup-extensions');
 
 function parseArgs(argv) {
@@ -86,6 +88,7 @@ Usage:
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
   pocketto-pi doctor                                      [--strict] [--json]
+  pocketto-pi mode [<dir>]                                [--json]
   pocketto-pi setup-extensions                            [--all] [--json]
 
 Status values: WAITING | REVIEW | DONE | BLOCKED
@@ -159,11 +162,14 @@ function main() {
     } else if (command === 'doctor') {
       const result = doctor.run({ strict: flags.strict });
       emitSuccess(result.command, result, flags.json);
+    } else if (command === 'mode') {
+      const result = mode.run({ positionals: positionals.slice(1) });
+      emitSuccess(result.command, result, flags.json);
     } else if (command === 'setup-extensions') {
       const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
       emitSuccess(result.command, result, flags.json);
     } else {
-      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | doctor | setup-extensions.`);
+      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | doctor | mode | setup-extensions.`);
     }
   } catch (err) {
     emitError(command, err, flags.json);
