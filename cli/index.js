@@ -13,6 +13,7 @@
 //   pocketto-pi mode [<dir>]                               [--json]
 //   pocketto-pi mode init [<dir>]                          [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--json]
 //   pocketto-pi format <issue|pr>                          [--input <json-file>] [--json]
+//   pocketto-pi reconcile                                  [--prior <json>] [--new <json>] [--json]
 //   pocketto-pi setup-extensions                           [--all] [--json]
 //
 // Skills always pass --json (stable envelope) and --contract <N> (version
@@ -27,6 +28,7 @@ const doctor = require('./commands/doctor');
 const mode = require('./commands/mode');
 const setupExtensions = require('./commands/setup-extensions');
 const format = require('./commands/format');
+const reconcile = require('./commands/reconcile');
 
 function parseArgs(argv) {
   const positionals = [];
@@ -44,6 +46,8 @@ function parseArgs(argv) {
     branchStrategy: null,
     createPr: null,
     input: null,
+    prior: null,
+    newInput: null,
   };
 
   // A flag that takes a value must actually have one — guard against it being
@@ -77,6 +81,10 @@ function parseArgs(argv) {
     else if (a.startsWith('--create-pr=')) flags.createPr = requireValue(a.slice('--create-pr='.length), '--create-pr');
     else if (a === '--input') flags.input = requireValue(argv[++i], '--input');
     else if (a.startsWith('--input=')) flags.input = requireValue(a.slice('--input='.length), '--input');
+    else if (a === '--prior') flags.prior = requireValue(argv[++i], '--prior');
+    else if (a.startsWith('--prior=')) flags.prior = requireValue(a.slice('--prior='.length), '--prior');
+    else if (a === '--new') flags.newInput = requireValue(argv[++i], '--new');
+    else if (a.startsWith('--new=')) flags.newInput = requireValue(a.slice('--new='.length), '--new');
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -121,6 +129,7 @@ Usage:
   pocketto-pi mode [<dir>]                                [--json]
   pocketto-pi mode init [<dir>]                           [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--json]
   pocketto-pi format <issue|pr>                           [--input <json-file>] [--json]
+  pocketto-pi reconcile                                   [--prior <json>] [--new <json>] [--json]
   pocketto-pi setup-extensions                            [--all] [--json]
 
 Status values: WAITING | REVIEW | DONE | BLOCKED
@@ -208,11 +217,14 @@ function main() {
     } else if (command === 'format') {
       const result = format.run({ kind: positionals[1], inputPath: flags.input });
       emitSuccess(result.command, result, flags.json);
+    } else if (command === 'reconcile') {
+      const result = reconcile.run({ priorPath: flags.prior, newPath: flags.newInput });
+      emitSuccess(result.command, result, flags.json);
     } else if (command === 'setup-extensions') {
       const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
       emitSuccess(result.command, result, flags.json);
     } else {
-      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | meta | doctor | mode | format | setup-extensions.`);
+      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | meta | doctor | mode | format | reconcile | setup-extensions.`);
     }
   } catch (err) {
     emitError(command, err, flags.json);

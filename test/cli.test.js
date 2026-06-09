@@ -1045,3 +1045,60 @@ test('format pr surfaces a non-blocking >20-file warning but still produces the 
   // The body is still produced.
   assert.ok(readFileSync(env.data.bodyFile, 'utf8').length > 0);
 });
+
+// ─── reconcile set-diff (child process; --prior/--new <json> file inputs) ───
+// Inputs are JSON arrays of fingerprint records (each at least { fingerprint,
+// ...metadata }). Reuses writeInput() from T5's block. data.resolve/post/keep
+// are partitioned by `fingerprint`. Assert the partition by the fingerprint
+// key set, plus deterministic ordering.
+
+function fps(env) {
+  // Map a partition of records back to its fingerprint key set (order-preserving).
+  return {
+    resolve: env.data.resolve.map((r) => r.fingerprint),
+    post: env.data.post.map((r) => r.fingerprint),
+    keep: env.data.keep.map((r) => r.fingerprint),
+  };
+}
+
+test('reconcile partitions prior/new into resolve/post/keep by fingerprint', () => {
+  const dir = tmp();
+  const prior = writeInput(dir, 'prior.json', [{ fingerprint: 'fpA', thread: 't1' }, { fingerprint: 'fpB', thread: 't2' }]);
+  const next = writeInput(dir, 'new.json', [{ fingerprint: 'fpB' }, { fingerprint: 'fpC' }]);
+  const env = json(['reconcile', '--prior', prior, '--new', next, '--json']);
+  assert.equal(env.ok, true);
+  assert.equal(env.command, 'reconcile');
+  const out = fps(env);
+  assert.deepEqual(out.resolve, ['fpA']); // prior \ new
+  assert.deepEqual(out.post, ['fpC']);    // new \ prior
+  assert.deepEqual(out.keep, ['fpB']);    // intersection
+  // resolve records carry their prior metadata so the skill can act on the thread.
+  assert.equal(env.data.resolve[0].thread, 't1');
+});
+
+test('reconcile with empty prior posts everything new', () => {
+  const dir = tmp();
+  const prior = writeInput(dir, 'prior.json', []);
+  const next = writeInput(dir, 'new.json', [{ fingerprint: 'fpA' }]);
+  const out = fps(json(['reconcile', '--prior', prior, '--new', next, '--json']));
+  assert.deepEqual(out.post, ['fpA']);
+  assert.deepEqual(out.resolve, []);
+});
+
+test('reconcile with empty new resolves all prior', () => {
+  const dir = tmp();
+  const prior = writeInput(dir, 'prior.json', [{ fingerprint: 'fpA' }]);
+  const next = writeInput(dir, 'new.json', []);
+  const out = fps(json(['reconcile', '--prior', prior, '--new', next, '--json']));
+  assert.deepEqual(out.resolve, ['fpA']);
+  assert.deepEqual(out.post, []);
+});
+
+test('reconcile output ordering is deterministic across runs', () => {
+  const dir = tmp();
+  const prior = writeInput(dir, 'prior.json', [{ fingerprint: 'fpB' }, { fingerprint: 'fpA' }, { fingerprint: 'fpD' }]);
+  const next = writeInput(dir, 'new.json', [{ fingerprint: 'fpC' }, { fingerprint: 'fpA' }]);
+  const first = fps(json(['reconcile', '--prior', prior, '--new', next, '--json']));
+  const second = fps(json(['reconcile', '--prior', prior, '--new', next, '--json']));
+  assert.deepEqual(first, second); // reproducible
+});
