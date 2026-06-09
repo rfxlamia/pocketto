@@ -390,6 +390,100 @@ return here. This checkpoint is the last line of defense against the GATE 5 bypa
 
 Wait for confirmation. Apply any changes.
 
+### Pocket Enterprise — GitHub Issue (Story 1)
+
+**Preflight (mandatory, fail-closed).** Run immediately after user approval, before invoking pocket-planning:
+
+```bash
+npx -y pocketto-pi mode --json --contract 2
+```
+
+Parse the JSON envelope:
+
+- If `ok` is `false` **or** `data.enterprise` is not strictly `true` → **skip this entire subsection.** Proceed to pocket-planning exactly as today: **zero GitHub calls, zero enterprise prompts.** (Fail-closed: a missing or failed mode check must never trigger GitHub side effects.)
+- If `ok` is `true` and `data.enterprise` is `true` → continue below.
+
+**Do NOT** offer or prompt for enterprise enablement during a normal grinding handoff. Non-enterprise users must see byte-identical behavior.
+
+#### One-time bootstrap (user-initiated only)
+
+Only when the user **explicitly** asks to enable Pocket Enterprise — never auto-offered on first run:
+
+1. Re-run `mode` preflight. If `enterprise` is already `true`, skip bootstrap.
+2. **Skill-layer** prerequisite checks (the CLI does not call `gh`):
+   - `gh auth status` — if not authenticated → **STOP** with an actionable error; do not run `mode init`.
+   - Verify a GitHub git remote exists (e.g. `git remote get-url origin`) — if none → **STOP** with an actionable error.
+3. Bootstrap:
+   ```bash
+   npx -y pocketto-pi mode init --enterprise true --branch-strategy branch --create-pr true --json --contract 2
+   ```
+   (`mode init` also validates remote and writes `AGENTS.md` + `.gitattributes`; it does **not** check gh auth — that stays in the skill layer.)
+4. Re-run `mode` preflight to confirm `enterprise=true`, then resume the grinding flow.
+
+#### Issue creation (enterprise + spec approved)
+
+Runs only when preflight returned `enterprise=true` and the user has approved the spec.
+
+**Meta home:** the spec directory — parent of the saved spec file (`docs/pocket/spec/YYYY-MM-DD-kebab-slug/`). Set `slug` to that directory's kebab-slug basename.
+
+**Step A — gh prerequisite (hard gate):**
+
+```bash
+gh auth status
+```
+
+If not authenticated → **STOP** with an actionable `gh auth login` error. **No** issue created and **no** `.pocket-meta.json` write (not even partial).
+
+**Step B — Idempotency (reuse existing issue):**
+
+```bash
+npx -y pocketto-pi meta get <spec-dir> github_issue.number --json --contract 2
+```
+
+If `data.value` is a positive issue number → reuse it; skip to Step D.
+
+**Step C — Recovery or create:**
+
+If meta has no issue number, reconcile from GitHub before creating:
+
+```bash
+gh issue list --label pocket-plan --json number,title,url --limit 100
+```
+
+Match an open issue whose title corresponds to this plan's kebab-slug. If found → record it via Step D without creating a duplicate.
+
+Otherwise, create a new issue:
+
+1. Map the approved spec to structured input JSON (write via Node `fs` — no shell heredocs; cross-OS safe):
+   - `title` — spec title / feature name (first `#` heading)
+   - `konteks` — Summary + Context sections
+   - `rencanaTeknis` — Design Decision / technical approach
+   - `acceptanceCriteria` — array of acceptance-criterion strings (from GWT rules)
+   - `diLuarScope` — array of out-of-scope items
+
+2. Format the FSTrack body:
+   ```bash
+   npx -y pocketto-pi format issue --input <issue-input.json> --json --contract 2
+   ```
+
+3. Create the issue (always `--body-file`, never inline `--body`):
+   ```bash
+   gh issue create --title "<title>" --body-file <data.bodyFile> --label pocket-plan
+   ```
+
+   Parse `gh` output for issue number and URL.
+
+**Step D — Record issue in meta** (only after successful create or reconcile — never before):
+
+```bash
+npx -y pocketto-pi meta set <spec-dir> slug "<kebab-slug>" --json --contract 2
+npx -y pocketto-pi meta set <spec-dir> github_issue.number <N> --json --contract 2
+npx -y pocketto-pi meta set <spec-dir> github_issue.url "<url>" --json --contract 2
+npx -y pocketto-pi meta set <spec-dir> github_issue.created_at "<ISO8601>" --json --contract 2
+```
+
+**Step E — Handoff:** include `GitHub issue #<N>` in the pocket-planning context below.
+
 ### Invoke pocket-planning (MANDATORY)
 
 **DO NOT STOP AFTER USER APPROVAL.**
@@ -410,6 +504,7 @@ Do NOT skip phases. Do NOT stop at Phase 1.
 - Architecture constraints from Phase 2
 - Open questions / assumptions logged in Phase 4
 - Design decision from Phase 5
+- GitHub issue number (enterprise only — from Story 1 Step E; omit when non-enterprise)
 
 **This is not optional.** Pocket-grinding is incomplete until pocket-planning has received the spec and begun Phase 0 (Preflight).
 
