@@ -167,6 +167,235 @@ Pass: 1  Issues: 1  Skipped: 1
 
 3. For each REVIEW_FAIL task, print the `fix_instructions` from the report.
 
+## Enterprise mode (opt-in): post verdicts to PR
+
+This section runs **after** the summary table is printed and review JSONs are written (Collect and Write) and **before** Chain to pocket-closing. In non-enterprise mode, it is skipped entirely — no GitHub calls are made.
+
+### Preflight: detect enterprise mode
+
+```bash
+npx pocketto-pi mode --json --contract 2
+```
+
+Parse the JSON envelope. If `ok` is false, the command is missing, or `data.enterprise` is not `true` → **skip this entire section** and proceed directly to [Chain to pocket-closing](#chain-to-pocket-closing-conditional). Fail-closed: any error or malformed output means non-enterprise.
+
+### E1. Discover the phase PR
+
+Read the PR number from plan meta:
+
+```bash
+npx pocketto-pi meta get <plan_dir> pr.number --json --contract 2
+```
+
+- `data.value` is a positive integer → use it as the PR number.
+- `data.value` is null → fall back to branch-based discovery:
+  ```bash
+  branch=$(git rev-parse --abbrev-ref HEAD)
+  pr_number=$(gh pr list --head "$branch" --json number --jq '.[0].number // empty')
+  ```
+- If `pr_number` is empty after both attempts → **STOP**: print `"No PR found for branch '<branch>'. Cannot post verdicts. Create a PR first or run without enterprise mode."` → create **no** comments or threads. Proceed to Chain to pocket-closing. **No orphan comments.**
+
+### E2. Resolve owner/repo
+
+```bash
+gh repo view --json owner,name -q '.owner.login + "/" + .name'
+```
+
+Store as `<owner>/<repo>` for all subsequent `gh` calls.
+
+### E3. Format the canonical summary body
+
+Build the input JSON for `format comment`:
+
+```json
+{
+  "phase": <N>,
+  "verdicts": [
+    { "task": "T1", "verdict": "PASS" },
+    { "task": "T2", "verdict": "FAIL" }
+  ],
+  "prLinked": true
+}
+```
+
+- `<N>` = phase number from the phase file name.
+- Map `REVIEW_PASS` → `"PASS"`, `REVIEW_FAIL` → `"FAIL"`, `REVIEW_BLOCKED` → `"BLOCKED"`, skipped tasks → `"SKIP"`.
+- `prLinked` is always `true` (we have a PR by this point).
+
+Write to a temp file, then:
+
+```bash
+npx pocketto-pi format comment --input <tmp-verdicts.json> --json --contract 2
+```
+
+Read the body from `data.bodyFile`. The body starts with the marker `<!-- pocket-phase-<N>-summary -->` — this marker is the canonical identity for upsert.
+
+### E4. Upsert the canonical summary comment
+
+Exactly **one** marker-tagged summary comment per phase. On re-runs, update in place; never create duplicates. On a race (>1 markered comment), keep the earliest and collapse the rest.
+
+1. List all issue comments on the PR:
+
+   ```bash
+   gh api repos/<owner>/<repo>/issues/<pr_number>/comments --paginate
+   ```
+
+2. Filter to markered comments: check if `body` starts with `<!-- pocket-phase-<N>-summary -->` (first line). Collect all matches, sorted by `id` ascending (earliest first).
+
+3. Upsert logic:
+
+   | Matches | Action |
+   |---------|--------|
+   | 0 | Create: `gh api repos/<owner>/<repo>/issues/<pr_number>/comments -f body="$(cat <body-file>)"` |
+   | 1 | Update in place: `gh api repos/<owner>/<repo>/issues/comments/<comment_id> --method PATCH -f body="$(cat <body-file>)"` |
+   | >1 (race) | Update earliest (lowest `id`) with new body. Delete each later comment: `gh api repos/<owner>/<repo>/issues/comments/<later_id> --method DELETE` |
+
+### E5. Reconcile and post inline findings
+
+The CLI computes the set-diff (resolve/post/keep). The skill executes the resulting actions. Fingerprints must match the CLI's `identity.fingerprint()` exactly.
+
+#### E5a. Read prior fingerprints
+
+```bash
+npx pocketto-pi meta get <plan_dir> review.fingerprints --json --contract 2
+```
+
+If `data.value` is null or absent, treat as `[]` (no prior findings).
+
+#### E5b. Compute new fingerprints
+
+For each REVIEW_FAIL or REVIEW_BLOCKED task, read `reviews/<task_id>-review.json`. Extract findings (issues, concerns). Compute a fingerprint for each finding using the **shared identity algorithm**:
+
+```bash
+printf '%s\0%s\0%s\0%s' "<file>" "<ruleId>" "<normalized_message>" "<occurrence>" \
+  | shasum -a 256 | cut -c1-16
+```
+
+Where:
+- `file` — source file path relative to repo root.
+- `ruleId` — rule or check identifier (e.g. `"spec-compliance"`, `"missing-error-handling"`).
+- `message` — finding message, normalized: split on `\r?\n`, join with `\n`, trim whitespace.
+- `occurrence` — disambiguator for multiple findings on the same file/rule (line number or index).
+
+This matches the CLI's `cli/lib/identity.js` `fingerprint()` exactly — same fields, same `\x00` separator, same sha256 → first 16 hex chars.
+
+Write the new findings array to a temp file `<new-findings.json>`:
+
+```json
+[
+  {
+    "fingerprint": "<sha256-hex-16>",
+    "finding": {
+      "file": "src/auth.ts",
+      "ruleId": "spec-compliance",
+      "message": "Missing error handling for invalid token",
+      "occurrence": "42",
+      "task": "T2",
+      "verdict": "FAIL"
+    }
+  }
+]
+```
+
+#### E5c. Run reconcile
+
+```bash
+npx pocketto-pi reconcile --prior <prior-fingerprints.json> --new <new-findings.json> --json --contract 2
+```
+
+Returns:
+```json
+{
+  "data": {
+    "resolve": [{ "fingerprint": "...", "thread": "PRRT_...", ... }],
+    "post":    [{ "fingerprint": "...", "finding": { ... } }],
+    "keep":    [{ "fingerprint": "...", "finding": { ... } }]
+  }
+}
+```
+
+- `resolve` — prior findings no longer present → their threads should be resolved.
+- `post` — new findings not in prior → should be posted as inline threads.
+- `keep` — findings unchanged → leave as-is.
+
+#### E5d. Resolve threads for `data.resolve`
+
+For each entry in `data.resolve`, the `thread` field is the GitHub review thread node ID from a prior run. Resolve it:
+
+```bash
+gh api graphql -f query='
+  mutation($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread { isResolved }
+    }
+  }
+' -f threadId="<thread_id>"
+```
+
+If the thread is already resolved or missing, the mutation returns an error — log and continue (non-fatal).
+
+#### E5e. Post inline findings for `data.post`
+
+For each entry in `data.post`, post as an inline review comment on the PR diff:
+
+```bash
+gh api repos/<owner>/<repo>/pulls/<pr_number>/comments \
+  -f path="<file>" \
+  -f position=<diff_position> \
+  -f body="<finding body with fingerprint tag>"
+```
+
+- `path` — the file from `finding.file`.
+- `position` — the diff line index. If the exact position is unavailable (file not in current diff), post as a top-level PR review comment instead, noting the file path in the body.
+- `body` — the finding message plus a hidden fingerprint tag:
+  ```
+  <finding message>
+
+  <!-- pocket-fp:<fingerprint> -->
+  ```
+
+After posting all new findings, query review threads to capture their node IDs:
+
+```bash
+gh api graphql -f query='
+  query($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100) {
+          nodes {
+            id
+            isResolved
+            comments(first: 1) { nodes { body } }
+          }
+        }
+      }
+    }
+  }
+' -f owner="<owner>" -f repo="<repo>" -f pr=<pr_number>
+```
+
+Match each posted comment by its `<!-- pocket-fp:<fingerprint> -->` tag to extract the thread node ID.
+
+#### E5f. Persist new fingerprints
+
+Build the updated fingerprints array:
+
+- `data.keep` entries → include with existing `fingerprint` + `thread` fields.
+- `data.post` entries → include with `fingerprint` + the newly captured `thread` node ID.
+- `data.resolve` entries → already resolved, do **not** include.
+
+Write to a temp file, then persist:
+
+```bash
+npx pocketto-pi meta set <plan_dir> review.fingerprints "$(cat <updated-fingerprints.json>)" --json --contract 2
+```
+
+### E6. Enterprise section complete
+
+After all enterprise steps complete, proceed to Chain to pocket-closing as usual. The enterprise section does **not** alter the output state (`PHASE_REVIEWED` / `PHASE_BLOCKED`) — it only posts to GitHub and reconciles threads.
+
+**Cross-OS note:** Fingerprints are sha256 hex strings (16 chars), never raw bytes. The `printf | shasum` pipeline produces identical output on macOS and Linux.
+
 ## Chain to pocket-closing (conditional)
 
 After the summary table is printed, decide whether to chain into pocket-closing. This is the `review → closing` handoff — the same auto-invoke-behind-one-confirmation pattern pocket-grinding uses for pocket-planning, **not** a silent close.
