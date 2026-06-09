@@ -5,11 +5,13 @@ const path = require('node:path');
 const { mkdtempSync, writeFileSync, readFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { CliError } = require('../lib/envelope');
-const { issueBody, prBody } = require('../lib/bodies');
+const { issueBody, prBody, summaryBody, closeoutBody } = require('../lib/bodies');
+
+const KINDS = new Set(['issue', 'pr', 'comment', 'closeout']);
 
 function readInput(inputPath) {
   if (!inputPath) {
-    throw new CliError('USAGE', 'Usage: pocketto-pi format <issue|pr> --input <json-file>');
+    throw new CliError('USAGE', 'Usage: pocketto-pi format <issue|pr|comment|closeout> --input <json-file>');
   }
   let raw;
   try {
@@ -54,13 +56,37 @@ function runPr(input) {
   };
 }
 
+function runComment(input) {
+  const body = summaryBody(input);
+  const bodyFile = writeBodyFile(body);
+  return {
+    command: 'format comment',
+    exit: 0,
+    human: [`Wrote phase summary comment: ${bodyFile}`],
+    data: { kind: 'comment', bodyFile },
+  };
+}
+
+function runCloseout(input) {
+  const body = closeoutBody(input);
+  const bodyFile = writeBodyFile(body);
+  return {
+    command: 'format closeout',
+    exit: 0,
+    human: [`Wrote closeout summary: ${bodyFile}`],
+    data: { kind: 'closeout', bodyFile },
+  };
+}
+
 function run({ kind, inputPath }) {
-  if (!kind || (kind !== 'issue' && kind !== 'pr')) {
-    throw new CliError('USAGE', 'Usage: pocketto-pi format <issue|pr> --input <json-file>');
+  if (!kind || !KINDS.has(kind)) {
+    throw new CliError('USAGE', 'Usage: pocketto-pi format <issue|pr|comment|closeout> --input <json-file>');
   }
   const input = readInput(inputPath);
   if (kind === 'issue') return runIssue(input);
-  return runPr(input);
+  if (kind === 'pr') return runPr(input);
+  if (kind === 'comment') return runComment(input);
+  return runCloseout(input);
 }
 
 module.exports = { run };

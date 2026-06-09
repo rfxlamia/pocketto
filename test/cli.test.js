@@ -1046,6 +1046,62 @@ test('format pr surfaces a non-blocking >20-file warning but still produces the 
   assert.ok(readFileSync(env.data.bodyFile, 'utf8').length > 0);
 });
 
+// ─── format comment|closeout (child process; same --input + bodyFile contract) ─
+// Reuses the writeInput() helper from T5's block. Assert the spec-named
+// contract: marker first line (exactly once), per-task verdict rows, the
+// Action Required block gated on FAIL/BLOCKED, and the DoD auto/manual split.
+
+test('format comment renders marker + verdict table + Action Required + DoD (mixed verdicts)', () => {
+  const dir = tmp();
+  const input = writeInput(dir, 'comment.json', {
+    phase: 2,
+    verdicts: [{ task: 'T1', verdict: 'PASS' }, { task: 'T2', verdict: 'PASS' }, { task: 'T3', verdict: 'FAIL' }],
+    prLinked: true,
+  });
+  const env = json(['format', 'comment', '--input', input, '--json']);
+  assert.equal(env.ok, true);
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+
+  // Marker is the first line and appears exactly once (re-runs update, not duplicate).
+  assert.match(body, /^<!-- pocket-phase-2-summary -->/);
+  assert.equal((body.match(/<!-- pocket-phase-2-summary -->/g) || []).length, 1);
+
+  // Task→verdict rows for every task.
+  for (const t of ['T1', 'T2', 'T3']) assert.ok(body.includes(t), `row for ${t}`);
+  // Action Required is present and names the failing task.
+  assert.match(body, /Action Required/);
+  assert.match(body, /T3/);
+
+  // DoD: a Pocket-verifiable item is auto-checked; CI/tsc/secrets stay manual.
+  assert.match(body, /\[x\]/i); // at least one auto-checked item
+  assert.match(body, /\[ \]/);  // CI/tsc/secrets left unchecked
+
+  assert.equal(body.includes('\r'), false); // LF-only
+});
+
+test('format comment omits the Action Required block when all verdicts PASS', () => {
+  const dir = tmp();
+  const input = writeInput(dir, 'comment-pass.json', {
+    phase: 1,
+    verdicts: [{ task: 'T1', verdict: 'PASS' }, { task: 'T2', verdict: 'PASS' }],
+    prLinked: true,
+  });
+  const env = json(['format', 'comment', '--input', input, '--json']);
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+  assert.match(body, /^<!-- pocket-phase-1-summary -->/);
+  assert.equal(/Action Required/.test(body), false);
+});
+
+test('format closeout writes a closeout summary body', () => {
+  const dir = tmp();
+  const input = writeInput(dir, 'closeout.json', { slug: 'pocket-enterprise', issue: 42, phases: 2 });
+  const env = json(['format', 'closeout', '--input', input, '--json']);
+  assert.equal(env.ok, true);
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+  assert.ok(body.length > 0);
+  assert.equal(body.includes('\r'), false); // LF-only
+});
+
 // ─── reconcile set-diff (child process; --prior/--new <json> file inputs) ───
 // Inputs are JSON arrays of fingerprint records (each at least { fingerprint,
 // ...metadata }). Reuses writeInput() from T5's block. data.resolve/post/keep
