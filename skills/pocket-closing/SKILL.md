@@ -180,7 +180,22 @@ gh issue comment <issue-number> --body-file <bodyFile>
 
 **[CRITICAL] Do NOT call `gh issue close`.** The issue closes when the supervisor **merges** the final PR (`closes #<issue>` in the PR body). Merge is the human gate — Pocket never closes the issue directly.
 
-### Step E5: Check linking PR merge state
+### Step E5: Discover linking PR number
+
+```bash
+npx -y pocketto-pi meta get <plan_dir> github_pr.number --json --contract 2
+```
+
+If `data.value` is non-null → use it as the PR number. Otherwise, fall back to branch discovery:
+
+```bash
+branch=$(git rev-parse --abbrev-ref HEAD)
+gh pr list --head "$branch" --json number --jq '.[0].number // empty'
+```
+
+If no PR number is found by either method → emit warning: `"Enterprise closeout: could not determine linking PR number — skipping merge-state check."` → skip to Closeout Summary (the closeout comment was still posted).
+
+### Step E6: Check linking PR merge state
 
 ```bash
 gh pr view <pr-number> --json state,merged
@@ -192,8 +207,6 @@ If `merged` is `false` → the closeout comment has been posted, but emit this w
 ⚠️  The linking PR (#<pr-number>) is not yet merged.
     The issue will close when the supervisor merges this PR.
 ```
-
-If no PR number is available in `.pocket-meta.json`, skip the PR state check (the closeout was still posted).
 
 ## Closeout Summary
 
