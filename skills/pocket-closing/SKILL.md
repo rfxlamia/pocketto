@@ -136,6 +136,65 @@ npx -y pocketto-pi log close <plan_dir> --json --contract 2
 
 `PHASE_ADVANCED` is the normal mid-pipeline state for phased plans: you advanced one phase, the plan continues. Point the user back to pocket-development / pocket-review for the next phase.
 
+## Enterprise Mode (opt-in): Closeout
+
+This section runs **only** when enterprise mode is active **and** the plan reached `CLOSED` (all verdicts clean, `log close` succeeded). Non-enterprise runs skip it entirely — the skill behaves exactly as today.
+
+### Step E1: Detect enterprise mode
+
+```bash
+npx -y pocketto-pi mode --json --contract 2
+```
+
+Parse the envelope. If `ok: false` or `data.enterprise` is not `true` → **skip this entire section** (proceed directly to Closeout Summary). Fail-closed: no GitHub calls in non-enterprise mode, ever.
+
+### Step E2: Read linked issue from `.pocket-meta.json`
+
+```bash
+npx -y pocketto-pi meta get <plan_dir> github_issue.number --json --contract 2
+```
+
+If `data.value` is `null` or missing → emit warning: `"Enterprise closeout skipped: no linked issue in .pocket-meta.json."` → proceed to Closeout Summary (no GitHub call).
+
+### Step E3: Build closeout body via CLI
+
+Write the closeout input to a temp JSON file:
+
+```json
+{ "slug": "<plan-slug>", "issue": <issue-number>, "phases": <phase-count> }
+```
+
+Then:
+
+```bash
+npx -y pocketto-pi format closeout --input <tmp.json> --json --contract 2
+```
+
+Parse `data.bodyFile` from the envelope.
+
+### Step E4: Post closeout comment
+
+```bash
+gh issue comment <issue-number> --body-file <bodyFile>
+```
+
+**[CRITICAL] Do NOT call `gh issue close`.** The issue closes when the supervisor **merges** the final PR (`closes #<issue>` in the PR body). Merge is the human gate — Pocket never closes the issue directly.
+
+### Step E5: Check linking PR merge state
+
+```bash
+gh pr view <pr-number> --json state,merged
+```
+
+If `merged` is `false` → the closeout comment has been posted, but emit this warning:
+
+```text
+⚠️  The linking PR (#<pr-number>) is not yet merged.
+    The issue will close when the supervisor merges this PR.
+```
+
+If no PR number is available in `.pocket-meta.json`, skip the PR state check (the closeout was still posted).
+
 ## Closeout Summary
 
 On `CLOSED` only, write `<plan_dir>/closeout.md` — the artifact that ends the plan. Load `references/closeout-summary-template.md` for the exact format. It records, per phase: each task, its `done_sha`, its verdict, and the observations carried forward; plus header dates and the final SHA range.
