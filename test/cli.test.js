@@ -15,6 +15,7 @@ const path = require('node:path');
 const CLI = path.join(__dirname, '..', 'cli', 'index.js');
 
 // In-process modules for the extension-setup unit tests (no child process).
+const identity = require('../cli/lib/identity');
 const extensions = require('../cli/lib/extensions');
 const setupExtensions = require('../cli/commands/setup-extensions');
 
@@ -46,6 +47,55 @@ function writeModeConfig(dir, file, body) {
 function enterpriseBlock(lines, eol = '\n') {
   return ['# Local Agent Notes', '', '## Pocket Enterprise', '', '```', ...lines, '```', ''].join(eol);
 }
+
+test('fingerprint ignores line numbers for the same finding identity', () => {
+  const base = {
+    file: 'cli/index.js',
+    ruleId: 'review/no-raw-bytes',
+    message: 'Hash normalized strings only.',
+    occurrence: 0,
+  };
+
+  const line12 = identity.fingerprint({ ...base, line: 12 });
+  const line47 = identity.fingerprint({ ...base, line: 47 });
+
+  assert.equal(line12, line47);
+  assert.match(line12, /^[0-9a-f]{16}$/);
+});
+
+test('fingerprint includes occurrence indexes for duplicate findings', () => {
+  const base = {
+    file: 'cli/index.js',
+    ruleId: 'review/no-raw-bytes',
+    message: 'Hash normalized strings only.',
+  };
+
+  assert.notEqual(
+    identity.fingerprint({ ...base, occurrence: 0 }),
+    identity.fingerprint({ ...base, occurrence: 1 }),
+  );
+});
+
+test('fingerprint normalizes CRLF messages to LF before hashing', () => {
+  const base = {
+    file: 'cli/lib/identity.js',
+    ruleId: 'review/eol-normalized',
+    occurrence: 0,
+  };
+
+  assert.equal(
+    identity.fingerprint({ ...base, message: 'First line\nSecond line\n' }),
+    identity.fingerprint({ ...base, message: 'First line\r\nSecond line\r\n' }),
+  );
+});
+
+test('markerFor and parseMarker use canonical phase summary comments', () => {
+  const marker = identity.markerFor(3);
+
+  assert.equal(marker, '<!-- pocket-phase-3-summary -->');
+  assert.equal(identity.parseMarker(marker), 3);
+  assert.equal(identity.parseMarker('<!-- other comment -->'), null);
+});
 
 test('mode defaults to local mode when no Pocket Enterprise heading exists', () => {
   const dir = tmp();
