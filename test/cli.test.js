@@ -981,3 +981,67 @@ test('the new --strict/--all flags are accepted; unknown flags still rejected', 
   const bad = run(['doctor', '--nope', '--json'], { expectFail: true });
   assert.equal(JSON.parse(bad.stdout.trim()).error.code, 'UNKNOWN_FLAG');
 });
+
+// ─── format issue|pr (child process; structured input via --input <json>) ───
+// The formatter reads a structured-input JSON file and WRITES the rendered
+// body to a temp file, returning its path in data.bodyFile. Tests write the
+// input into a tmp() dir, then read data.bodyFile back to assert content.
+// Assert only the spec-named contract: the 4 FSTrack sections, the
+// refs/closes keyword, data.fileWarning — not exact prose/spacing.
+
+function writeInput(dir, name, obj) {
+  const p = path.join(dir, name);
+  writeFileSync(p, JSON.stringify(obj));
+  return p;
+}
+
+test('format issue writes a temp body file with the 4 FSTrack sections in order', () => {
+  const dir = tmp();
+  const input = writeInput(dir, 'issue.json', {
+    title: 'GitHub Trace Loop',
+    konteks: 'why this work exists',
+    rencanaTeknis: 'the technical plan',
+    acceptanceCriteria: ['AC1', 'AC2'],
+    diLuarScope: ['team coordination'],
+  });
+  const env = json(['format', 'issue', '--input', input, '--json']);
+  assert.equal(env.ok, true);
+  assert.ok(env.data.bodyFile, 'expected data.bodyFile path');
+
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+  // The four FSTrack sections appear in order (Indonesian labels, Story 1.2).
+  const iKonteks = body.indexOf('Konteks');
+  const iRencana = body.indexOf('Rencana Teknis');
+  const iAC = body.indexOf('Acceptance Criteria');
+  const iScope = body.indexOf('Di Luar Scope');
+  assert.ok(iKonteks >= 0 && iRencana > iKonteks && iAC > iRencana && iScope > iAC,
+    'all four sections present and in order');
+  assert.equal(body.includes('\r'), false); // LF-only
+});
+
+test('format pr selects closes vs refs from the (input-driven) phase position', () => {
+  const dir = tmp();
+  // Final/sole phase → closes #N.
+  const finalInput = writeInput(dir, 'pr-final.json', { issue: 42, finalPhase: true, fileCount: 3, what: 'w', why: 'y', howToTest: 'h' });
+  const fin = json(['format', 'pr', '--input', finalInput, '--json']);
+  assert.equal(fin.data.linkKeyword, 'closes');
+  assert.match(readFileSync(fin.data.bodyFile, 'utf8'), /closes #42/);
+
+  // Non-final phase → refs #N (no premature close).
+  const midInput = writeInput(dir, 'pr-mid.json', { issue: 42, finalPhase: false, fileCount: 3, what: 'w', why: 'y', howToTest: 'h' });
+  const mid = json(['format', 'pr', '--input', midInput, '--json']);
+  assert.equal(mid.data.linkKeyword, 'refs');
+  const midBody = readFileSync(mid.data.bodyFile, 'utf8');
+  assert.match(midBody, /refs #42/);
+  assert.equal(/closes #42/.test(midBody), false);
+});
+
+test('format pr surfaces a non-blocking >20-file warning but still produces the body', () => {
+  const dir = tmp();
+  const input = writeInput(dir, 'pr-big.json', { issue: 42, finalPhase: true, fileCount: 23, what: 'w', why: 'y', howToTest: 'h' });
+  const env = json(['format', 'pr', '--input', input, '--json']);
+  assert.equal(env.ok, true); // non-blocking
+  assert.equal(env.data.fileWarning, true);
+  // The body is still produced.
+  assert.ok(readFileSync(env.data.bodyFile, 'utf8').length > 0);
+});
