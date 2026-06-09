@@ -592,6 +592,21 @@ pocket-review dispatches parallel reviewer subagents (one per task) and writes r
 <plan_dir>/reviews/
 ```
 
+**Pocket Enterprise — create-pr offer (Story 2, user-triggered).** Immediately after the handoff above, run:
+
+```bash
+npx -y pocketto-pi mode --json --contract 2
+```
+
+- If `ok` is `false` **or** `data.enterprise` is not strictly `true` → **do nothing.** No GitHub mention, no prompt. Non-enterprise handoff stays byte-identical to today (fail-closed).
+- If `ok` is `true` and `data.enterprise` is `true` → append **one line** only:
+
+```
+Run: /pocketto:create-pr <plan_dir> [<phase_file>]
+```
+
+Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the command, user runs it when ready.
+
 ## Status Handling
 
 | Status | Controller Action |
@@ -601,7 +616,7 @@ pocket-review dispatches parallel reviewer subagents (one per task) and writes r
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
 | **BLOCKED** | Categorize blocker type → Fix → Re-dispatch |
 
-**After ALL tasks DONE:** emit PHASE_COMPLETE handoff with the `/pocketto:pocket-review <plan_dir>` command. Do NOT invoke pocket-review directly — it is user-triggered.
+**After ALL tasks DONE:** emit PHASE_COMPLETE handoff with the `/pocketto:pocket-review <plan_dir>` command. Do NOT invoke pocket-review directly — it is user-triggered. If `pocketto-pi mode` returns `enterprise=true`, append the one-line `/pocketto:create-pr` offer (do not invoke create-pr).
 
 ### BLOCKED Categorization
 
