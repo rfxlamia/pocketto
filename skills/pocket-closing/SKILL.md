@@ -58,6 +58,14 @@ If invoked with a file path → plan_dir = parent dir, target = that phase file
 If invoked with a dir path  → plan_dir = dir, target = every phase in log.json
 ```
 
+Also derive `spec_dir` (used by the enterprise reads in E2 and E5), mirroring create-pr:
+
+```text
+spec_dir = docs/pocket/spec/<slug>/ where <slug> matches the plan directory basename
+```
+
+`.pocket-meta.json` lives under `<spec_dir>` (every writer — create-pr, pocket-grinding — writes it there), so the enterprise reads below resolve it from `spec_dir`, not `plan_dir`. `log.json`, `reviews/`, and `closeout.md` stay under `<plan_dir>`.
+
 ### Step 2: Read log.json
 
 ```text
@@ -151,7 +159,7 @@ Parse the envelope. If `ok: false` or `data.enterprise` is not `true` → **skip
 ### Step E2: Read linked issue from `.pocket-meta.json`
 
 ```bash
-npx -y pocketto-pi meta get <plan_dir> github_issue.number --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> github_issue.number --json --contract 2
 ```
 
 If `data.value` is `null` or missing → emit warning: `"Enterprise closeout skipped: no linked issue in .pocket-meta.json."` → proceed to Closeout Summary (no GitHub call).
@@ -182,8 +190,10 @@ gh issue comment <issue-number> --body-file <bodyFile>
 
 ### Step E5: Discover linking PR number
 
+Derive `<phase_key>` from the target phase file name, mirroring create-pr: `phase-N` from the phase file name (`execution-plan-phase-N.md` → `phase-N`); flat single-file plan → `phase-1`. The PR number is written by create-pr at the phase-nested path, so read it there:
+
 ```bash
-npx -y pocketto-pi meta get <plan_dir> github_pr.number --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
 ```
 
 If `data.value` is non-null → use it as the PR number. Otherwise, fall back to branch discovery:
