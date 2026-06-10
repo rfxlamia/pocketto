@@ -1,0 +1,6 @@
+# Pocket Enterprise — LF-normalized traveling state
+log.json text eol=lf
+AGENTS.md text eol=lf
+*.json text eol=lf
+docs/pocket/plans/**/*.md text eol=lf
+docs/pocket/spec/**/*.md text eol=lf
