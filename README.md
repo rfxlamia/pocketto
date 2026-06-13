@@ -138,7 +138,7 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 **`pocket-development`** — Precise subagent delegation for task-by-task execution. Every delegation requires a Pocket Packet — a structured contract with objective, verification criteria, and stop conditions. Enforces 6 iron laws: no packet = no spawn.
 *Trigger:* "execute plan", "delegate tasks", "dispatch subagents".
 
-**`pocket-review`** — Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — it does NOT auto-call. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED`.
+**`pocket-review`** — Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — it does NOT auto-call. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. On failures, prints Action Required with the safe fix/re-review path: refresh `done_sha` only for the last DONE task in a phase; use a correction task/phase for non-last failures. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED`.
 *Trigger:* `/pocketto:pocket-review <plan_dir>`.
 
 **`pocket-closing`** — Terminal stage. **User-triggered** after `pocket-review` writes verdicts. Reconciles every `reviews/*.json` against `log.json`, gates the close on verdicts (any fail or unreviewed task → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE`, runs `log close`, and writes `closeout.md`. Returns `CLOSED`, `PHASE_ADVANCED`, `CLOSE_BLOCKED`, or `ALREADY_CLOSED`.

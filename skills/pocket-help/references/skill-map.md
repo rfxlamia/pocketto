@@ -52,10 +52,10 @@ Two kinds of skills:
 - **Skip when:** No plan yet (→ pocket-planning), or tasks are tightly coupled (manual execution / redesign).
 
 ### pocket-review
-- **What:** Post-phase batch reviewer. Main agent runs preflight (validates log.json, computes per-task SHA ranges) and dispatches **parallel** reviewer subagents — one per task — then collects results into `reviews/`. No review loop: fix and re-run.
+- **What:** Post-phase batch reviewer. Main agent runs preflight (validates log.json, computes per-task SHA ranges) and dispatches **parallel** reviewer subagents — one per task — then collects results into `reviews/`. No automatic fix loop: failed reviews print Action Required with the safe `done_sha` refresh path.
 - **Input:** A completed phase/plan with `log.json` (all target tasks DONE with `done_sha`).
 - **Output:** Per-task review JSON (`<plan_dir>/reviews/<task>-review.json`) + a summary table. States: `PHASE_REVIEWED` or `PHASE_BLOCKED`.
-- **Handoff:** **Auto-chains to `pocket-closing`** after one confirmation when every reviewable task is `REVIEW_PASS`; on any `REVIEW_FAIL`/`REVIEW_BLOCKED` it does not chain (fix and re-review). The user can also invoke `pocket-closing` directly.
+- **Handoff:** **Auto-chains to `pocket-closing`** after one confirmation when every reviewable task is `REVIEW_PASS`; on any `REVIEW_FAIL`/`REVIEW_BLOCKED` it does not chain. Fix and re-review only after following the Action Required block; non-last failed tasks need a correction task/phase instead of manual `done_sha` refresh. The user can also invoke `pocket-closing` directly.
 - **Use when:** **The user** invokes it after pocket-development finishes a phase/flat plan: `/pocketto:pocket-review <plan_dir>`.
 - **Skip when:** During development (pocket-development does its own per-task quick audit; full review is the separate post-phase step).
 
@@ -65,7 +65,7 @@ Two kinds of skills:
 - **Output:** `log.json` header set to `DONE` + `date_completed`; `<plan_dir>/closeout.md`. States: `CLOSED`, `PHASE_ADVANCED`, `CLOSE_BLOCKED`, `ALREADY_CLOSED`.
 - **Handoff:** Terminal — this is where the pipeline ends. For phased plans, `PHASE_ADVANCED` points back to pocket-development/pocket-review for the next phase.
 - **Use when:** Reached automatically when pocket-review chains here on an all-`REVIEW_PASS` phase (after one confirmation), or invoked directly by the user after reviews are written: `/pocketto:pocket-closing <plan_dir>`.
-- **Skip when:** Any task is still `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed — fix and re-review first.
+- **Skip when:** Any task is still `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed — follow pocket-review's Action Required block before re-reviewing.
 
 ---
 

@@ -167,6 +167,35 @@ Pass: 1  Issues: 1  Skipped: 1
 
 3. For each REVIEW_FAIL task, print the `fix_instructions` from the report.
 
+4. If any task is `REVIEW_FAIL` or `REVIEW_BLOCKED`, print the **Action Required**
+   block below before stopping:
+
+```
+ACTION REQUIRED — review did not pass
+
+Do not run pocket-closing yet.
+
+For each REVIEW_FAIL task:
+1. Read reviews/<task_id>-review.json and apply the printed fix_instructions.
+2. Decide whether the task's done_sha can be refreshed safely:
+   - SAFE: the failed task is the last DONE task in this phase, or this phase has only one DONE task.
+     After committing the fix, run:
+       npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --task <task_id> --json --contract 2
+     Then re-run:
+       /pocketto:pocket-review <plan_dir>/<phase_file>
+   - NOT SAFE: any later task in this same phase is already DONE with done_sha.
+     Do not refresh this task's done_sha manually. It would change the SHA boundary
+     for downstream tasks. Stop and create a correction task/phase, or redesign the
+     fix cycle with append-only correction metadata.
+
+For REVIEW_BLOCKED:
+- Do not enter a fix cycle. Resolve the blocker or escalate as instructed.
+```
+
+Why this matters: pocket-review computes task ranges linearly as
+`previous_task.done_sha..task.done_sha`. Refreshing a non-last task after later
+tasks are already DONE retroactively changes the next task's starting boundary.
+
 ## Enterprise mode (opt-in): post verdicts to PR
 
 This section runs **after** the summary table is printed and review JSONs are written (Collect and Write) and **before** Chain to pocket-closing. In non-enterprise mode, it is skipped entirely — no GitHub calls are made.
@@ -406,7 +435,7 @@ After the summary table is printed, decide whether to chain into pocket-closing.
 - Tasks skipped because `not DONE` or missing `done_sha` do **not** block the chain — pocket-closing excludes them from its gate too (they have no `done_sha` to reconcile).
 - Tasks skipped because of empty diff (`DONE + done_sha + no file changes`) received a REVIEW_PASS skip stub in Step 5 — pocket-closing will find the file and reconcile them as REVIEW_PASS; they do not block closing.
 
-If ANY task is `REVIEW_FAIL` or `REVIEW_BLOCKED`, or the run ended `PHASE_BLOCKED` → **do NOT chain.** Print the fix path (fix the code → re-run pocket-review) and stop. Closing is gated on clean verdicts; chaining a failing phase would only hit `CLOSE_BLOCKED`.
+If ANY task is `REVIEW_FAIL` or `REVIEW_BLOCKED`, or the run ended `PHASE_BLOCKED` → **do NOT chain.** Print the Action Required block from Collect and Write, then stop. Closing is gated on clean verdicts; chaining a failing phase would only hit `CLOSE_BLOCKED`.
 
 ### Confirmation checkpoint (single prompt)
 
@@ -440,10 +469,10 @@ On confirmation:
 
 | State | Meaning |
 |-------|---------|
-| PHASE_REVIEWED | All reviewable tasks reviewed. All `REVIEW_PASS` → chain to pocket-closing (one confirmation). Any issue → stop, fix, re-run |
+| PHASE_REVIEWED | All reviewable tasks reviewed. All `REVIEW_PASS` → chain to pocket-closing (one confirmation). Any issue → print Action Required, then stop |
 | PHASE_BLOCKED | Preflight failed — cannot review |
 
-**No review loop in batch mode.** If issues are found (REVIEW_FAIL in JSON), fix the code and re-run pocket-review.
+**No automatic fix loop in batch mode.** If issues are found (`REVIEW_FAIL` in JSON), print the Action Required block and stop. The user may fix and re-run pocket-review, but must refresh `done_sha` only when the failed task is a safe boundary.
 Re-running overwrites existing `reviews/<task_id>-review.json` files.
 
 ## Iron Laws

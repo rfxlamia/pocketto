@@ -48,7 +48,7 @@ Main agent is **delegator + auditor only** — it never writes implementation co
 ### 6. pocket-review — review (user-triggered)
 **The user** runs `/pocketto:pocket-review <plan_dir>` after a phase/plan is DONE. Main agent validates `log.json`, computes per-task SHA ranges, and dispatches **parallel** reviewer subagents (one per task), then writes results to `reviews/`.
 - **Output states:** `PHASE_REVIEWED` (each task pass or issues) or `PHASE_BLOCKED` (preflight failed).
-- **No loop:** if a task is `REVIEW_FAIL`, fix the code and re-run review.
+- **No automatic fix loop:** if a task is `REVIEW_FAIL`, pocket-review prints Action Required. Fix and re-run review only after handling `done_sha` safely: refresh the failed task only when it is the last DONE task in the phase; otherwise create a correction task/phase.
 - **Next:** Fix findings, then continue with the next phase (back to stage 5). When every task in a phase is `REVIEW_PASS`, pocket-review **auto-chains to `pocket-closing`** after one confirmation (it does not chain if anything failed).
 
 ### 7. pocket-closing — close (auto-chained or user-triggered)
