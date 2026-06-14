@@ -81,4 +81,18 @@ function getRangeFiles(cwd, base, head) {
   }
 }
 
-module.exports = { getGitSha, getRemoteUrl, getCommitFiles, getRangeFiles };
+// Returns true if <sha> resolves to a commit object in the given repo, false
+// otherwise (invalid sha, not a commit, or git unavailable). Never throws.
+function commitExists(cwd, sha) {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${sha}^{commit}`], {
+      cwd,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { getGitSha, getRemoteUrl, getCommitFiles, getRangeFiles, commitExists };

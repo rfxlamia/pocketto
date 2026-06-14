@@ -8,7 +8,7 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { readLog, writeLog, todayISO } = require('../lib/logjson');
-const { getGitSha, getCommitFiles, getRangeFiles } = require('../lib/git');
+const { getGitSha, getCommitFiles, getRangeFiles, commitExists } = require('../lib/git');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
 const VALID_SET = new Set(VALID_STATUSES);
@@ -311,6 +311,12 @@ function recordCorrection(positionals, sha, forTask) {
     }
   }
 
+  // FIX 2: reject an invalid/unresolvable sha before getCommitFiles silently
+  // returns [] and causes recordCorrection to skip without any error.
+  if (!commitExists(planDir, sha)) {
+    throw new CliError('UNKNOWN_SHA', `correction sha '${sha}' is not a commit in '${planDir}'.`);
+  }
+
   const files = getCommitFiles(planDir, sha);
 
   // Empty-diff correction (e.g. --allow-empty, or a revert that nets to nothing)
@@ -329,6 +335,15 @@ function recordCorrection(positionals, sha, forTask) {
     };
   }
 
+  // FIX 1: guard against a null baseline_sha — without it buildOwnerMap cannot
+  // produce meaningful attribution (getRangeFiles would be called with null base).
+  if (!log.header.baseline_sha) {
+    throw new CliError(
+      'NO_BASELINE',
+      `baseline_sha is missing in log.json header — cannot attribute corrections (was log init run inside a git repo?).`,
+    );
+  }
+
   const owner = buildOwnerMap(planDir, phase, log.header.baseline_sha);
 
   // Attribution: every owning task whose files appear in this commit.
@@ -345,8 +360,21 @@ function recordCorrection(positionals, sha, forTask) {
   const bleedTasks = [...bleed].sort();
 
   // Idempotency: a sha already recorded on this phase → no-op + warn.
+  // FIX 3: recompute affectedTasks/bleed from the PERSISTED entry's for_task and
+  // files so a re-run with a different --for-task reports stored attribution, not
+  // the new request's.
   const existing = phase.corrections.find((c) => c.sha === sha);
   if (existing) {
+    const storedForId = existing.for_task || null;
+    const idempotentAffected = new Set();
+    if (storedForId) idempotentAffected.add(storedForId);
+    const idempotentBleed = new Set();
+    for (const f of existing.files || []) {
+      const o = owner[f];
+      if (!o) continue;
+      idempotentAffected.add(o);
+      if (storedForId && o !== storedForId) idempotentBleed.add(o);
+    }
     return {
       command: 'log update',
       exit: 0,
@@ -355,7 +383,13 @@ function recordCorrection(positionals, sha, forTask) {
         planDir,
         phaseFile,
         level: 'correction',
-        correction: { sha, files: existing.files, affectedTasks, bleed: bleedTasks, idempotent: true },
+        correction: {
+          sha,
+          files: existing.files,
+          affectedTasks: [...idempotentAffected].sort(),
+          bleed: [...idempotentBleed].sort(),
+          idempotent: true,
+        },
       },
     };
   }

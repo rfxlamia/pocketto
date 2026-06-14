@@ -128,6 +128,7 @@ Usage:
   pocketto-pi structure <execution-plan.md> [--dry-run] [--json]
   pocketto-pi log init   <plan_dir>                       [--json]
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
+  pocketto-pi log update <plan_dir> <phase_file> --correction <sha> [--for-task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
   pocketto-pi meta get   <dir> <field>                    [--json]
   pocketto-pi meta set   <dir> <field> <value>            [--json]

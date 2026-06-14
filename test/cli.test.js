@@ -1390,6 +1390,21 @@ test('log update --correction attributes to for_task even when owner is another 
   assert.deepEqual(env.data.correction.bleed, ['T2']);
 });
 
+test('log update --correction rejects a bogus (unresolvable) sha with UNKNOWN_SHA', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  const phase = setupPhasedDone(dir);
+
+  const bogusSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+  const res = run(
+    ['log', 'update', dir, phase, '--correction', bogusSha, '--for-task', 'T1', '--json'],
+    { expectFail: true },
+  );
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.ok, false);
+  assert.equal(env.error.code, 'UNKNOWN_SHA');
+  assert.match(env.error.message, /not a commit/);
+});
+
 test('log update --correction skips an empty-diff commit (nothing to attribute)', { skip: !hasGit() }, () => {
   const dir = tmp();
   const phase = setupPhasedDone(dir);

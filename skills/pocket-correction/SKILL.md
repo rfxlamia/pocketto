@@ -69,7 +69,9 @@ Run ALL steps before delegating any fix.
 
 ```
 If invoked with a file path → plan_dir = parent dir, phase_file = filename
-If invoked with a dir path → scan for execution-plan*.md, use the only/first match
+If invoked with a dir path → scan for execution-plan*.md; require exactly one match.
+  Halt on 0 matches (no plan found in dir).
+  Halt on >1 matches (ambiguous — re-invoke with the explicit <plan_dir>/<phase_file>).
 ```
 
 ### Step 2: Read log.json
@@ -126,7 +128,7 @@ The implementer's fix commit **must contain only the source files being fixed** 
 
 Instruct the implementer explicitly:
 - Stage files by name: `git add <file1> <file2>` — **never `git add -A` or `git add .`** while `log.json` is dirty (the CLI writes `log.json` before the subagent runs, leaving it dirty in the working tree).
-- Alternative: ensure `log.json` is committed or stashed BEFORE making the fix commit.
+- Alternative: stash or exclude `log.json` before making the fix commit; never create a separate `log.json` commit in the correction loop.
 - One commit, exactly — the sha returned must be HEAD after the commit.
 
 If `log.json` is swept into the fix commit, `getCommitFiles` on that sha includes it, and `log.json` appears in `data.correction.files`, corrupting the per-file attribution that pocket-review and pocket-closing rely on.
