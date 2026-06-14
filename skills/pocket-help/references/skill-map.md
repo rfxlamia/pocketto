@@ -52,12 +52,20 @@ Two kinds of skills:
 - **Skip when:** No plan yet (→ pocket-planning), or tasks are tightly coupled (manual execution / redesign).
 
 ### pocket-review
-- **What:** Post-phase batch reviewer. Main agent runs preflight (validates log.json, computes per-task SHA ranges) and dispatches **parallel** reviewer subagents — one per task — then collects results into `reviews/`. No automatic fix loop: failed reviews print Action Required with the safe `done_sha` refresh path.
+- **What:** Post-phase batch reviewer. Main agent runs preflight (validates log.json, computes per-task SHA ranges) and dispatches **parallel** reviewer subagents — one per task — then collects results into `reviews/`. No automatic fix loop: on `REVIEW_FAIL` it prints Action Required pointing to `pocket-correction`.
 - **Input:** A completed phase/plan with `log.json` (all target tasks DONE with `done_sha`).
 - **Output:** Per-task review JSON (`<plan_dir>/reviews/<task>-review.json`) + a summary table. States: `PHASE_REVIEWED` or `PHASE_BLOCKED`.
-- **Handoff:** **Auto-chains to `pocket-closing`** after one confirmation when every reviewable task is `REVIEW_PASS`; on any `REVIEW_FAIL`/`REVIEW_BLOCKED` it does not chain. Fix and re-review only after following the Action Required block; non-last failed tasks need a correction task/phase instead of manual `done_sha` refresh. The user can also invoke `pocket-closing` directly.
+- **Handoff:** **Auto-chains to `pocket-closing`** after one confirmation when every reviewable task is `REVIEW_PASS`; on any `REVIEW_FAIL` it does not chain — it prints Action Required pointing to pocket-correction. On `REVIEW_BLOCKED` it halts. The user can also invoke `pocket-closing` directly.
 - **Use when:** **The user** invokes it after pocket-development finishes a phase/flat plan: `/pocketto:pocket-review <plan_dir>`.
 - **Skip when:** During development (pocket-development does its own per-task quick audit; full review is the separate post-phase step).
+
+### pocket-correction
+- **What:** REVIEW_FAIL fix stage. Main agent is **Delegator + Auditor only** (never writes code). Reads `reviews/` for `REVIEW_FAIL` tasks, builds a correction packet per task from `fix_instructions` + the plan's DELIVERABLE, delegates each fix to one implementer subagent sequentially (never parallel — parallel collapses commits and corrupts per-task file attribution), runs a quick audit, then records the correction via `pocketto-pi log update --correction` (append-only; `done_sha` never moves). On `REVIEW_BLOCKED` it halts for escalation instead.
+- **Input:** A reviewed phase/plan with ≥1 `REVIEW_FAIL` task and corresponding `reviews/<task_id>-review.json` files.
+- **Output:** Append-only `phase.corrections[]` entries in `log.json`, one per successfully corrected task. States: `CORRECTIONS_RECORDED`, `CORRECTION_PARTIAL`, `NOTHING_TO_CORRECT`, or `CORRECTION_BLOCKED`.
+- **Handoff:** Does NOT auto-invoke pocket-review. Emits: `"Corrections recorded — run /pocketto:pocket-review <plan_dir>/<phase_file>"`. Re-review stays user-triggered.
+- **Use when:** pocket-review has printed `REVIEW_FAIL` and the user is in agent-managed execution: `/pocketto:pocket-correction <plan_dir>/<phase_file>`.
+- **Skip when:** All tasks are `REVIEW_PASS` (→ pocket-closing), or any task is `REVIEW_BLOCKED` (→ escalate, not fix), or still mid-phase in development (→ pocket-development).
 
 ### pocket-closing
 - **What:** Terminal stage. Main agent is **reconciler + closer only** — it never reviews code. Reads `log.json` + every `reviews/*.json`, gates the close on review verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` blocks), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes a closeout summary. State changes go through `pocketto-pi log` only — no hand-editing.

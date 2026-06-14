@@ -61,7 +61,7 @@ Recommended (with `--all`): `@juicesharp/rpiv-ask-user-question`, `@tintinweb/pi
 
 | Kind | Skills | Use for |
 |------|--------|---------|
-| **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-review · pocket-closing | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
+| **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-review · pocket-correction · pocket-closing | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
 | **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · structured-research · pocket-help | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
 
 The `pocket-*` prefix marks a skill as part of the chained pipeline. `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks.
@@ -78,6 +78,7 @@ Match your situation to one skill. Open only that skill.
 | Execution plan ready — sequence/phase it | `pocket-structuring` | chained |
 | Plan or phase file ready — execute task-by-task | `pocket-development` | chained |
 | A phase/plan is DONE — review it | `pocket-review` | chained |
+| pocket-review returned REVIEW_FAIL — fix and re-record | `pocket-correction` | chained |
 | Reviews all pass — close out the plan | `pocket-closing` | chained |
 | A bug, a failure, or "audit this code" | `bug-hunting` | standalone |
 | Small-to-medium change, full pipeline is overkill | `hotfix` | standalone |
@@ -114,7 +115,10 @@ plan / phase file
 phase DONE
    │  pocket-review          USER triggers · parallel review subagents    [PHASE_REVIEWED / BLOCKED]
    ▼
-reviews written
+reviews written (REVIEW_FAIL?)
+   │  pocket-correction      USER triggers on REVIEW_FAIL · sequential fixes · append-only corrections [CORRECTIONS_RECORDED]
+   ▼ (re-run pocket-review)
+reviews written (all pass)
    │  pocket-closing         USER or review auto-chains · gate · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
    ▼
 plan closed (fix findings & loop phases until every phase is DONE)
@@ -125,7 +129,8 @@ plan closed (fix findings & loop phases until every phase is DONE)
 - `pocket-planning`, after you approve the plan, validates it with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
 - `pocket-structuring` runs only for **≥7-task (split)** plans from planning: it splits them into phase files handed off **one at a time**. (Invoked directly, it also handles ≤6-task passthrough.)
 - `pocket-development` does **NOT** call `pocket-review`. It emits a `PHASE_COMPLETE` handoff; **you** invoke `pocket-review` afterward.
-- `pocket-review` **auto-chains** to `pocket-closing` after **one confirmation** when every task is `REVIEW_PASS` — it still does **NOT** touch `log.json` on passing runs (closing owns that). On `PHASE_BLOCKED` (preflight failure) it stops with the preflight failure message. On any `REVIEW_FAIL`/`REVIEW_BLOCKED` it does **not** chain; it prints an Action Required block. Only refresh a failed task's `done_sha` when that task is the last DONE task in the phase; otherwise create a correction task/phase so downstream SHA ranges are not corrupted.
+- `pocket-review` **auto-chains** to `pocket-closing` after **one confirmation** when every task is `REVIEW_PASS` — it still does **NOT** touch `log.json` on passing runs (closing owns that). On `PHASE_BLOCKED` (preflight failure) it stops with the preflight failure message. On any `REVIEW_FAIL` it does **not** chain; it prints an Action Required block pointing to `pocket-correction`. On `REVIEW_BLOCKED` it halts — resolve the escalation before re-reviewing.
+- `pocket-correction` is the **REVIEW_FAIL fix stage** (user-triggered). It delegates each failed task's fix to an implementer subagent (main agent stays Delegator + Auditor), records an append-only correction commit via `pocketto-pi log update --correction` (done_sha never moves), and hands back for user-triggered re-review. Corrections are SEQUENTIAL — never parallel.
 - `pocket-pitching` does **not** auto-chain — it presents handoff options and you choose whether to start `pocket-grinding`.
 
 > `pocket-closing` is the terminal stage: it reconciles review verdicts, advances `REVIEW → DONE`, runs `log close`, and writes a `closeout.md`. Without it a fully reviewed plan stays in `IN_PROGRESS`/`REVIEW` limbo. Any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task makes it `CLOSE_BLOCKED` — follow pocket-review's Action Required block before re-reviewing.

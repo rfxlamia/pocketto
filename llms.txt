@@ -18,6 +18,7 @@ verification, stop conditions; no packet, no spawn), and gate before done
 - [pocket-structuring](skills/pocket-structuring/SKILL.md): Splits a plan into sequential phase files (passthrough <7 tasks, phase-split ≥7).
 - [pocket-development](skills/pocket-development/SKILL.md): Task-by-task subagent delegation; enforces 6 iron laws, no packet = no spawn.
 - [pocket-review](skills/pocket-review/SKILL.md): User-triggered parallel reviewers (spec compliance + code quality); returns PHASE_REVIEWED or PHASE_BLOCKED.
+- [pocket-correction](skills/pocket-correction/SKILL.md): User-triggered REVIEW_FAIL fix stage; delegates fixes sequentially to implementer subagents, records append-only corrections (done_sha never moves), hands back for re-review.
 - [pocket-closing](skills/pocket-closing/SKILL.md): User-triggered terminal stage; reconciles reviews vs log.json, gates the close, advances phases, writes closeout.md.
 
 ## Standalone skills (no pipeline needed)
