@@ -629,6 +629,27 @@ test('log update warns when a task reuses a sibling done_sha (collapsed parallel
   assert.match(human, /done_sha .* is already recorded for/);
 });
 
+test('log update refreshes done_sha when an already-DONE last task is re-marked DONE', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writePlan(dir, NINE_TASK_PLAN);
+  run(['structure', path.join(dir, 'execution-plan.md')]);
+  gitInitRepo(dir);
+  run(['log', 'init', dir]);
+
+  const phase = 'execution-plan-phase-1.md';
+  const first = json(['log', 'update', dir, phase, 'DONE', '--task', 'T4', '--json']);
+  assert.ok(first.data.doneSha, 'expected initial done_sha');
+
+  git(dir, ['commit', '--allow-empty', '-q', '-m', 'fix T4']);
+  const refreshed = json(['log', 'update', dir, phase, 'DONE', '--task', 'T4', '--json']);
+  assert.equal(refreshed.data.oldStatus, 'DONE');
+  assert.equal(refreshed.data.newStatus, 'DONE');
+  assert.notEqual(refreshed.data.doneSha, first.data.doneSha);
+
+  const log = JSON.parse(readFileSync(path.join(dir, 'log.json'), 'utf8'));
+  assert.equal(log.phases[0].tasks.find((t) => t.id === 'T4').done_sha, refreshed.data.doneSha);
+});
+
 test('log close refuses while phases are not DONE, then finalizes when all DONE', () => {
   const dir = tmp();
   writePlan(dir, NINE_TASK_PLAN);
