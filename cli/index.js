@@ -48,6 +48,8 @@ function parseArgs(argv) {
     input: null,
     prior: null,
     newInput: null,
+    correction: null,
+    forTask: null,
   };
 
   // A flag that takes a value must actually have one — guard against it being
@@ -85,6 +87,10 @@ function parseArgs(argv) {
     else if (a.startsWith('--prior=')) flags.prior = requireValue(a.slice('--prior='.length), '--prior');
     else if (a === '--new') flags.newInput = requireValue(argv[++i], '--new');
     else if (a.startsWith('--new=')) flags.newInput = requireValue(a.slice('--new='.length), '--new');
+    else if (a === '--correction') flags.correction = requireValue(argv[++i], '--correction');
+    else if (a.startsWith('--correction=')) flags.correction = requireValue(a.slice('--correction='.length), '--correction');
+    else if (a === '--for-task') flags.forTask = requireValue(argv[++i], '--for-task');
+    else if (a.startsWith('--for-task=')) flags.forTask = requireValue(a.slice('--for-task='.length), '--for-task');
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -139,6 +145,8 @@ Flags:
   --contract <N>    Assert the expected output contract (version handshake)
   --dry-run         (structure) compute + summarize without writing files
   --task <id>       (log update) update a task within a phase, e.g. --task T1
+  --correction <sha> (log update) record a correction commit on a phase
+  --for-task <id>   (log update) task a correction is primarily for, e.g. --for-task T1
   --strict          (doctor) exit nonzero when a required extension is missing
   --all             (setup-extensions) also install the recommended extensions
   --version, -v     Print version + contract
@@ -198,7 +206,13 @@ function main() {
       const result = structure.run({ planArg: positionals[1], dryRun: flags.dryRun });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'log') {
-      const result = log.run({ sub: positionals[1], positionals: positionals.slice(2), task: flags.task });
+      const result = log.run({
+        sub: positionals[1],
+        positionals: positionals.slice(2),
+        task: flags.task,
+        correction: flags.correction,
+        forTask: flags.forTask,
+      });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'meta') {
       const result = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });

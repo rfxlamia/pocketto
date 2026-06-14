@@ -1216,3 +1216,163 @@ test('getCommitFiles / getRangeFiles return [] on git failure', () => {
   assert.deepEqual(gitlib.getCommitFiles(nodir, 'deadbeef'), []);
   assert.deepEqual(gitlib.getRangeFiles(nodir, 'a', 'b'), []);
 });
+
+const PLAN_4 = [
+  '# Plan',
+  '',
+  '## Pocket Packets',
+  '',
+  '### Task 1: alpha [prereq]',
+  '### Task 2: beta [depends: T1]',
+  '### Task 3: gamma [depends: T2]',
+  '',
+].join('\n');
+
+function setupPhasedDone(dir) {
+  // Build a 3-task flat plan, structure it, init log, and mark T1..T3 DONE
+  // each on its own commit so they have distinct done_sha boundaries.
+  writeFileSync(path.join(dir, 'execution-plan.md'), PLAN_4);
+  run(['structure', path.join(dir, 'execution-plan.md')]);
+  gitInitRepo(dir);
+  run(['log', 'init', dir]);
+  const phase = 'execution-plan.md';
+  for (const t of ['T1', 'T2', 'T3']) {
+    writeFileSync(path.join(dir, `${t.toLowerCase()}.txt`), t);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-q', '-m', `${t} work`]);
+    run(['log', 'update', dir, phase, 'DONE', '--task', t, '--json']);
+    // Commit log.json after each update so the working tree stays clean;
+    // otherwise the dirty log.json bleeds into the next correction commit.
+    git(dir, ['add', 'log.json']);
+    git(dir, ['commit', '-q', '-m', `log: ${t} DONE`]);
+  }
+  return phase;
+}
+
+test('log update --correction appends to phase.corrections with files', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  const phase = setupPhasedDone(dir);
+
+  // A correction to T1 that only touches t1.txt.
+  writeFileSync(path.join(dir, 't1.txt'), 'T1 fixed');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-q', '-m', 'fix T1']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+
+  const env = json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1', '--json']);
+  assert.equal(env.command, 'log update');
+  assert.equal(env.data.level, 'correction');
+  assert.equal(env.data.correction.sha, sha);
+  assert.deepEqual(env.data.correction.files, ['t1.txt']);
+  assert.deepEqual(env.data.correction.affectedTasks, ['T1']);
+  assert.deepEqual(env.data.correction.bleed, []);
+
+  // Persisted under the phase, done_sha untouched.
+  const log = JSON.parse(readFileSync(path.join(dir, 'log.json'), 'utf8'));
+  const ph = log.phases.find((p) => p.file === phase);
+  assert.equal(ph.corrections.length, 1);
+  assert.equal(ph.corrections[0].sha, sha);
+  assert.deepEqual(ph.corrections[0].files, ['t1.txt']);
+  assert.equal(ph.corrections[0].for_task, 'T1');
+});
+
+test('log update --correction warns on cross-task file bleed', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  const phase = setupPhasedDone(dir);
+
+  // A "T1" correction that also edits t2.txt (owned by T2) → bleed.
+  writeFileSync(path.join(dir, 't1.txt'), 'T1 fixed');
+  writeFileSync(path.join(dir, 't2.txt'), 'T2 touched');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-q', '-m', 'fix T1 bleeding into T2']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+
+  const env = json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1', '--json']);
+  assert.deepEqual(env.data.correction.affectedTasks.sort(), ['T1', 'T2']);
+  assert.deepEqual(env.data.correction.bleed, ['T2']);
+
+  const human = run(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1']).stdout;
+  assert.match(human, /already recorded/); // idempotent re-record warns (see next test)
+});
+
+test('log update --correction is idempotent on a duplicate sha (no-op + warn)', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  const phase = setupPhasedDone(dir);
+  writeFileSync(path.join(dir, 't3.txt'), 'T3 fixed');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-q', '-m', 'fix T3']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+
+  json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T3', '--json']);
+  const again = json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T3', '--json']);
+  assert.equal(again.data.correction.idempotent, true);
+
+  const log = JSON.parse(readFileSync(path.join(dir, 'log.json'), 'utf8'));
+  const ph = log.phases.find((p) => p.file === phase);
+  assert.equal(ph.corrections.length, 1); // not appended twice
+});
+
+test('log update --correction preserves the byte-parity writer + additive schema', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  const phase = setupPhasedDone(dir);
+  writeFileSync(path.join(dir, 't1.txt'), 'fix');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-q', '-m', 'fix']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+  json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1', '--json']);
+
+  const raw = readFileSync(path.join(dir, 'log.json'), 'utf8');
+  assert.ok(raw.endsWith('\n'));                       // trailing newline
+  assert.equal(raw, JSON.stringify(JSON.parse(raw), null, 2) + '\n'); // 2-space indent, round-trips
+});
+
+// DISCRIMINATING TEST (advisor): a correction for T1 that touches a file whose
+// LAST writer in original order is T2 must still attribute to T1 (via for_task).
+// Owner-only attribution would strand T1's REVIEW_FAIL forever. setupPhasedDone
+// uses disjoint files and structurally cannot catch this — build a shared file.
+test('log update --correction attributes to for_task even when owner is another task', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'execution-plan.md'), PLAN_4);
+  run(['structure', path.join(dir, 'execution-plan.md')]);
+  gitInitRepo(dir);
+  run(['log', 'init', dir]);
+  const phase = 'execution-plan.md';
+
+  // T1 creates shared.txt; T2 LAST-edits shared.txt → owner[shared.txt] = T2.
+  writeFileSync(path.join(dir, 'shared.txt'), 'v1 by T1');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', 'T1 work']);
+  run(['log', 'update', dir, phase, 'DONE', '--task', 'T1', '--json']);
+  git(dir, ['add', 'log.json']); git(dir, ['commit', '-q', '-m', 'log: T1 DONE']);
+  writeFileSync(path.join(dir, 'shared.txt'), 'v2 by T2');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', 'T2 work']);
+  run(['log', 'update', dir, phase, 'DONE', '--task', 'T2', '--json']);
+  git(dir, ['add', 'log.json']); git(dir, ['commit', '-q', '-m', 'log: T2 DONE']);
+  writeFileSync(path.join(dir, 't3.txt'), 'T3');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', 'T3 work']);
+  run(['log', 'update', dir, phase, 'DONE', '--task', 'T3', '--json']);
+  git(dir, ['add', 'log.json']); git(dir, ['commit', '-q', '-m', 'log: T3 DONE']);
+
+  // Correction FOR T1 that edits shared.txt (owned/last-written by T2).
+  writeFileSync(path.join(dir, 'shared.txt'), 'v3 fix for T1');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', 'fix T1 in shared.txt']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+
+  const env = json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1', '--json']);
+  // The invariant: for_task is first-class — T1 is attributed even though
+  // owner[shared.txt] = T2. (Skill-level trigger/closing consume this set.)
+  assert.ok(env.data.correction.affectedTasks.includes('T1'), 'for_task T1 must be attributed');
+  assert.deepEqual(env.data.correction.affectedTasks.sort(), ['T1', 'T2']);
+  assert.deepEqual(env.data.correction.bleed, ['T2']);
+});
+
+test('log update --correction skips an empty-diff commit (nothing to attribute)', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  const phase = setupPhasedDone(dir);
+  git(dir, ['commit', '--allow-empty', '-q', '-m', 'no-op']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+  const env = json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1', '--json']);
+  assert.equal(env.data.correction.skipped, true);
+  const log = JSON.parse(readFileSync(path.join(dir, 'log.json'), 'utf8'));
+  const ph = log.phases.find((p) => p.file === phase);
+  assert.ok(!ph.corrections || ph.corrections.length === 0); // not recorded
+});
