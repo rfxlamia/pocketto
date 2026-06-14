@@ -435,7 +435,9 @@ After the summary table is printed, decide whether to chain into pocket-closing.
 - Tasks skipped because `not DONE` or missing `done_sha` do **not** block the chain — pocket-closing excludes them from its gate too (they have no `done_sha` to reconcile).
 - Tasks skipped because of empty diff (`DONE + done_sha + no file changes`) received a REVIEW_PASS skip stub in Step 5 — pocket-closing will find the file and reconcile them as REVIEW_PASS; they do not block closing.
 
-If ANY task is `REVIEW_FAIL` or `REVIEW_BLOCKED`, or the run ended `PHASE_BLOCKED` → **do NOT chain.** Print the Action Required block from Collect and Write, then stop. Closing is gated on clean verdicts; chaining a failing phase would only hit `CLOSE_BLOCKED`.
+If the run ended `PHASE_BLOCKED` (preflight failure) → **do NOT chain.** The preflight failure message was already printed in the Preflight step; stop here.
+
+If ANY task is `REVIEW_FAIL` or `REVIEW_BLOCKED` → **do NOT chain.** Print the Action Required block from Collect and Write, then stop. Closing is gated on clean verdicts; chaining a failing phase would only hit `CLOSE_BLOCKED`.
 
 ### Confirmation checkpoint (single prompt)
 
