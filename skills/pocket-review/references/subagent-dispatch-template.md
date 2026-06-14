@@ -66,7 +66,7 @@ Required field values for batch mode:
 - "loop_info": { "current_cycle": <CYCLE>, "max_cycles": 1, "cycles_remaining": 0 }
 - "overall": "REVIEW_PASS" if both stages pass, "REVIEW_FAIL" if any issues, "REVIEW_BLOCKED" if you cannot complete
 - "fix_instructions": "" if REVIEW_PASS, else numbered list with file:line references
-- "reviewed_sha": "<REVIEWED_SHA>" — the boundary commit this review covers. On first cycle: the task's done_sha. On re-review: the newest correction SHA attributed to this task (max by commit time among owned corrections), else done_sha. The main agent computes and passes this value; copy it verbatim.
+- "reviewed_sha": "<REVIEWED_SHA>" — the boundary commit this review covers. On first cycle: the task's done_sha. On re-review: max-by-commit-time of `{done_sha} ∪ {c.sha : T ∈ tasks(c)}` (the same set pocket-closing uses as `latest_owned_sha(T)`), else done_sha. The main agent computes and passes this value; copy it verbatim.
 
 Return ONLY the JSON object — no preamble, no explanation. The main agent writes it to disk.
 

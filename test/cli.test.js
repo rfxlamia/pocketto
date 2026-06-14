@@ -1287,12 +1287,37 @@ test('log update --correction warns on cross-task file bleed', { skip: !hasGit()
   git(dir, ['commit', '-q', '-m', 'fix T1 bleeding into T2']);
   const sha = git(dir, ['rev-parse', 'HEAD']).trim();
 
+  // First (human-mode) recording — must print the bleed warning.
+  const firstHuman = run(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1']).stdout;
+  assert.match(firstHuman, /also touches files owned by/); // bleed warning on fresh record
+
+  // JSON re-run confirms affectedTasks/bleed fields (already recorded = idempotent).
   const env = json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1', '--json']);
   assert.deepEqual(env.data.correction.affectedTasks.sort(), ['T1', 'T2']);
   assert.deepEqual(env.data.correction.bleed, ['T2']);
 
+  // Human-mode re-run hits the idempotent path.
   const human = run(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1']).stdout;
   assert.match(human, /already recorded/); // idempotent re-record warns (see next test)
+});
+
+test('log update --correction rejects an unknown --for-task id', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  const phase = setupPhasedDone(dir);
+
+  // A valid correction commit so we hit the task-guard before getCommitFiles.
+  writeFileSync(path.join(dir, 't1.txt'), 'fix');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-q', '-m', 'fix T1']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+
+  const { stdout, stderr } = run(
+    ['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T99', '--json'],
+    { expectFail: true },
+  );
+  const combined = stdout + stderr;
+  assert.match(combined, /T99/); // error mentions the unknown task id
+  assert.match(combined, /not found/);
 });
 
 test('log update --correction is idempotent on a duplicate sha (no-op + warn)', { skip: !hasGit() }, () => {

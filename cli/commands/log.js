@@ -299,6 +299,18 @@ function recordCorrection(positionals, sha, forTask) {
   if (!phase.corrections) phase.corrections = [];
 
   const forId = forTask ? forTask.toUpperCase() : null;
+
+  // Guard: if --for-task is given and the phase has tasks, the id must exist.
+  if (forId && Array.isArray(phase.tasks) && phase.tasks.length > 0) {
+    const match = phase.tasks.find((t) => t.id.toUpperCase() === forId);
+    if (!match) {
+      throw new CliError(
+        'UNKNOWN_TASK',
+        `task '${forTask}' not found in phase '${phaseFile}'. Available: ${JSON.stringify((phase.tasks || []).map((t) => t.id))}`,
+      );
+    }
+  }
+
   const files = getCommitFiles(planDir, sha);
 
   // Empty-diff correction (e.g. --allow-empty, or a revert that nets to nothing)
