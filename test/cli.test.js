@@ -18,6 +18,7 @@ const CLI = path.join(__dirname, '..', 'cli', 'index.js');
 const identity = require('../cli/lib/identity');
 const extensions = require('../cli/lib/extensions');
 const setupExtensions = require('../cli/commands/setup-extensions');
+const gitlib = require('../cli/lib/git');
 
 function run(args, { expectFail = false, env } = {}) {
   // Merge env overrides onto process.env so PATH (needed to spawn `node`) survives.
@@ -1178,4 +1179,40 @@ test('reconcile output ordering is deterministic across runs', () => {
   const first = fps(json(['reconcile', '--prior', prior, '--new', next, '--json']));
   const second = fps(json(['reconcile', '--prior', prior, '--new', next, '--json']));
   assert.deepEqual(first, second); // reproducible
+});
+
+test('getCommitFiles lists files changed in a single commit (incl. root)', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 't@e.com']);
+  git(dir, ['config', 'user.name', 'T']);
+  git(dir, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(path.join(dir, 'a.txt'), 'a');
+  git(dir, ['add', 'a.txt']);
+  git(dir, ['commit', '-q', '-m', 'root']);          // root commit (no parent)
+  const rootSha = git(dir, ['rev-parse', 'HEAD']).trim();
+  assert.deepEqual(gitlib.getCommitFiles(dir, rootSha), ['a.txt']);
+
+  writeFileSync(path.join(dir, 'b.txt'), 'b');
+  git(dir, ['add', 'b.txt']);
+  git(dir, ['commit', '-q', '-m', 'second']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+  assert.deepEqual(gitlib.getCommitFiles(dir, sha), ['b.txt']);
+});
+
+test('getRangeFiles lists files changed across a base..head range', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  gitInitRepo(dir);
+  const base = git(dir, ['rev-parse', 'HEAD']).trim();
+  writeFileSync(path.join(dir, 'x.txt'), 'x');
+  git(dir, ['add', 'x.txt']);
+  git(dir, ['commit', '-q', '-m', 'x']);
+  const head = git(dir, ['rev-parse', 'HEAD']).trim();
+  assert.deepEqual(gitlib.getRangeFiles(dir, base, head), ['x.txt']);
+});
+
+test('getCommitFiles / getRangeFiles return [] on git failure', () => {
+  const nodir = path.join(tmp(), 'not-a-repo');
+  assert.deepEqual(gitlib.getCommitFiles(nodir, 'deadbeef'), []);
+  assert.deepEqual(gitlib.getRangeFiles(nodir, 'a', 'b'), []);
 });
