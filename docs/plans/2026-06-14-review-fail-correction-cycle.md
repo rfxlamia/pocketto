@@ -243,6 +243,54 @@ test('log update --correction preserves the byte-parity writer + additive schema
   assert.ok(raw.endsWith('\n'));                       // trailing newline
   assert.equal(raw, JSON.stringify(JSON.parse(raw), null, 2) + '\n'); // 2-space indent, round-trips
 });
+
+// DISCRIMINATING TEST (advisor): a correction for T1 that touches a file whose
+// LAST writer in original order is T2 must still attribute to T1 (via for_task).
+// Owner-only attribution would strand T1's REVIEW_FAIL forever. setupPhasedDone
+// uses disjoint files and structurally cannot catch this — build a shared file.
+test('log update --correction attributes to for_task even when owner is another task', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'execution-plan.md'), PLAN_4);
+  run(['structure', path.join(dir, 'execution-plan.md')]);
+  gitInitRepo(dir);
+  run(['log', 'init', dir]);
+  const phase = 'execution-plan.md';
+
+  // T1 creates shared.txt; T2 LAST-edits shared.txt → owner[shared.txt] = T2.
+  writeFileSync(path.join(dir, 'shared.txt'), 'v1 by T1');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', 'T1 work']);
+  run(['log', 'update', dir, phase, 'DONE', '--task', 'T1', '--json']);
+  writeFileSync(path.join(dir, 'shared.txt'), 'v2 by T2');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', 'T2 work']);
+  run(['log', 'update', dir, phase, 'DONE', '--task', 'T2', '--json']);
+  writeFileSync(path.join(dir, 't3.txt'), 'T3');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', 'T3 work']);
+  run(['log', 'update', dir, phase, 'DONE', '--task', 'T3', '--json']);
+
+  // Correction FOR T1 that edits shared.txt (owned/last-written by T2).
+  writeFileSync(path.join(dir, 'shared.txt'), 'v3 fix for T1');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', 'fix T1 in shared.txt']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+
+  const env = json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1', '--json']);
+  // The invariant: for_task is first-class — T1 is attributed even though
+  // owner[shared.txt] = T2. (Skill-level trigger/closing consume this set.)
+  assert.ok(env.data.correction.affectedTasks.includes('T1'), 'for_task T1 must be attributed');
+  assert.deepEqual(env.data.correction.affectedTasks.sort(), ['T1', 'T2']);
+  assert.deepEqual(env.data.correction.bleed, ['T2']);
+});
+
+test('log update --correction skips an empty-diff commit (nothing to attribute)', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  const phase = setupPhasedDone(dir);
+  git(dir, ['commit', '--allow-empty', '-q', '-m', 'no-op']);
+  const sha = git(dir, ['rev-parse', 'HEAD']).trim();
+  const env = json(['log', 'update', dir, phase, '--correction', sha, '--for-task', 'T1', '--json']);
+  assert.equal(env.data.correction.skipped, true);
+  const log = JSON.parse(readFileSync(path.join(dir, 'log.json'), 'utf8'));
+  const ph = log.phases.find((p) => p.file === phase);
+  assert.ok(!ph.corrections || ph.corrections.length === 0); // not recorded
+});
 ```
 
 **Step 2: Run to verify failure**
@@ -340,6 +388,23 @@ function recordCorrection(positionals, sha, forTask) {
 
   const forId = forTask ? forTask.toUpperCase() : null;
   const files = getCommitFiles(planDir, sha);
+
+  // Empty-diff correction (e.g. --allow-empty, or a revert that nets to nothing)
+  // → nothing to attribute. Skip without appending, per design.
+  if (files.length === 0) {
+    return {
+      command: 'log update',
+      exit: 0,
+      human: [`Correction ${sha} has no file changes — skipped (nothing to attribute).`],
+      data: {
+        planDir,
+        phaseFile,
+        level: 'correction',
+        correction: { sha, files: [], affectedTasks: [], bleed: [], skipped: true },
+      },
+    };
+  }
+
   const owner = buildOwnerMap(planDir, phase, log.header.baseline_sha);
 
   // Attribution: every owning task whose files appear in this commit.
@@ -505,8 +570,24 @@ git commit -m "feat(skills): add pocket-correction skill + register on both host
 
 **Files:**
 - Modify: `skills/pocket-review/SKILL.md`
+- Modify: `skills/pocket-review/references/review-report-template.md` (add `reviewed_sha` to normal reviews)
+- Modify: `skills/pocket-review/references/subagent-dispatch-template.md` (instruct subagents to emit it)
 
 > Prose changes only. No runtime test. "Done" = the steps below read coherently and match the CLI data contract.
+
+**The attribution rule (CRITICAL — get this exact).** A correction entry
+`c = {sha, files, for_task}` is attributed to the task set:
+
+```
+tasks(c) = ({for_task} if present) ∪ { owner[f] : f ∈ c.files and owner[f] is defined }
+```
+
+`for_task` is **first-class** — it drives attribution, not just the bleed label.
+Owner-only attribution strands the failed task whenever its fix lands in a file
+last-written by a *different* task (the common shared-file case): the failed task
+would never be re-reviewed and its `REVIEW_FAIL` would never clear → `CLOSE_BLOCKED`
+forever. The CLI already includes `for_task` in `data.correction.affectedTasks`;
+the skill MUST consume it the same way. (Locked by the discriminating test in Task 2.)
 
 **Step 1: Extend Step 3 (Build reviewable task list)**
 
@@ -514,26 +595,40 @@ After the existing reviewable-list logic, add:
 
 - Read `phase.corrections` (may be absent → empty).
 - Build `owner[file]` exactly as the CLI does (chain `prev..done_sha` in plan order, last-writer-wins). State the algorithm inline so a host without the CLI can reproduce it.
-- A task `T` becomes reviewable via **re-review** (in addition to the existing first-cycle rule) when some correction commit touches a file with `owner[file] == T` **and** that commit's sha is newer than the `reviewed_sha` recorded in `reviews/<T>-review.json`. Define "newer" by commit time (`git show -s --format=%cI <sha>`), or treat "sha not equal to recorded reviewed_sha and present in corrections after it" — pick the commit-time rule for determinism and document it.
+- Compute `tasks(c)` for each correction per the rule above (`for_task ∪ owner-touch`).
+- A task `T` becomes reviewable via **re-review** (in addition to the existing first-cycle rule) when some correction `c` has `T ∈ tasks(c)` **and** `c.sha` is newer (by commit time, `git show -s --format=%cI <sha>`) than the `reviewed_sha` recorded in `reviews/<T>-review.json`.
 
 **Step 2: Define the review range (per-file slicing)**
 
 For a reviewable task `T`, the subagent reviews:
-- the original range slice: files in `prev..done_sha` owned by T, AND
-- for each correction commit owning ≥1 of T's files: the slice of that commit limited to T's owned files (`git show <sha> -- <those files>`).
+- the original range slice: files in `prev..done_sha` owned by T (first cycle), AND
+- for each correction `c` with `T ∈ tasks(c)`:
+  - if `T == c.for_task` → review the **whole** correction commit (`git show <sha>`). The for_task owns the fix intent even on shared files.
+  - else (T is a bleed-owner: `owner[f] == T` for some `f`) → review the **slice** of `c` limited to T's owned files (`git show <sha> -- <those files>`).
 
-State explicitly: a correction commit touching two tasks is presented sliced — each task sees only its own files from that commit.
+State explicitly: a correction commit touching two tasks is presented per the rule above — the for_task sees the whole commit; a bleed-owner sees only its own files.
 
 **Step 3: Cycle + reviewed_sha bookkeeping**
 
 When writing `reviews/<T>-review.json` for a re-review:
 - `loop_info.current_cycle` += 1 (and `cycle` mirrors it).
-- `reviewed_sha` = the newest correction sha owning a T-file (by commit time), else `done_sha`.
+- `reviewed_sha` = the newest `c.sha` (by commit time) among corrections with `T ∈ tasks(c)`, else `done_sha`. **This must equal what pocket-closing computes as `latest_owned_sha(T)`** (Task 5) — verify the two definitions are identical, since closing's exact-match freshness depends on it.
 - A passing re-review writes `overall: REVIEW_PASS`, superseding the prior FAIL. A still-failing one writes `REVIEW_FAIL` with fresh `fix_instructions` (cycle-2+, cumulative).
+
+**Step 3b: Add `reviewed_sha` to the NORMAL review template (not just the skip-stub)**
+
+Today only the skip-stub emits `reviewed_sha`; the normal subagent review template
+(`references/review-report-template.md`, required keys ~lines 22–30, and the
+examples) omits it — so closing's exact-SHA freshness silently degrades to the
+timestamp proxy. Add `reviewed_sha` as a **required** field to the normal review
+schema and examples, and instruct subagents (`subagent-dispatch-template.md`) to set
+it to the boundary they reviewed: `done_sha` on first cycle, or the newest owned
+correction sha on a re-review. This makes the exact-match freshness path real for the
+correction model.
 
 **Step 4: Verify coherence**
 
-Re-read the edited Steps 3–5 end to end; confirm the `reviewed_sha`/`cycle`/`loop_info` field names match the skip-stub JSON already in the file (lines ~106–126). No drift.
+Re-read the edited Steps 3–5 end to end; confirm the `reviewed_sha`/`cycle`/`loop_info` field names match the skip-stub JSON already in the file (lines ~106–126) and the template. No drift. Confirm `reviewed_sha(T)` (Step 3) and `latest_owned_sha(T)` (Task 5 Step 1) are written from the **same** attribution set `tasks(c)`.
 
 **Step 5: Commit**
 
@@ -552,9 +647,9 @@ git commit -m "feat(pocket-review): attribute corrections per-file + union revie
 **Step 1: Update Step 3 freshness check (lines ~96–102)**
 
 Replace the "verdict current iff review timestamp ≥ done_sha commit time" rule with:
-- `latest_owned_sha(T)` = the max-by-commit-time of `{ T.done_sha } ∪ { correction commits in phase.corrections whose files include any file owned by T }`.
-- The verdict is current iff `reviews/<T>-review.json`.`reviewed_sha` `== latest_owned_sha(T)` (exact match). If a correction touched T's files after its review → `reviewed_sha` is behind → **stale** → `CLOSE_BLOCKED: "T{id} verdict is stale: a correction changed its files after review. Re-run pocket-review."`.
-- Keep the timestamp proxy only as a fallback when `reviewed_sha` is absent (older reviews).
+- `latest_owned_sha(T)` = the max-by-commit-time of `{ T.done_sha } ∪ { c.sha : c ∈ phase.corrections and T ∈ tasks(c) }`, where `tasks(c) = ({c.for_task} if present) ∪ {owner[f] : f ∈ c.files}` — **the identical attribution set pocket-review uses** (Task 4). It MUST include corrections where `c.for_task == T` even if no file `c` touches is owned by T; owner-only here would make a for_task correction invisible to closing and produce a permanent `CLOSE_BLOCKED`.
+- The verdict is current iff `reviews/<T>-review.json`.`reviewed_sha` `== latest_owned_sha(T)` (exact match). If a correction in `tasks(c)` for T is newer than its review → `reviewed_sha` is behind → **stale** → `CLOSE_BLOCKED: "T{id} verdict is stale: a correction changed its files after review. Re-run pocket-review."`.
+- Keep the timestamp proxy only as a fallback when `reviewed_sha` is absent (older reviews predating Task 4 Step 3b).
 
 **Step 2: Confirm the gate + [CRITICAL] rule are unchanged**
 

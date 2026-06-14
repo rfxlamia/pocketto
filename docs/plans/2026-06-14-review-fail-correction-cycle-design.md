@@ -57,10 +57,16 @@ phases[i] = {
 1. Build `owner[file]` by iterating tasks in plan order: for each file in
    `git diff prev..done_sha --name-only`, set `owner[file] = task.id`
    (last-writer-wins within original ranges).
-2. For each correction commit `C` with files `F`: each `f ∈ F` is attributed to
-   `owner[f]`. Tasks touched = `{ owner[f] : f ∈ F }`.
-3. Review union for task `T` = `[prev..done_sha]` (T's files) ⊕ the slice of each
-   correction commit limited to T's owned files.
+2. Each correction `c = {sha, files, for_task}` is attributed to the task set
+   `tasks(c) = ({for_task} if present) ∪ { owner[f] : f ∈ c.files and owner[f] defined }`.
+   **`for_task` is first-class** — it drives attribution, not just the bleed label.
+   Owner-only attribution would strand the failed task whenever its fix lands in a
+   file last-written by another task (the common shared-file case): the task would
+   never be re-reviewed and its `REVIEW_FAIL` would never clear → permanent
+   `CLOSE_BLOCKED`.
+3. Review union for task `T` = `[prev..done_sha]` (T's files) ⊕, for each `c` with
+   `T ∈ tasks(c)`: the **whole** commit if `T == c.for_task`, else the slice limited
+   to T's owned files.
 
 **CLI** — `log update <plan_dir> <phase_file> --correction <sha> [--for-task TN]`:
 
@@ -116,8 +122,9 @@ calls of its own.
 and builds `owner[file]` (Section A). A task `T` is reviewable when **either**:
 
 - *First cycle:* `DONE + done_sha + non-empty range` (as today).
-- *Re-review:* a correction commit touches T's owned files with a sha **newer** than
-  `reviewed_sha` in `reviews/<T>-review.json` (emergent flag — no new status field).
+- *Re-review:* some correction `c` with `T ∈ tasks(c)` (i.e. `c.for_task == T` **or**
+  `c` touches a file owned by T) has a sha **newer** than `reviewed_sha` in
+  `reviews/<T>-review.json` (emergent flag — no new status field).
 
 **Review range (full attribution, per-file slicing):** for `T`, the subagent reviews
 `[prev..done_sha]` (T's files) ⊕ the slice of each correction commit limited to T's
@@ -131,10 +138,13 @@ supersedes the old; still-failing → `REVIEW_FAIL` again (cycle-2, cumulative).
 Empty-diff skip-stub behavior is unchanged.
 
 **pocket-closing — freshness anchor moves:** for each task,
-`latest_owned_sha = max-by-commit-time({done_sha} ∪ {correction commits owning T's files})`.
-The verdict is current iff `reviewed_sha == latest_owned_sha` (exact match, stronger
-than the timestamp proxy). A correction touching T's files **after** its review →
-stale → `CLOSE_BLOCKED: "re-run pocket-review"`.
+`latest_owned_sha = max-by-commit-time({done_sha} ∪ { c.sha : T ∈ tasks(c) })` — the
+**same** attribution set pocket-review uses (so `reviewed_sha(T) == latest_owned_sha(T)`
+by construction). The verdict is current iff `reviewed_sha == latest_owned_sha` (exact
+match, stronger than the timestamp proxy). A correction in `tasks(c)` for T newer than
+its review → stale → `CLOSE_BLOCKED: "re-run pocket-review"`. Note: `reviewed_sha` must
+be added to normal subagent reviews (today only the skip-stub emits it) or this path
+degrades to the timestamp proxy.
 
 **Gate unchanged** ([pocket-closing/SKILL.md:112]): any `REVIEW_FAIL` →
 `CLOSE_BLOCKED`. But the **current** per-task verdict decides — an old FAIL is
