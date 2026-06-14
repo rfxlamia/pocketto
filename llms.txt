@@ -1,8 +1,8 @@
 # Pocketto
 
-> Structured AI coding workflows for Claude Code and Pi. 12 skills take work
+> Structured AI coding workflows for Claude Code and Pi. 13 skills take work
 > from a rough idea to reviewed, shipped code without the agent skipping steps:
-> a 7-stage chained pipeline plus 5 standalone skills, backed by one
+> an 8-stage chained pipeline plus 5 standalone skills, backed by one
 > cross-platform Node CLI. Skills use the `pocketto:` namespace.
 
 Core ideas: plan before code (specs + acceptance criteria + TDD plans),
@@ -18,6 +18,7 @@ verification, stop conditions; no packet, no spawn), and gate before done
 - [pocket-structuring](skills/pocket-structuring/SKILL.md): Splits a plan into sequential phase files (passthrough <7 tasks, phase-split ≥7).
 - [pocket-development](skills/pocket-development/SKILL.md): Task-by-task subagent delegation; enforces 6 iron laws, no packet = no spawn.
 - [pocket-review](skills/pocket-review/SKILL.md): User-triggered parallel reviewers (spec compliance + code quality); returns PHASE_REVIEWED or PHASE_BLOCKED.
+- [pocket-correction](skills/pocket-correction/SKILL.md): User-triggered REVIEW_FAIL fix stage; delegates fixes sequentially to implementer subagents, records append-only corrections (done_sha never moves), hands back for re-review.
 - [pocket-closing](skills/pocket-closing/SKILL.md): User-triggered terminal stage; reconciles reviews vs log.json, gates the close, advances phases, writes closeout.md.
 
 ## Standalone skills (no pipeline needed)

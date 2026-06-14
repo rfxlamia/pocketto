@@ -5,8 +5,15 @@ The full chained pipeline, walked stage by stage, with the gates that matter and
 ## The Chain at a Glance
 
 ```
-pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review → pocket-closing
-   (explore)        (specify/BDD)      (plan/TDD)         (phase)            (delegate)          (review)        (close)
+pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review ──PASS──→ pocket-closing
+   (explore)        (specify/BDD)      (plan/TDD)         (phase)            (delegate)          (review)                  (close)
+                                                                                                      │
+                                                                                                  REVIEW_FAIL
+                                                                                                      │
+                                                                                               pocket-correction
+                                                                                                 (fix + record)
+                                                                                                      │
+                                                                                             (user re-runs review)
 ```
 
 Standalone skills (`bug-hunting`, `hotfix`, `brand-design`) sit *outside* this chain — see `pocket-vs-superpowers.md` for when to leave the pipeline for one of them.
@@ -48,8 +55,17 @@ Main agent is **delegator + auditor only** — it never writes implementation co
 ### 6. pocket-review — review (user-triggered)
 **The user** runs `/pocketto:pocket-review <plan_dir>` after a phase/plan is DONE. Main agent validates `log.json`, computes per-task SHA ranges, and dispatches **parallel** reviewer subagents (one per task), then writes results to `reviews/`.
 - **Output states:** `PHASE_REVIEWED` (each task pass or issues) or `PHASE_BLOCKED` (preflight failed).
-- **No automatic fix loop:** if a task is `REVIEW_FAIL`, pocket-review prints Action Required. Fix and re-run review only after handling `done_sha` safely: refresh the failed task only when it is the last DONE task in the phase; otherwise create a correction task/phase.
-- **Next:** Fix findings, then continue with the next phase (back to stage 5). When every task in a phase is `REVIEW_PASS`, pocket-review **auto-chains to `pocket-closing`** after one confirmation (it does not chain if anything failed).
+- **No automatic fix loop:** if a task is `REVIEW_FAIL`, pocket-review prints Action Required pointing to `pocket-correction`. If `REVIEW_BLOCKED`, it halts for escalation.
+- **Next:** All `REVIEW_PASS` → auto-chains to pocket-closing (one confirmation). Any `REVIEW_FAIL` → user runs pocket-correction, then re-runs pocket-review.
+
+### 6b. pocket-correction — fix REVIEW_FAIL (user-triggered)
+Invoked by the user (or following pocket-review's Action Required) when one or more tasks are `REVIEW_FAIL`. Main agent is **Delegator + Auditor only** — it never writes code.
+- Reads `reviews/<TN>-review.json` `fix_instructions` for each failed task.
+- Delegates each fix to ONE implementer subagent, **SEQUENTIALLY** (never parallel — parallel re-introduces the #28 SHA collision).
+- After each subagent commit, runs a quick audit (tests + git log + DELIVERABLE).
+- Records the correction: `pocketto-pi log update --correction <sha> --for-task TN` — append-only, `done_sha` never moves.
+- **Does NOT auto-invoke review.** Emits: `"Corrections recorded — run /pocketto:pocket-review <plan_dir>/<phase_file>"`.
+- **Next:** User re-runs pocket-review (stage 6). Cycle repeats until all tasks pass, then closing.
 
 ### 7. pocket-closing — close (auto-chained or user-triggered)
 Reached automatically when pocket-review chains here on an all-`REVIEW_PASS` phase (after a single confirmation), or run directly by the user: `/pocketto:pocket-closing <plan_dir>`. Main agent is **reconciler + closer only** — it reads `log.json` + every `reviews/*.json`, gates the close on verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes `closeout.md`.
@@ -76,6 +92,7 @@ Reached automatically when pocket-review chains here on an all-`REVIEW_PASS` pha
 | An execution plan | pocket-structuring (or it's already been invoked) |
 | A plan/phase file ready to build | pocket-development |
 | A finished phase to check | pocket-review |
+| pocket-review returned REVIEW_FAIL | pocket-correction |
 | Reviews written, all passing | pocket-closing |
 | A bug, not a feature | bug-hunting (leave the pipeline) |
 | A small, clear change | hotfix (leave the pipeline) |

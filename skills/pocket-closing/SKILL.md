@@ -93,13 +93,22 @@ Read every `reviews/<task_id>-review.json`. For each reviewable task in each tar
 | Task is not `DONE` / missing `done_sha` | Not reviewable — was skipped by pocket-review; note and exclude from the gate |
 | `reviews/` dir absent or empty | `CLOSE_BLOCKED` — "No reviews found. Run pocket-review first." |
 
-**Freshness check (mandatory).** A review proves a verdict only for the SHA it actually reviewed. If a task is re-implemented after review, its `done_sha` advances but the old verdict lingers — closing on it would accept code that was never reviewed at the SHA being closed. For each reviewable task, confirm the verdict is current:
+**Freshness check (mandatory).** A review proves a verdict only for the SHA it actually reviewed. If a task was corrected after review, the old verdict lingers — closing on it would accept code that was never reviewed at the current boundary. For each reviewable task `T`, compute:
 
-```bash
-git show -s --format=%cI <task.done_sha>     # committer time of the reviewed commit
+```
+latest_owned_sha(T) = max-by-commit-time of:
+    { T.done_sha }
+    ∪ { c.sha : c ∈ phase.corrections and T ∈ tasks(c) }
+
+where tasks(c) = ({ c.for_task } if present) ∪ { owner[f] : f ∈ c.files and owner[f] is defined }
+      owner[f]  = the task whose original done-range (prev..done_sha, in plan order) last touched f
 ```
 
-The verdict is current iff the review's `timestamp` is **at or after** that commit time (compare as UTC instants). If the commit at `done_sha` is newer than the review → stale → `CLOSE_BLOCKED`. If the review file records the reviewed SHA explicitly, require an exact match instead — it is stronger than the timestamp proxy.
+This is **the identical attribution set pocket-review uses** (Task 4), so `reviewed_sha(T)` written by pocket-review equals `latest_owned_sha(T)` by construction. The set MUST include corrections where `c.for_task == T` even when no file `c` touches is owned by `T`; using owner-only attribution here would make a `for_task` correction invisible to closing and produce a permanent `CLOSE_BLOCKED` for that task.
+
+The verdict is current iff `reviews/<T>-review.json`.`reviewed_sha == latest_owned_sha(T)` (exact SHA match). If any correction attributed to `T` is newer than its review — meaning `reviewed_sha` lags behind `latest_owned_sha(T)` — the verdict is stale → `CLOSE_BLOCKED: "T{id} verdict is stale: a correction changed its files after review. Re-run pocket-review."`.
+
+**Fallback (legacy reviews only).** If `reviewed_sha` is absent from the review file (older reviews predating this template change), fall back to the timestamp proxy: run `git show -s --format=%cI <latest_owned_sha(T)>` and require the review `timestamp` to be at or after that commit time. This path is a compatibility shim — any review produced after Task 4 lands will carry `reviewed_sha` and use the exact-match path above.
 
 Reconciliation details, REVIEW_BLOCKED stub handling, and observation extraction: load `references/verdict-reconciliation.md`.
 
@@ -113,6 +122,8 @@ A phase may advance ONLY when every reviewable task in it is `REVIEW_PASS`.
 | `REVIEW_BLOCKED` | `CLOSE_BLOCKED`. Print the escalation `fix_instructions`. Resolve the escalation before closing. |
 | all `REVIEW_PASS` | Phase passes the gate — proceed to Advance State. |
 
+The **current** per-task verdict decides the gate — an old `REVIEW_FAIL` superseded by a newer `REVIEW_PASS` (advanced `reviewed_sha`, `overall == REVIEW_PASS`) passes cleanly. The gate reads the current `reviews/<T>-review.json`, not any historical state.
+
 Non-blocking observations (`stage_2` Minor issues, strengths, out-of-scope notes on PASSing tasks) do NOT block. Collect them — they go into the closeout summary as "carried forward."
 
 ## Advance State
@@ -123,7 +134,7 @@ For each phase that **passed the gate**, advance it `REVIEW → DONE` at the pha
 npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --json --contract 2
 ```
 
-[CRITICAL] Phase-level update only. NEVER pass `--task` here — task `DONE` recomputes `done_sha` from current HEAD and would corrupt the review's SHA range. Tasks were already marked DONE by pocket-development; leave them untouched.
+[CRITICAL] Phase-level update only. NEVER pass `--task` here — task `DONE` recomputes `done_sha` from current HEAD and would corrupt the review's SHA range. Tasks were already marked DONE by pocket-development; leave them untouched. Correction commits are recorded by pocket-correction (via `pocketto-pi log update --correction`), never by closing — this rule is unaffected by the correction cycle.
 
 Parse the envelope, confirm `ok: true` and `data.newStatus == "DONE"` before continuing.
 

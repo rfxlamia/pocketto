@@ -8,7 +8,7 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { readLog, writeLog, todayISO } = require('../lib/logjson');
-const { getGitSha } = require('../lib/git');
+const { getGitSha, getCommitFiles, getRangeFiles, commitExists } = require('../lib/git');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
 const VALID_SET = new Set(VALID_STATUSES);
@@ -73,6 +73,21 @@ function collectPlanFiles(planDir) {
   }
 
   throw new CliError('NO_PLAN_FILES', `no execution-plan*.md files found in '${planDir}'.`);
+}
+
+// file → owning task id, by chaining each DONE task's original range
+// (prev..done_sha) in plan order. Last writer within original ranges wins.
+// Mirrors pocket-review's linear range model. Correction commits are NOT
+// part of any task's original range, so they never appear here.
+function buildOwnerMap(planDir, phase, baselineSha) {
+  const owner = {};
+  let prev = baselineSha;
+  for (const t of phase.tasks || []) {
+    if (!t.done_sha) continue;
+    for (const f of getRangeFiles(planDir, prev, t.done_sha)) owner[f] = t.id;
+    prev = t.done_sha;
+  }
+  return owner;
 }
 
 // ─── INIT ───────────────────────────────────────────────────────────────────
@@ -260,6 +275,150 @@ function update(positionals, taskId) {
   return { command: 'log update', exit: 0, human, data };
 }
 
+// ─── CORRECTION ─────────────────────────────────────────────────────────────
+
+function recordCorrection(positionals, sha, forTask) {
+  if (positionals.length !== 2) {
+    throw new CliError(
+      'USAGE',
+      'Usage: pocketto-pi log update <plan_dir> <phase_file> --correction <sha> [--for-task <task_id>]',
+    );
+  }
+  const [planDirArg, phaseFile] = positionals;
+  const planDir = resolvePlanDir(planDirArg);
+  const logPath = path.join(planDir, 'log.json');
+  if (!existsSync(logPath)) {
+    throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
+  }
+  const log = readLog(logPath);
+  const phase = log.phases.find((p) => p.file === phaseFile);
+  if (!phase) {
+    const available = log.phases.map((p) => p.file);
+    throw new CliError('PHASE_NOT_FOUND', `'${phaseFile}' not found in log. Available: ${JSON.stringify(available)}`);
+  }
+  if (!phase.corrections) phase.corrections = [];
+
+  const forId = forTask ? forTask.toUpperCase() : null;
+
+  // Guard: if --for-task is given and the phase has tasks, the id must exist.
+  if (forId && Array.isArray(phase.tasks) && phase.tasks.length > 0) {
+    const match = phase.tasks.find((t) => t.id.toUpperCase() === forId);
+    if (!match) {
+      throw new CliError(
+        'UNKNOWN_TASK',
+        `task '${forTask}' not found in phase '${phaseFile}'. Available: ${JSON.stringify((phase.tasks || []).map((t) => t.id))}`,
+      );
+    }
+  }
+
+  // FIX 2: reject an invalid/unresolvable sha before getCommitFiles silently
+  // returns [] and causes recordCorrection to skip without any error.
+  if (!commitExists(planDir, sha)) {
+    throw new CliError('UNKNOWN_SHA', `correction sha '${sha}' is not a commit in '${planDir}'.`);
+  }
+
+  const files = getCommitFiles(planDir, sha);
+
+  // Empty-diff correction (e.g. --allow-empty, or a revert that nets to nothing)
+  // → nothing to attribute. Skip without appending, per design.
+  if (files.length === 0) {
+    return {
+      command: 'log update',
+      exit: 0,
+      human: [`Correction ${sha} has no file changes — skipped (nothing to attribute).`],
+      data: {
+        planDir,
+        phaseFile,
+        level: 'correction',
+        correction: { sha, files: [], affectedTasks: [], bleed: [], skipped: true },
+      },
+    };
+  }
+
+  // FIX 1: guard against a null baseline_sha — without it buildOwnerMap cannot
+  // produce meaningful attribution (getRangeFiles would be called with null base).
+  if (!log.header.baseline_sha) {
+    throw new CliError(
+      'NO_BASELINE',
+      `baseline_sha is missing in log.json header — cannot attribute corrections (was log init run inside a git repo?).`,
+    );
+  }
+
+  const owner = buildOwnerMap(planDir, phase, log.header.baseline_sha);
+
+  // Attribution: every owning task whose files appear in this commit.
+  const affected = new Set();
+  if (forId) affected.add(forId);
+  const bleed = new Set();
+  for (const f of files) {
+    const o = owner[f];
+    if (!o) continue;          // brand-new file, owned by no prior task
+    affected.add(o);
+    if (forId && o !== forId) bleed.add(o);
+  }
+  const affectedTasks = [...affected].sort();
+  const bleedTasks = [...bleed].sort();
+
+  // Idempotency: a sha already recorded on this phase → no-op + warn.
+  // FIX 3: recompute affectedTasks/bleed from the PERSISTED entry's for_task and
+  // files so a re-run with a different --for-task reports stored attribution, not
+  // the new request's.
+  const existing = phase.corrections.find((c) => c.sha === sha);
+  if (existing) {
+    const storedForId = existing.for_task || null;
+    const idempotentAffected = new Set();
+    if (storedForId) idempotentAffected.add(storedForId);
+    const idempotentBleed = new Set();
+    for (const f of existing.files || []) {
+      const o = owner[f];
+      if (!o) continue;
+      idempotentAffected.add(o);
+      if (storedForId && o !== storedForId) idempotentBleed.add(o);
+    }
+    return {
+      command: 'log update',
+      exit: 0,
+      human: [`Correction ${sha} is already recorded on ${phaseFile} — no-op.`],
+      data: {
+        planDir,
+        phaseFile,
+        level: 'correction',
+        correction: {
+          sha,
+          files: existing.files,
+          affectedTasks: [...idempotentAffected].sort(),
+          bleed: [...idempotentBleed].sort(),
+          idempotent: true,
+        },
+      },
+    };
+  }
+
+  const entry = { sha, files };
+  if (forId) entry.for_task = forId;
+  phase.corrections.push(entry);
+  writeLog(logPath, log);
+
+  const human = [`Recorded correction ${sha} on ${phaseFile}${forId ? ` (for ${forId})` : ''}: ${files.length} file(s).`];
+  if (bleedTasks.length) {
+    human.push(
+      `⚠ this correction also touches files owned by ${bleedTasks.join(', ')} (cross-task bleed).`,
+      `  Those tasks will be re-reviewed by pocket-review. See design: full attribution.`,
+    );
+  }
+  return {
+    command: 'log update',
+    exit: 0,
+    human,
+    data: {
+      planDir,
+      phaseFile,
+      level: 'correction',
+      correction: { sha, files, affectedTasks, bleed: bleedTasks, idempotent: false },
+    },
+  };
+}
+
 // ─── CLOSE ──────────────────────────────────────────────────────────────────
 
 function close(positionals) {
@@ -313,9 +472,12 @@ function close(positionals) {
 
 // ─── DISPATCH ───────────────────────────────────────────────────────────────
 
-function run({ sub, positionals, task }) {
+function run({ sub, positionals, task, correction, forTask }) {
   if (sub === 'init') return init(positionals);
-  if (sub === 'update') return update(positionals, task);
+  if (sub === 'update') {
+    if (correction) return recordCorrection(positionals, correction, forTask);
+    return update(positionals, task);
+  }
   if (sub === 'close') return close(positionals);
   throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'log' subcommand: ${sub || '(none)'}. Use init | update | close.`);
 }

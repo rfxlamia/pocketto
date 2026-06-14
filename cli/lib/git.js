@@ -51,4 +51,48 @@ function getRemoteUrl(cwd) {
   }
 }
 
-module.exports = { getGitSha, getRemoteUrl };
+// Files changed by a single commit, relative to its parent. `diff-tree -r`
+// handles a root commit (no parent) without empty-tree special-casing.
+// Mirrors getGitSha(): never throws — returns [] when git is unavailable.
+function getCommitFiles(cwd, sha) {
+  try {
+    const out = execFileSync('git', ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', sha], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.split(/\r?\n/).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Files changed across base..head. Never throws — returns [] on failure.
+function getRangeFiles(cwd, base, head) {
+  try {
+    const out = execFileSync('git', ['diff', '--name-only', `${base}..${head}`], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.split(/\r?\n/).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Returns true if <sha> resolves to a commit object in the given repo, false
+// otherwise (invalid sha, not a commit, or git unavailable). Never throws.
+function commitExists(cwd, sha) {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${sha}^{commit}`], {
+      cwd,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { getGitSha, getRemoteUrl, getCommitFiles, getRangeFiles, commitExists };

@@ -59,13 +59,14 @@ Return a single JSON object matching the schema in:
 Required field values for batch mode:
 - "task_id": "<TASK_ID>"
 - "task_name": "<TASK_NAME>"
-- "cycle": 1
+- "cycle": <CYCLE> (1 on first review; main agent increments for re-review — use the value passed to you)
 - "timestamp": <current ISO 8601 timestamp>
 - "reviewer_mode": "read-only"
 - "reviewer_config": "batch-parallel"
-- "loop_info": { "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0 }
+- "loop_info": { "current_cycle": <CYCLE>, "max_cycles": 1, "cycles_remaining": 0 }
 - "overall": "REVIEW_PASS" if both stages pass, "REVIEW_FAIL" if any issues, "REVIEW_BLOCKED" if you cannot complete
 - "fix_instructions": "" if REVIEW_PASS, else numbered list with file:line references
+- "reviewed_sha": "<REVIEWED_SHA>" — the boundary commit this review covers. On first cycle: the task's done_sha. On re-review: max-by-commit-time of `{done_sha} ∪ {c.sha : T ∈ tasks(c)}` (the same set pocket-closing uses as `latest_owned_sha(T)`), else done_sha. The main agent computes and passes this value; copy it verbatim.
 
 Return ONLY the JSON object — no preamble, no explanation. The main agent writes it to disk.
 
@@ -88,8 +89,10 @@ Blocked when: Plan file not found, spec_ref not readable → set overall = "REVI
 | `<PHASE_FILE>` | Phase file name from `log.json` phase entry (`"file"` field) |
 | `<PREV_SHA>` | Previous task's `done_sha`, or `header.baseline_sha` for T1 |
 | `<DONE_SHA>` | This task's `done_sha` from `log.json` |
-| `<LIST_FILES_CHANGED>` | Output of `git diff --name-only <PREV_SHA>..<DONE_SHA>` |
+| `<LIST_FILES_CHANGED>` | Output of `git diff --name-only <PREV_SHA>..<DONE_SHA>` (first cycle) or union of original range + correction slices (re-review — see SKILL.md Step 3) |
 | `<SKILL_DIR>` | Absolute path to the pocket-review skill directory |
+| `<CYCLE>` | `1` on first review; prior `cycle` + 1 on re-review. Main agent computes from `reviews/<task_id>-review.json`.`loop_info.current_cycle` if the file exists, else `1`. |
+| `<REVIEWED_SHA>` | On first cycle: task `done_sha`. On re-review: max-by-commit-time of `{ done_sha } ∪ { c.sha : c ∈ phase.corrections and T ∈ tasks(c) }` — the identical expression pocket-closing uses as `latest_owned_sha(T)`. |
 
 ## Worked Example
 

@@ -22,7 +22,7 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 - **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
 - **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
 
-12 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work.
+13 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work.
 
 <p align="center">
   <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development → review → closing, plus standalone skills (pocket-help, bug-hunting, hotfix, brand-design, structured-research)" width="100%">
@@ -90,7 +90,7 @@ Or just fix something:
 /pocketto:hotfix        "bump the rate-limit window to 60s"
 ```
 
-## The 12 skills
+## The 13 skills
 
 ### Pipeline (chained)
 
@@ -104,7 +104,8 @@ Each stage invokes the next at handoff, carrying spec, plan, and acceptance crit
 | 4 | `pocket-structuring` | Plan ready — passthrough ≤6 tasks, phase-split ≥7 |
 | 5 | `pocket-development` | Plan ready — execute task-by-task via subagents |
 | 6 | `pocket-review` | After a phase/plan is DONE (user-triggered) |
-| 7 | `pocket-closing` | After reviews pass — gate, close, summarize |
+| 7 | `pocket-correction` | After pocket-review returns REVIEW_FAIL (user-triggered) |
+| 8 | `pocket-closing` | After reviews pass — gate, close, summarize |
 
 ### Standalone skills
 
@@ -138,8 +139,11 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 **`pocket-development`** — Precise subagent delegation for task-by-task execution. Every delegation requires a Pocket Packet — a structured contract with objective, verification criteria, and stop conditions. Enforces 6 iron laws: no packet = no spawn.
 *Trigger:* "execute plan", "delegate tasks", "dispatch subagents".
 
-**`pocket-review`** — Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — it does NOT auto-call. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. On failures, prints Action Required with the safe fix/re-review path: refresh `done_sha` only for the last DONE task in a phase; use a correction task/phase for non-last failures. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED`.
+**`pocket-review`** — Post-phase batch reviewer. **User-triggered** after `pocket-development` marks a phase/plan DONE — it does NOT auto-call. Dispatches parallel reviewer subagents (one per task), each covering spec compliance and code quality, then writes results to `reviews/`. On `REVIEW_FAIL`, prints Action Required pointing to `pocket-correction`. On `REVIEW_PASS` for all tasks, auto-chains to `pocket-closing` after one confirmation. Returns `PHASE_REVIEWED` or `PHASE_BLOCKED`.
 *Trigger:* `/pocketto:pocket-review <plan_dir>`.
+
+**`pocket-correction`** — REVIEW_FAIL fix stage. **User-triggered** after pocket-review reports `REVIEW_FAIL`. Main agent stays Delegator + Auditor — it never writes code. Reads `fix_instructions` from each `REVIEW_FAIL` review, delegates fixes to implementer subagents **sequentially** (never parallel — parallel collapses commits, corrupting per-task file attribution), runs a quick audit per task, then records the fix commit append-only via `pocketto-pi log update --correction` (`done_sha` never moves). Does NOT auto-invoke re-review — emits a handoff message instead. Returns `CORRECTIONS_RECORDED`, `CORRECTION_PARTIAL`, `NOTHING_TO_CORRECT`, or `CORRECTION_BLOCKED`.
+*Trigger:* `/pocketto:pocket-correction <plan_dir>/<phase_file>`.
 
 **`pocket-closing`** — Terminal stage. **User-triggered** after `pocket-review` writes verdicts. Reconciles every `reviews/*.json` against `log.json`, gates the close on verdicts (any fail or unreviewed task → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE`, runs `log close`, and writes `closeout.md`. Returns `CLOSED`, `PHASE_ADVANCED`, `CLOSE_BLOCKED`, or `ALREADY_CLOSED`.
 *Trigger:* `/pocketto:pocket-closing <plan_dir>`.
