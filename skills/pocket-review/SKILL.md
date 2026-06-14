@@ -88,6 +88,53 @@ files_changed = git diff --name-only <prev_sha>..<task.done_sha>
 
 If zero tasks are reviewable (no non-empty-diff DONE tasks found) → `PHASE_BLOCKED: "No reviewable tasks found. Ensure all tasks are DONE with done_sha."`. Empty-diff tasks flagged for stubs do **not** count toward this threshold.
 
+#### Corrections: attribution, range-union, and re-review trigger
+
+After applying the first-cycle rules above, also read `phase.corrections` from `log.json` (absent or null → treat as empty array `[]`).
+
+**Build `owner[file]`** — file → owning task id, derived from original task ranges only (correction commits are excluded):
+
+```
+prev = header.baseline_sha
+for each task T in plan order:
+    if T.done_sha is defined:
+        for each file f in git diff --name-only <prev>..<T.done_sha>:
+            owner[f] = T.id          ← last-writer-wins
+        prev = T.done_sha
+    else:
+        skip T without advancing prev
+```
+
+**Compute `tasks(c)` for each correction entry** `c = {sha, files, for_task?}`:
+
+```
+tasks(c) = ({c.for_task} if c.for_task is present) ∪ { owner[f] : f ∈ c.files and owner[f] is defined }
+```
+
+`for_task` is **first-class** — T is in `tasks(c)` whenever `c.for_task == T`, regardless of whether any file in `c.files` is owned by T. Owner-only attribution strands a failed task whose fix lands in a file last-written by a different task (the common shared-file case), leaving its `REVIEW_FAIL` permanently unresolvable and the plan `CLOSE_BLOCKED` forever.
+
+**Re-review trigger** — a task T is re-reviewable (in addition to the first-cycle reviewable rule) when:
+- Some correction `c` has `T ∈ tasks(c)`, **and**
+- `c.sha` is newer by commit time (`git show -s --format=%cI <sha>`) than the `reviewed_sha` recorded in `reviews/<T>-review.json`.
+
+If `reviews/<T>-review.json` does not yet exist or lacks a `reviewed_sha` field, treat any owned correction as newer (the task needs review).
+
+**Review range for a re-reviewable task T** (union of original slice + correction slices):
+
+- **Original slice:** files in `prev..T.done_sha` that are owned by T (same diff used in first cycle).
+- **Per correction `c` with `T ∈ tasks(c)`:**
+  - If `T == c.for_task` → review the **whole** correction commit: `git show <c.sha>`. The `for_task` owns the fix intent even on shared files; the full diff is shown.
+  - Else (T is a bleed-owner: `owner[f] == T` for some `f ∈ c.files`) → review only the **slice** of `c` limited to T's owned files: `git show <c.sha> -- <T-owned files in c.files>`.
+
+A correction commit that touches two tasks is presented per the above rule: the `for_task` sees the whole commit; a bleed-owner sees only its own files.
+
+**Cycle bookkeeping and `reviewed_sha` on re-review** — when writing `reviews/<T>-review.json` for a re-review:
+
+- `loop_info.current_cycle` = prior cycle + 1 (increment, not reset). `cycle` mirrors `current_cycle`.
+- `reviewed_sha` = the max-by-commit-time of `{ T.done_sha } ∪ { c.sha : c ∈ phase.corrections and T ∈ tasks(c) }`. In other words: the newest commit (by `%cI`) among T's done_sha and all corrections attributed to T; if no corrections exist for T, this equals `T.done_sha`. This must equal what pocket-closing computes as `latest_owned_sha(T)` — the two definitions use the identical `tasks(c)` attribution set, so they cannot diverge.
+- A passing re-review writes `overall: REVIEW_PASS`, superseding any prior FAIL.
+- A still-failing re-review writes `overall: REVIEW_FAIL` with fresh `fix_instructions` (cumulative across cycles).
+
 ### Step 4: Extract task context from plan file
 
 For each reviewable task, read the plan file and extract:

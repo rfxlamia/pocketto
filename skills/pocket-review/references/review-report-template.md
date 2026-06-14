@@ -27,7 +27,8 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
     "stage_2",
     "overall",
     "fix_instructions",
-    "loop_info"
+    "loop_info",
+    "reviewed_sha"
   ],
   "properties": {
     "task_id": {
@@ -144,6 +145,10 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
         "max_cycles": { "type": "integer" },
         "cycles_remaining": { "type": "integer" }
       }
+    },
+    "reviewed_sha": {
+      "type": "string",
+      "description": "The newest commit SHA whose changes are covered by this review. On first cycle: task.done_sha. On re-review: max-by-commit-time of done_sha and all correction SHAs attributed to this task. pocket-closing uses exact-SHA match against latest_owned_sha(T) — this field is the exact-match anchor."
     }
   }
 }
@@ -189,7 +194,8 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
     "current_cycle": 1,
     "max_cycles": 2,
     "cycles_remaining": 1
-  }
+  },
+  "reviewed_sha": "bcd2345efg6789"
 }
 ```
 
@@ -230,7 +236,8 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
     "current_cycle": 2,
     "max_cycles": 2,
     "cycles_remaining": 0
-  }
+  },
+  "reviewed_sha": "d4e5f6g7h8i9j0"
 }
 ```
 
@@ -267,7 +274,8 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
     "current_cycle": 3,
     "max_cycles": 2,
     "cycles_remaining": 0
-  }
+  },
+  "reviewed_sha": "def4567ghi8901"
 }
 ```
 
@@ -328,11 +336,12 @@ In batch mode (invoked by pocket-review post-phase), set these fields as follows
 
 | Field | Batch mode value |
 |-------|-----------------|
-| `cycle` | Always `1` |
+| `cycle` | `1` on first cycle; incremented on re-review (see SKILL.md Step 3 cycle bookkeeping) |
 | `reviewer_config` | `"batch-parallel"` |
-| `loop_info.current_cycle` | `1` |
+| `loop_info.current_cycle` | `1` on first cycle; prior cycle + 1 on re-review (mirrors `cycle`) |
 | `loop_info.max_cycles` | `1` |
 | `loop_info.cycles_remaining` | `0` |
 | `overall` | `"REVIEW_PASS"` \| `"REVIEW_FAIL"` \| `"REVIEW_BLOCKED"` |
+| `reviewed_sha` | `done_sha` on first cycle; max-by-commit-time of `done_sha` and all owned correction SHAs on re-review |
 
-`REVIEW_FAIL` in batch mode means: issues found, no re-dispatch. Fix code and re-run pocket-review.
+`REVIEW_FAIL` in batch mode means: issues found, no re-dispatch. Fix code via pocket-correction and re-run pocket-review.
