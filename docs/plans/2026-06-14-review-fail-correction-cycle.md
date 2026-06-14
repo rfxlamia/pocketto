@@ -83,7 +83,9 @@ Add to `cli/lib/git.js` (before `module.exports`):
 // Mirrors getGitSha(): never throws — returns [] when git is unavailable.
 function getCommitFiles(cwd, sha) {
   try {
-    const out = execFileSync('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', sha], {
+    // `--root` is REQUIRED so a root commit (no parent) lists its files;
+    // without it diff-tree emits nothing for the first commit.
+    const out = execFileSync('git', ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', sha], {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -531,13 +533,15 @@ Body MUST contain these sections (prose, mirroring pocket-development's tone):
 
 Keep `SKILL.md` lean; no `references/` needed for v1.
 
-**Step 2: Register in the Pi manifest (`package.json`)**
+**Step 2 + 3: Host registration is AUTO-DISCOVERY — no explicit entry needed.**
 
-Add `"pocket-correction"` to the `pi.skills` array (match the existing entry format — confirm whether entries are skill dir names or paths by reading the current array first).
-
-**Step 3: Register in the Claude Code plugin manifest**
-
-Add the skill to `.claude-plugin/marketplace.json` (and `.claude-plugin/plugin.json` if it enumerates skills) in the same shape as `pocket-review` / `pocket-closing`. Read those files first and mirror the exact structure.
+Verified during implementation: both hosts discover skills by directory, not by an
+enumerated list. `package.json` `pi.skills` is `["./skills"]` (points at the dir);
+`.claude-plugin/marketplace.json` lists the plugin pointing at the repo and
+`.claude-plugin/plugin.json` has no skills array. So creating
+`skills/pocket-correction/SKILL.md` registers it on BOTH hosts automatically — do
+NOT add per-skill entries (there is no such list to add to). Just confirm the
+manifests stay valid JSON.
 
 **Step 4: Verify registration**
 
