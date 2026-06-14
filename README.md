@@ -22,7 +22,7 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 - **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
 - **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
 
-12 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work.
+13 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work.
 
 <p align="center">
   <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development → review → closing, plus standalone skills (pocket-help, bug-hunting, hotfix, brand-design, structured-research)" width="100%">

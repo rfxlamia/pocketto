@@ -1,8 +1,8 @@
 # Pocketto
 
-> Structured AI coding workflows for Claude Code and Pi. 12 skills take work
+> Structured AI coding workflows for Claude Code and Pi. 13 skills take work
 > from a rough idea to reviewed, shipped code without the agent skipping steps:
-> a 7-stage chained pipeline plus 5 standalone skills, backed by one
+> an 8-stage chained pipeline plus 5 standalone skills, backed by one
 > cross-platform Node CLI. Skills use the `pocketto:` namespace.
 
 Core ideas: plan before code (specs + acceptance criteria + TDD plans),

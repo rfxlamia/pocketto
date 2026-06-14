@@ -1,11 +1,11 @@
 ---
 name: pocket-correction
-description: Standalone user-triggered stage between a pocket-review REVIEW_FAIL verdict and re-review. Delegates each failed task's fix to an implementer subagent (main agent stays Delegator + Auditor only — never writes code), records an append-only correction commit per task via the pocketto-pi CLI (done_sha never moves), and hands back for user-triggered re-review. Trigger on "pocket-correction", "apply review fixes", "fix the review failures", "correct the failed tasks", or when pocket-review reports REVIEW_FAIL in agent-managed execution.
+description: User-triggered correction stage between a pocket-review REVIEW_FAIL verdict and re-review. Delegates each failed task's fix to an implementer subagent (main agent stays Delegator + Auditor only — never writes code), records an append-only correction commit per task via the pocketto-pi CLI (done_sha never moves), and hands back for user-triggered re-review. Trigger on "pocket-correction", "apply review fixes", "fix the review failures", "correct the failed tasks", or when pocket-review reports REVIEW_FAIL in agent-managed execution.
 ---
 
 # Pocket Correction
 
-Standalone correction stage for `REVIEW_FAIL` verdicts. Invoked directly by the user (or by an agent following pocket-review's Action Required guidance) after pocket-review has written `REVIEW_FAIL` verdicts for one or more tasks in a phase.
+Correction stage for `REVIEW_FAIL` verdicts. Invoked directly by the user (or by an agent following pocket-review's Action Required guidance) after pocket-review has written `REVIEW_FAIL` verdicts for one or more tasks in a phase.
 
 **Core principle:** Main agent delegates and audits. It never writes code. Every fix is a subagent's commit, one task at a time, with an append-only record that leaves `done_sha` untouched.
 
