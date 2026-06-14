@@ -220,28 +220,27 @@ Pass: 1  Issues: 1  Skipped: 1
 ```
 ACTION REQUIRED — review did not pass
 
-Do not run pocket-closing yet.
+Do not run pocket-closing yet. Corrections are append-only — done_sha never moves,
+so there is no "safe vs unsafe" boundary decision anymore.
 
-For each REVIEW_FAIL task:
-1. Read reviews/<task_id>-review.json and apply the printed fix_instructions.
-2. Decide whether the task's done_sha can be refreshed safely:
-   - SAFE: the failed task is the last DONE task in this phase, or this phase has only one DONE task.
-     After committing the fix, run:
-       npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --task <task_id> --json --contract 2
-     Then re-run:
-       /pocketto:pocket-review <plan_dir>/<phase_file>
-   - NOT SAFE: any later task in this same phase is already DONE with done_sha.
-     Do not refresh this task's done_sha manually. It would change the SHA boundary
-     for downstream tasks. Stop and create a correction task/phase, or redesign the
-     fix cycle with append-only correction metadata.
+▸ MANUAL (a human is applying fixes directly):
+  For each REVIEW_FAIL task:
+  1. Read reviews/<task_id>-review.json and apply the fix_instructions.
+  2. Commit the fix (one commit, only the fix's source files — not log.json), then record it:
+       npx -y pocketto-pi log update <plan_dir> <phase_file> \
+         --correction <sha> --for-task <task_id> --json --contract 2
+  3. Re-run: /pocketto:pocket-review <plan_dir>/<phase_file>
 
-For REVIEW_BLOCKED:
+▸ AGENT (you reached here from pocket-development — agent-managed execution):
+  The phase already terminated at PHASE_COMPLETE; you are NOT mid-phase.
+  Run: /pocketto:pocket-correction <plan_dir>/<phase_file>
+  It delegates each fix, records corrections, and hands back for re-review.
+
+For REVIEW_BLOCKED (either path):
 - Do not enter a fix cycle. Resolve the blocker or escalate as instructed.
 ```
 
-Why this matters: pocket-review computes task ranges linearly as
-`previous_task.done_sha..task.done_sha`. Refreshing a non-last task after later
-tasks are already DONE retroactively changes the next task's starting boundary.
+Recording a correction never moves an existing done_sha, so it is always safe regardless of task position.
 
 ## Enterprise mode (opt-in): post verdicts to PR
 
@@ -521,7 +520,7 @@ On confirmation:
 | PHASE_REVIEWED | All reviewable tasks reviewed. All `REVIEW_PASS` → chain to pocket-closing (one confirmation). Any issue → print Action Required, then stop |
 | PHASE_BLOCKED | Preflight failed — cannot review |
 
-**No automatic fix loop in batch mode.** If issues are found (`REVIEW_FAIL` in JSON), print the Action Required block and stop. The user may fix and re-run pocket-review, but must refresh `done_sha` only when the failed task is a safe boundary.
+**No automatic fix loop in batch mode.** If issues are found (`REVIEW_FAIL` in JSON), print the Action Required block and stop. The user (or pocket-correction for agent-managed execution) records an append-only correction commit and re-runs pocket-review; done_sha is never moved.
 Re-running overwrites existing `reviews/<task_id>-review.json` files.
 
 ## Iron Laws

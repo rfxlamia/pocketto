@@ -615,6 +615,9 @@ Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the comma
 | **DONE_WITH_CONCERNS** | Assess concerns → correctness risk: address first; observation only: proceed to quick audit |
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
 | **BLOCKED** | Categorize blocker type → Fix → Re-dispatch |
+| **REVIEW_FAIL** (from pocket-review) | The phase already terminated at PHASE_COMPLETE — you are NOT mid-phase. Re-enter via `/pocketto:pocket-correction <plan_dir>/<phase_file>`: it delegates each fix to an implementer subagent (you stay Delegator + Auditor), records an append-only correction, then hands back for user-triggered re-review. Do NOT write the fix yourself; do NOT refresh done_sha. |
+
+`REVIEW_FAIL` is a post-phase verdict (not a subagent return status); it is handled by the standalone `pocket-correction` skill, keeping `pocket-development` one-shot.
 
 **After ALL tasks DONE:** emit PHASE_COMPLETE handoff with the `/pocketto:pocket-review <plan_dir>` command. Do NOT invoke pocket-review directly — it is user-triggered. If `pocketto-pi mode` returns `enterprise=true`, append the one-line `/pocketto:create-pr` offer (do not invoke create-pr).
 
