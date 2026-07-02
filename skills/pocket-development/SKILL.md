@@ -607,6 +607,33 @@ Run: /pocketto:create-pr <plan_dir> [<phase_file>]
 
 Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the command, user runs it when ready.
 
+**Pocket Enterprise — task checklist sync (same guard).** Still inside the `enterprise=true` branch above, after the create-pr offer, sync the live task checklist to the linked GitHub issue:
+
+1. Resolve `spec_dir` = `docs/pocket/spec/<slug>/` where `<slug>` matches the plan directory basename, then read the linked issue:
+   ```bash
+   npx -y pocketto-pi meta get <spec_dir> github_issue.number --json --contract 2
+   ```
+   If `data.value` is null or missing → emit one warning line `"Task checklist sync skipped: no linked issue in .pocket-meta.json."` and stop this step (no GitHub call).
+2. Check `gh auth status` — not authenticated → emit one warning line and stop this step (the handoff itself already succeeded; never fail the phase over checklist sync).
+3. Render the checklist body from `log.json`:
+   ```bash
+   npx -y pocketto-pi format tasklist <plan_dir> --json --contract 2
+   ```
+   Parse `data.bodyFile` and `data.marker` (`<!-- pocket-tasklist -->`).
+4. Upsert exactly **one** marker-tagged comment on the issue (same pattern as pocket-review's summary upsert). Resolve `<owner>/<repo>` via `gh repo view --json owner,name`, then:
+   ```bash
+   gh api repos/<owner>/<repo>/issues/<issue_number>/comments --paginate
+   ```
+   Filter comments whose `body` starts with the marker (first line), sorted by `id` ascending:
+
+   | Matches | Action |
+   |---------|--------|
+   | 0 | Create: `gh api repos/<owner>/<repo>/issues/<issue_number>/comments -f body="$(cat <bodyFile>)"` |
+   | 1 | Update in place: `gh api repos/<owner>/<repo>/issues/comments/<comment_id> --method PATCH -f body="$(cat <bodyFile>)"` |
+   | >1 (race) | Update the earliest; delete the later duplicates |
+
+   The GitHub issue now shows live per-phase task status — the team's progress view without any dashboard.
+
 ## Status Handling
 
 | Status | Controller Action |
@@ -619,7 +646,7 @@ Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the comma
 
 `REVIEW_FAIL` is a post-phase verdict (not a subagent return status); it is handled by the standalone `pocket-correction` skill, keeping `pocket-development` one-shot.
 
-**After ALL tasks DONE:** emit PHASE_COMPLETE handoff with the `/pocketto:pocket-review <plan_dir>` command. Do NOT invoke pocket-review directly — it is user-triggered. If `pocketto-pi mode` returns `enterprise=true`, append the one-line `/pocketto:create-pr` offer (do not invoke create-pr).
+**After ALL tasks DONE:** emit PHASE_COMPLETE handoff with the `/pocketto:pocket-review <plan_dir>` command. Do NOT invoke pocket-review directly — it is user-triggered. If `pocketto-pi mode` returns `enterprise=true`, append the one-line `/pocketto:create-pr` offer (do not invoke create-pr) and sync the task checklist comment to the linked issue (`format tasklist` + marker upsert).
 
 ### BLOCKED Categorization
 
