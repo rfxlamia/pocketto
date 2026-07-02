@@ -8,10 +8,12 @@ const DEFAULT_MODE = {
   enterprise: false,
   branch_strategy: null,
   create_pr: null,
+  require_approval: null,
   source: null,
 };
 
 const FILES = ['AGENTS.md', 'CLAUDE.md'];
+const MODE_FILES = new Set(FILES);
 const BOOLS = new Set(['true', 'false']);
 const BRANCH_STRATEGIES = new Set(['branch', 'main-local']);
 
@@ -82,6 +84,11 @@ function normalize(fields, source) {
   }
 
   const enterprise = boolValue('enterprise', fields.enterprise, source);
+  // require_approval is optional in both modes: absent → null (non-enterprise)
+  // or false (enterprise), so existing configs keep parsing unchanged.
+  const requireApproval = Object.prototype.hasOwnProperty.call(fields, 'require_approval')
+    ? boolValue('require_approval', fields.require_approval, source)
+    : null;
   if (!enterprise) {
     return {
       enterprise: false,
@@ -91,6 +98,7 @@ function normalize(fields, source) {
       create_pr: Object.prototype.hasOwnProperty.call(fields, 'create_pr')
         ? boolValue('create_pr', fields.create_pr, source)
         : null,
+      require_approval: requireApproval,
       source,
     };
   }
@@ -104,6 +112,7 @@ function normalize(fields, source) {
     enterprise: true,
     branch_strategy: enumValue('branch_strategy', fields.branch_strategy, BRANCH_STRATEGIES, source),
     create_pr: boolValue('create_pr', fields.create_pr, source),
+    require_approval: requireApproval === null ? false : requireApproval,
     source,
   };
 }
@@ -131,7 +140,7 @@ function detectMode(targetDir = process.cwd()) {
   return active || { ...DEFAULT_MODE };
 }
 
-function validateInitFields({ enterprise, branchStrategy, createPr }) {
+function validateInitFields({ enterprise, branchStrategy, createPr, requireApproval, file }) {
   if (enterprise === null || enterprise === undefined || !BOOLS.has(enterprise)) {
     invalid('enterprise is required and must be one of: true, false.');
   }
@@ -155,10 +164,20 @@ function validateInitFields({ enterprise, branchStrategy, createPr }) {
     }
   }
 
+  if (requireApproval !== null && requireApproval !== undefined) {
+    boolValue('require_approval', requireApproval, 'init');
+  }
+  const modeFile = file === null || file === undefined ? 'AGENTS.md' : file;
+  if (!MODE_FILES.has(modeFile)) {
+    invalid(`file must be one of: ${FILES.join(', ')}.`);
+  }
+
   return {
     enterprise: ent,
     branch_strategy: ent ? branchStrategy : (branchStrategy ?? null),
     create_pr: ent ? createPr === 'true' : (createPr === null || createPr === undefined ? null : createPr === 'true'),
+    require_approval: requireApproval === null || requireApproval === undefined ? null : requireApproval === 'true',
+    file: modeFile,
   };
 }
 

@@ -109,6 +109,7 @@ test('mode defaults to local mode when no Pocket Enterprise heading exists', () 
     enterprise: false,
     branch_strategy: null,
     create_pr: null,
+    require_approval: null,
     source: null,
   });
 });
@@ -131,6 +132,7 @@ test('mode uses CLAUDE.md as a whole-heading override over AGENTS.md', () => {
     enterprise: false,
     branch_strategy: 'main-local',
     create_pr: false,
+    require_approval: null,
     source: 'CLAUDE.md',
   });
 });
@@ -204,6 +206,7 @@ test('mode parses CRLF config the same as LF config', () => {
     enterprise: true,
     branch_strategy: 'branch',
     create_pr: false,
+    require_approval: false,
     source: 'AGENTS.md',
   });
   assert.deepEqual(crlf.data, lf.data);
@@ -319,6 +322,116 @@ test('mode init rejects invalid enum values', { skip: !hasGit() }, () => {
   assert.equal(env.error.code, 'MODE_CONFIG_INVALID');
   assert.match(env.error.message, /branch_strategy/);
   assert.equal(existsSync(path.join(dir, 'AGENTS.md')), false);
+});
+
+test('mode init --file CLAUDE.md writes the block to CLAUDE.md, not AGENTS.md', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  gitInitRepoWithRemote(dir);
+
+  const env = json([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--file', 'CLAUDE.md',
+    '--json',
+  ]);
+  assert.deepEqual(env.data.wrote, ['CLAUDE.md', '.gitattributes']);
+  assert.equal(existsSync(path.join(dir, 'AGENTS.md')), false);
+
+  const claude = readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8');
+  assert.match(claude, /## Pocket Enterprise/);
+
+  const read = json(['mode', dir, '--json']);
+  assert.equal(read.data.enterprise, true);
+  assert.equal(read.data.source, 'CLAUDE.md');
+});
+
+test('mode init rejects a --file outside AGENTS.md/CLAUDE.md', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  gitInitRepoWithRemote(dir);
+
+  const res = run([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--file', 'README.md',
+    '--json',
+  ], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.error.code, 'MODE_CONFIG_INVALID');
+  assert.match(env.error.message, /file must be one of/);
+});
+
+test('mode init --require-approval persists and mode reads it back', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  gitInitRepoWithRemote(dir);
+
+  json([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--require-approval', 'true',
+    '--json',
+  ]);
+  const agents = readFileSync(path.join(dir, 'AGENTS.md'), 'utf8');
+  assert.match(agents, /require_approval: true/);
+
+  const read = json(['mode', dir, '--json']);
+  assert.equal(read.data.enterprise, true);
+  assert.equal(read.data.require_approval, true);
+});
+
+test('mode treats an absent require_approval as false when enterprise is on', () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', enterpriseBlock([
+    'enterprise: true',
+    'branch_strategy: branch',
+    'create_pr: true',
+  ]));
+
+  const env = json(['mode', dir, '--json']);
+  assert.equal(env.data.require_approval, false);
+});
+
+test('scaffold github writes issue and PR templates, then no-ops on re-run', () => {
+  const dir = tmp();
+
+  const first = json(['scaffold', 'github', dir, '--json']);
+  assert.equal(first.ok, true);
+  assert.deepEqual(first.data.wrote, [
+    path.join('.github', 'ISSUE_TEMPLATE', 'pocket-plan.md'),
+    path.join('.github', 'pull_request_template.md'),
+  ]);
+  assert.deepEqual(first.data.skipped, []);
+
+  const issueTpl = readFileSync(path.join(dir, '.github', 'ISSUE_TEMPLATE', 'pocket-plan.md'), 'utf8');
+  assert.match(issueTpl, /## Context/);
+  assert.match(issueTpl, /## Technical Approach/);
+  assert.match(issueTpl, /## Acceptance Criteria/);
+  assert.match(issueTpl, /## Out of Scope/);
+  assert.match(issueTpl, /labels: pocket-plan/);
+
+  const prTpl = readFileSync(path.join(dir, '.github', 'pull_request_template.md'), 'utf8');
+  assert.match(prTpl, /## What/);
+  assert.match(prTpl, /## Why/);
+  assert.match(prTpl, /## How to Test/);
+
+  const second = json(['scaffold', 'github', dir, '--json']);
+  assert.deepEqual(second.data.wrote, []);
+  assert.equal(second.data.skipped.length, 2);
+  assert.equal(readFileSync(path.join(dir, '.github', 'ISSUE_TEMPLATE', 'pocket-plan.md'), 'utf8'), issueTpl);
+});
+
+test('scaffold github --dry-run reports without writing', () => {
+  const dir = tmp();
+
+  const env = json(['scaffold', 'github', dir, '--dry-run', '--json']);
+  assert.equal(env.data.dryRun, true);
+  assert.equal(env.data.wrote.length, 2);
+  assert.equal(existsSync(path.join(dir, '.github')), false);
 });
 
 const NINE_TASK_PLAN = `# EXECUTION PLAN — Auth refactor
@@ -1008,7 +1121,7 @@ test('the new --strict/--all flags are accepted; unknown flags still rejected', 
 // The formatter reads a structured-input JSON file and WRITES the rendered
 // body to a temp file, returning its path in data.bodyFile. Tests write the
 // input into a tmp() dir, then read data.bodyFile back to assert content.
-// Assert only the spec-named contract: the 4 FSTrack sections, the
+// Assert only the spec-named contract: the 4 issue sections, the
 // refs/closes keyword, data.fileWarning — not exact prose/spacing.
 
 function writeInput(dir, name, obj) {
@@ -1017,28 +1130,70 @@ function writeInput(dir, name, obj) {
   return p;
 }
 
-test('format issue writes a temp body file with the 4 FSTrack sections in order', () => {
+test('format issue writes a temp body file with the 4 sections in order', () => {
   const dir = tmp();
   const input = writeInput(dir, 'issue.json', {
     title: 'GitHub Trace Loop',
-    konteks: 'why this work exists',
-    rencanaTeknis: 'the technical plan',
+    context: 'why this work exists',
+    technicalApproach: 'the technical plan',
     acceptanceCriteria: ['AC1', 'AC2'],
-    diLuarScope: ['team coordination'],
+    outOfScope: ['team coordination'],
   });
   const env = json(['format', 'issue', '--input', input, '--json']);
   assert.equal(env.ok, true);
   assert.ok(env.data.bodyFile, 'expected data.bodyFile path');
 
   const body = readFileSync(env.data.bodyFile, 'utf8');
-  // The four FSTrack sections appear in order (Indonesian labels, Story 1.2).
-  const iKonteks = body.indexOf('Konteks');
-  const iRencana = body.indexOf('Rencana Teknis');
-  const iAC = body.indexOf('Acceptance Criteria');
-  const iScope = body.indexOf('Di Luar Scope');
-  assert.ok(iKonteks >= 0 && iRencana > iKonteks && iAC > iRencana && iScope > iAC,
+  // The four sections appear in order (English labels).
+  const iContext = body.indexOf('## Context');
+  const iApproach = body.indexOf('## Technical Approach');
+  const iAC = body.indexOf('## Acceptance Criteria');
+  const iScope = body.indexOf('## Out of Scope');
+  assert.ok(iContext >= 0 && iApproach > iContext && iAC > iApproach && iScope > iAC,
     'all four sections present and in order');
   assert.equal(body.includes('\r'), false); // LF-only
+});
+
+test('format issue accepts the pre-2.5 field aliases (konteks/rencanaTeknis/diLuarScope)', () => {
+  const dir = tmp();
+  const input = writeInput(dir, 'issue-legacy.json', {
+    title: 'GitHub Trace Loop',
+    konteks: 'why this work exists',
+    rencanaTeknis: 'the technical plan',
+    acceptanceCriteria: ['AC1'],
+    diLuarScope: ['team coordination'],
+  });
+  const env = json(['format', 'issue', '--input', input, '--json']);
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+  assert.match(body, /## Context\nwhy this work exists/);
+  assert.match(body, /## Technical Approach\nthe technical plan/);
+  assert.match(body, /## Out of Scope\n- team coordination/);
+});
+
+test('format issue embeds the full spec in a collapsible details block', () => {
+  const dir = tmp();
+  const spec = '# Spec Title\n\nFull GWT scenarios here.\n';
+  const input = writeInput(dir, 'issue-spec.json', {
+    title: 'GitHub Trace Loop',
+    context: 'ctx',
+    technicalApproach: 'plan',
+    acceptanceCriteria: ['AC1'],
+    outOfScope: [],
+    specMarkdown: spec,
+  });
+  const env = json(['format', 'issue', '--input', input, '--json']);
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+  const iDetails = body.indexOf('<details>');
+  assert.ok(iDetails > body.indexOf('## Out of Scope'), 'details block follows the summary sections');
+  assert.match(body, /<summary>Full specification<\/summary>/);
+  assert.ok(body.includes('Full GWT scenarios here.'));
+  assert.ok(body.indexOf('</details>') > iDetails);
+
+  // Without specMarkdown, no details block is emitted.
+  const plain = json(['format', 'issue', '--input', writeInput(dir, 'issue-plain.json', {
+    title: 't', context: 'c', technicalApproach: 'p', acceptanceCriteria: [], outOfScope: [],
+  }), '--json']);
+  assert.equal(readFileSync(plain.data.bodyFile, 'utf8').includes('<details>'), false);
 });
 
 test('format pr selects closes vs refs from the (input-driven) phase position', () => {
@@ -1122,6 +1277,53 @@ test('format closeout writes a closeout summary body', () => {
   const body = readFileSync(env.data.bodyFile, 'utf8');
   assert.ok(body.length > 0);
   assert.equal(body.includes('\r'), false); // LF-only
+});
+
+// ─── format tasklist (child process; reads log.json directly, no --input) ───
+
+test('format tasklist renders a marker-tagged per-phase task table from log.json', () => {
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'log.json'), JSON.stringify({
+    header: { plan_dir: dir, plan_type: 'phased', status: 'IN_PROGRESS' },
+    phases: [
+      {
+        order: 1,
+        file: 'execution-plan-phase-1.md',
+        status: 'DONE',
+        tasks: [
+          { id: 'T1', name: 'Wire the parser', status: 'DONE', done_sha: 'abcdef0123456789' },
+          { id: 'T2', name: 'Add the gate', status: 'DONE', done_sha: '123456789abcdef0' },
+        ],
+        corrections: [{ sha: 'fedcba9876543210', files: ['a.js'], for_task: 'T1' }],
+      },
+      {
+        order: 2,
+        file: 'execution-plan-phase-2.md',
+        status: 'WAITING',
+        tasks: [{ id: 'T3', name: 'Docs pass', status: 'WAITING' }],
+      },
+    ],
+  }));
+
+  const env = json(['format', 'tasklist', dir, '--json']);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.marker, '<!-- pocket-tasklist -->');
+
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+  assert.match(body, /^<!-- pocket-tasklist -->/);
+  assert.match(body, /execution-plan-phase-1\.md — DONE/);
+  assert.match(body, /✅ T1 \| Wire the parser \| DONE \| `abcdef0`/);
+  assert.match(body, /⬜ T3 \| Docs pass \| WAITING \| —/);
+  assert.match(body, /Corrections: `fedcba9` \(T1\)/);
+  assert.equal(body.includes('\r'), false); // LF-only
+});
+
+test('format tasklist fails with NO_LOG when log.json is missing', () => {
+  const dir = tmp();
+  const res = run(['format', 'tasklist', dir, '--json'], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.ok, false);
+  assert.equal(env.error.code, 'NO_LOG');
 });
 
 // ─── reconcile set-diff (child process; --prior/--new <json> file inputs) ───

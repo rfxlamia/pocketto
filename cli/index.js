@@ -11,8 +11,10 @@
 //   pocketto-pi meta set   <dir> <field> <value>           [--json]
 //   pocketto-pi doctor                                     [--strict] [--json]
 //   pocketto-pi mode [<dir>]                               [--json]
-//   pocketto-pi mode init [<dir>]                          [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--json]
-//   pocketto-pi format <issue|pr>                          [--input <json-file>] [--json]
+//   pocketto-pi mode init [<dir>]                          [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--require-approval <bool>] [--file <AGENTS.md|CLAUDE.md>] [--json]
+//   pocketto-pi format <issue|pr|comment|closeout>         [--input <json-file>] [--json]
+//   pocketto-pi format tasklist <plan_dir>                 [--json]
+//   pocketto-pi scaffold github [<dir>]                    [--dry-run] [--json]
 //   pocketto-pi reconcile                                  [--prior <json>] [--new <json>] [--json]
 //   pocketto-pi setup-extensions                           [--all] [--json]
 //
@@ -29,6 +31,7 @@ const mode = require('./commands/mode');
 const setupExtensions = require('./commands/setup-extensions');
 const format = require('./commands/format');
 const reconcile = require('./commands/reconcile');
+const scaffold = require('./commands/scaffold');
 
 function parseArgs(argv) {
   const positionals = [];
@@ -45,6 +48,8 @@ function parseArgs(argv) {
     enterprise: null,
     branchStrategy: null,
     createPr: null,
+    requireApproval: null,
+    file: null,
     input: null,
     prior: null,
     newInput: null,
@@ -81,6 +86,10 @@ function parseArgs(argv) {
     else if (a.startsWith('--branch-strategy=')) flags.branchStrategy = requireValue(a.slice('--branch-strategy='.length), '--branch-strategy');
     else if (a === '--create-pr') flags.createPr = requireValue(argv[++i], '--create-pr');
     else if (a.startsWith('--create-pr=')) flags.createPr = requireValue(a.slice('--create-pr='.length), '--create-pr');
+    else if (a === '--require-approval') flags.requireApproval = requireValue(argv[++i], '--require-approval');
+    else if (a.startsWith('--require-approval=')) flags.requireApproval = requireValue(a.slice('--require-approval='.length), '--require-approval');
+    else if (a === '--file') flags.file = requireValue(argv[++i], '--file');
+    else if (a.startsWith('--file=')) flags.file = requireValue(a.slice('--file='.length), '--file');
     else if (a === '--input') flags.input = requireValue(argv[++i], '--input');
     else if (a.startsWith('--input=')) flags.input = requireValue(a.slice('--input='.length), '--input');
     else if (a === '--prior') flags.prior = requireValue(argv[++i], '--prior');
@@ -134,8 +143,10 @@ Usage:
   pocketto-pi meta set   <dir> <field> <value>            [--json]
   pocketto-pi doctor                                      [--strict] [--json]
   pocketto-pi mode [<dir>]                                [--json]
-  pocketto-pi mode init [<dir>]                           [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--json]
-  pocketto-pi format <issue|pr>                           [--input <json-file>] [--json]
+  pocketto-pi mode init [<dir>]                           [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--require-approval <bool>] [--file <AGENTS.md|CLAUDE.md>] [--json]
+  pocketto-pi format <issue|pr|comment|closeout>          [--input <json-file>] [--json]
+  pocketto-pi format tasklist <plan_dir>                  [--json]
+  pocketto-pi scaffold github [<dir>]                     [--dry-run] [--json]
   pocketto-pi reconcile                                   [--prior <json>] [--new <json>] [--json]
   pocketto-pi setup-extensions                            [--all] [--json]
 
@@ -227,10 +238,15 @@ function main() {
         enterprise: flags.enterprise,
         branchStrategy: flags.branchStrategy,
         createPr: flags.createPr,
+        requireApproval: flags.requireApproval,
+        file: flags.file,
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'format') {
-      const result = format.run({ kind: positionals[1], inputPath: flags.input });
+      const result = format.run({ kind: positionals[1], inputPath: flags.input, positionals: positionals.slice(2) });
+      emitSuccess(result.command, result, flags.json);
+    } else if (command === 'scaffold') {
+      const result = scaffold.run({ target: positionals[1], targetDir: positionals[2], dryRun: flags.dryRun });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'reconcile') {
       const result = reconcile.run({ priorPath: flags.prior, newPath: flags.newInput });
@@ -239,7 +255,7 @@ function main() {
       const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
       emitSuccess(result.command, result, flags.json);
     } else {
-      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | meta | doctor | mode | format | reconcile | setup-extensions.`);
+      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | meta | doctor | mode | format | scaffold | reconcile | setup-extensions.`);
     }
   } catch (err) {
     emitError(command, err, flags.json);
