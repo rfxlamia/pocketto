@@ -5,7 +5,9 @@ One block per skill: what it does, what it consumes, what it produces, and when 
 Two kinds of skills:
 
 - **Chained** (`pocket-*`) — pipeline stages that hand off to one another.
-- **Standalone** — `bug-hunting`, `hotfix`, `brand-design`, `structured-research`, `pocket-help`. Lighter, single-purpose, no handoff chain. The right choice for most everyday work.
+- **Standalone** — `bug-hunting`, `hotfix`, `brand-design`, `structured-research`, `pocket-help`, `pocket-init`, `create-pr`. Lighter, single-purpose, no handoff chain. The right choice for most everyday work.
+
+**Pocket Enterprise (opt-in):** with a `## Pocket Enterprise` block in `AGENTS.md`/`CLAUDE.md` (set up via `pocket-init` or `pocketto-pi mode init`), four pipeline stages gain a GitHub trace — grinding creates the issue from the approved spec, development offers `create-pr` and syncs a task checklist to the issue, review posts verdicts to the PR, and closing posts the closeout comment (optionally gated on PR approval). Detection is fail-closed: without the block, every stage is byte-identical to local mode and makes zero GitHub calls.
 
 ---
 
@@ -106,6 +108,20 @@ Two kinds of skills:
 - **Output:** Orientation + a routing decision pointing you to exactly one skill.
 - **Use when:** New to Pocket, unsure which skill fits, or comparing Pocket to lighter flows.
 - **Skip when:** You already know which stage you're in — open that skill directly.
+
+### pocket-init
+- **What:** Brownfield onboarding. Scans the repo (stack, real build/test/lint commands, layout, conventions), writes an evidence-based project guide into a merge-safe managed section of the memory file (`CLAUDE.md` on Claude Code, `AGENTS.md` on Pi), then — only on explicit opt-in — enables Pocket Enterprise (`mode init`) and scaffolds `.github/` issue + PR templates (`scaffold github`).
+- **Input:** An existing project directory (defaults to the repo root).
+- **Output:** Created/merged memory file; optionally the enterprise config block, `.gitattributes`, and GitHub templates.
+- **Use when:** Adopting Pocket in an existing repo, regenerating a stale project guide, or enabling enterprise mode for a team.
+- **Skip when:** The memory file is current and enterprise is already configured.
+
+### create-pr
+- **What:** Pocket Enterprise PR recorder. Opens (or reuses — idempotent by meta and branch) the GitHub PR for a completed development phase on the **current branch**; never manages branches. Commits traveling state (`log.json`, plan + spec docs) first, formats a What/Why/How-to-Test body linked to the Pocket issue (`refs #N` mid-plan, `closes #N` on the final phase), and records the PR in `.pocket-meta.json`.
+- **Input:** `<plan_dir>` (+ optional `<phase_file>`) with DONE tasks, enterprise mode on, a linked issue in meta.
+- **Output:** A PR on GitHub + `phases.<phase_key>.github_pr.*` in `.pocket-meta.json`. States: `PR_READY` or `PR_REUSED`.
+- **Use when:** Enterprise mode is on and a phase completed — typically when pocket-development offers it at PHASE_COMPLETE.
+- **Skip when:** Enterprise mode is off (the skill stops by design), or the phase has no linked issue yet (run grinding's issue step first).
 
 ### structured-research
 - **What:** Validates an explicit assumption against evidence. Operationalizes the belief into a falsifiable question, recommends 1–3 research methods (non-binding) from a catalog (`references/research-methods.csv`), gathers cited evidence, runs a curation gate, then grades the result.

@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: Opens a GitHub PR for the current branch linked to the Pocket issue (Pocket Enterprise). User-triggered recorder — commits traveling state, formats an FSTrack PR body, discovers or creates the PR, and records it in .pocket-meta.json. Trigger on "create-pr", "open a PR", "create pull request", or when pocket-development offers it after a phase completes in enterprise mode.
+description: Opens a GitHub PR for the current branch linked to the Pocket issue (Pocket Enterprise). User-triggered recorder — commits traveling state, formats a structured PR body, discovers or creates the PR, and records it in .pocket-meta.json. Trigger on "create-pr", "open a PR", "create pull request", or when pocket-development offers it after a phase completes in enterprise mode.
 ---
 
 # Create PR
@@ -9,7 +9,7 @@ Standalone Pocket Enterprise skill. Opens (or reuses) a GitHub pull request on t
 
 **Core principle:** Recorder only. The PR is created or discovered; warnings (e.g. >20 files) are surfaced but never block. Enforcement stays with CI and the human supervisor.
 
-**Use this when:** Pocket Enterprise is enabled, phase tasks are DONE on the current branch, and you need the FSTrack PR gate (what / why / how-to-test, issue link via `refs` or `closes`).
+**Use this when:** Pocket Enterprise is enabled, phase tasks are DONE on the current branch, and you need the structured PR gate (what / why / how-to-test, issue link via `refs` or `closes`).
 
 **Do NOT use when:** Enterprise mode is off — run `pocketto-pi mode` first; this skill will explain and stop.
 
@@ -158,7 +158,7 @@ npx -y pocketto-pi format pr --input <pr-input.json> --json --contract 2
 
 Parse `data.bodyFile` and `data.fileWarning`.
 
-If `data.fileWarning` is `true` → surface a one-line warning to the user (FSTrack ≤20-file rule). **Continue** — non-blocking.
+If `data.fileWarning` is `true` → surface a one-line warning to the user (≤20-file-per-PR rule). **Continue** — non-blocking.
 
 ```bash
 gh pr create --head <branch> --title "<phase title>" --body-file <data.bodyFile>

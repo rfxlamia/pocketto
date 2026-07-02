@@ -256,10 +256,15 @@ Parse the JSON envelope. If `ok` is false, the command is missing, or `data.ente
 
 ### E1. Discover the phase PR
 
-Read the PR number from plan meta:
+Derive the meta location the same way create-pr and pocket-closing do — `.pocket-meta.json` lives under the **spec** directory, not the plan directory:
+
+- `spec_dir` = `docs/pocket/spec/<slug>/` where `<slug>` matches the plan directory basename (e.g. `2026-06-09-github-trace-loop`).
+- `phase_key` = `phase-N` from the phase file name (`execution-plan-phase-N.md` → `phase-N`); flat single-file plan → `phase-1`.
+
+Read the PR number from the phase-nested path create-pr writes:
 
 ```bash
-npx pocketto-pi meta get <plan_dir> pr.number --json --contract 2
+npx pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
 ```
 
 - `data.value` is a positive integer → use it as the PR number.
@@ -332,7 +337,7 @@ The CLI computes the set-diff (resolve/post/keep). The skill executes the result
 #### E5a. Read prior fingerprints
 
 ```bash
-npx pocketto-pi meta get <plan_dir> review.fingerprints --json --contract 2
+npx pocketto-pi meta get <spec_dir> phases.<phase_key>.review.fingerprints --json --contract 2
 ```
 
 If `data.value` is null or absent, treat as `[]` (no prior findings).
@@ -462,7 +467,7 @@ Build the updated fingerprints array:
 Write to a temp file, then persist:
 
 ```bash
-npx pocketto-pi meta set <plan_dir> review.fingerprints "$(cat <updated-fingerprints.json>)" --json --contract 2
+npx pocketto-pi meta set <spec_dir> phases.<phase_key>.review.fingerprints "$(cat <updated-fingerprints.json>)" --json --contract 2
 ```
 
 ### E6. Enterprise section complete

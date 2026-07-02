@@ -16,7 +16,9 @@ pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring �
                                                                                              (user re-runs review)
 ```
 
-Standalone skills (`bug-hunting`, `hotfix`, `brand-design`) sit *outside* this chain — see `pocket-vs-superpowers.md` for when to leave the pipeline for one of them.
+Standalone skills (`bug-hunting`, `hotfix`, `brand-design`, `structured-research`, `pocket-init`, `create-pr`) sit *outside* this chain — see `pocket-vs-superpowers.md` for when to leave the pipeline for one of them.
+
+**Pocket Enterprise (opt-in):** when a `## Pocket Enterprise` block is configured (via `pocket-init` or `pocketto-pi mode init`), the same chain mirrors itself to GitHub — grinding creates the issue (with the full spec attached), development offers `create-pr` and syncs a task checklist to the issue, review posts verdicts to the PR, closing posts the closeout comment and can gate on PR approval. Without the block, nothing below changes and no GitHub call is ever made.
 
 ## Stage-by-Stage
 
