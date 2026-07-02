@@ -456,12 +456,13 @@ Otherwise, create a new issue:
 
 1. Map the approved spec to structured input JSON (write via Node `fs` — no shell heredocs; cross-OS safe):
    - `title` — spec title / feature name (first `#` heading)
-   - `konteks` — Summary + Context sections
-   - `rencanaTeknis` — Design Decision / technical approach
+   - `context` — Summary + Context sections
+   - `technicalApproach` — Design Decision / technical approach
    - `acceptanceCriteria` — array of acceptance-criterion strings (from GWT rules)
-   - `diLuarScope` — array of out-of-scope items
+   - `outOfScope` — array of out-of-scope items
+   - `specMarkdown` — the **full contents** of the approved spec file (read via Node `fs`), rendered on the issue inside a collapsible "Full specification" section so the team reads the whole spec on GitHub
 
-2. Format the FSTrack body:
+2. Format the structured issue body:
    ```bash
    npx -y pocketto-pi format issue --input <issue-input.json> --json --contract 2
    ```
