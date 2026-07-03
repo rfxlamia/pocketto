@@ -35,7 +35,8 @@ Check: does docs/pocket/rule/creative-brief.md exist?
 
 Before anything else, also scan the project to infer context: `README`, `package.json`,
 existing CSS / tokens / theme files. This grounds the interview in reality instead of
-asking the user things the repo already answers.
+asking the user things the repo already answers. Note whether the project has a CSS
+surface (any `.css` file, `<style>` usage, or Tailwind dependency) — Step 8 gates on it.
 
 ---
 
@@ -428,8 +429,11 @@ Entered when `docs/pocket/rule/creative-brief.md` already exists (Step 0).
 6. Overwrite creative-brief.md and update the preview HTML. Re-run Step 7's enforcement
    setup only where something is missing: the `jq` registration and the rule-file/hook writes
    are idempotent, so re-running them is safe and will not duplicate the hook entry.
-7. If a generated token file exists (Step 8 output), regenerate it from the updated brief —
-   load `references/token-export.md` first. A refined brief with a stale token file is a
+7. Check whether a generated token file exists (Step 8 output): look for
+   `brand.theme.css`, `tailwind.brand.preset.js`, or `tokens.css` at the canonical paths
+   from `references/token-export.md`, or grep for the GENERATED header if the path was
+   customized. If found, regenerate it from the updated brief — load
+   `references/token-export.md` first. A refined brief with a stale token file is a
    split-brain; never leave one behind. If no token file exists, offer Step 8 as usual.
 ```
 
