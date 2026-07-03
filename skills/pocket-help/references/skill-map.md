@@ -98,8 +98,8 @@ Two kinds of skills:
 ### brand-design
 - **What:** A "Head of Brand" that turns vague brand language into a math-validated design system — OKLCH color derivation, WCAG-calculated contrast, modular type scale, atomic component states — confirmed via an HTML preview gate, then written as the source of truth. (Renamed from the former `pocket-branding`; standalone, no pipeline.)
 - **Input:** Brand intent (name, audience, personality adjectives, platform).
-- **Output:** `docs/pocket/rule/creative-brief.md` + `creative-brief-preview.html` + an enforcement rule at `.claude/rules/brand-design.md`.
-- **Use when:** Starting UI work without a design authority; "design system", "creative brief", "brand identity", "set up UI tokens".
+- **Output:** `docs/pocket/rule/creative-brief.md` + `creative-brief-preview.html` + an enforcement rule at `.claude/rules/brand-design.md`, plus an optional generated token file compiled from the brief (Tailwind v4 `@theme` / v3 preset / plain CSS custom properties).
+- **Use when:** Starting UI work without a design authority; "design system", "creative brief", "brand identity", "set up UI tokens", "export design tokens".
 - **Skip when:** A `creative-brief.md` already exists and needs no change → just read it and build. (Refine mode handles scoped changes.)
 
 ### pocket-help
