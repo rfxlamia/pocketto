@@ -1,4 +1,4 @@
-'use strict';
+
 
 // Behavior tests for the pocketto-pi CLI. Self-contained (no Python): they
 // lock in the parity that was verified against the original scripts during
@@ -255,6 +255,67 @@ test('mode init writes AGENTS.md and .gitattributes when a git remote exists', {
   assert.equal(read.data.enterprise, true);
   assert.equal(read.data.branch_strategy, 'branch');
   assert.equal(read.data.create_pr, true);
+});
+
+test('mode init preserves existing .gitattributes content', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', '# Existing notes\n');
+  gitInitRepoWithRemote(dir);
+
+  // Write custom .gitattributes before running mode init
+  const customAttrs = '*.md text eol=lf\n*.sh text eol=lf\n';
+  writeFileSync(path.join(dir, '.gitattributes'), customAttrs, 'utf8');
+
+  const env = json([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--json',
+  ]);
+  assert.equal(env.ok, true);
+
+  const attrs = readFileSync(path.join(dir, '.gitattributes'), 'utf8');
+
+  // Custom content must be preserved
+  assert.match(attrs, /\*\.md text eol=lf/);
+  assert.match(attrs, /\*\.sh text eol=lf/);
+
+  // Pocket section must be appended
+  assert.match(attrs, /log\.json/);
+  assert.match(attrs, /AGENTS\.md/);
+  assert.match(attrs, /docs\/pocket\/plans/);
+  assert.match(attrs, /docs\/pocket\/spec/);
+
+  // Pocket section should appear after custom content
+  const customIdx = attrs.indexOf('*.sh text eol=lf');
+  const pocketIdx = attrs.indexOf('log.json');
+  assert.ok(customIdx < pocketIdx, 'Pocket section should be appended after existing content');
+
+  assert.ok(!attrs.includes('\r'), '.gitattributes must be LF-only');
+});
+
+test('mode init is idempotent on .gitattributes re-run', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'AGENTS.md', '# Existing notes\n');
+  gitInitRepoWithRemote(dir);
+
+  // Write custom .gitattributes
+  const customAttrs = '*.md text eol=lf\n';
+  writeFileSync(path.join(dir, '.gitattributes'), customAttrs, 'utf8');
+
+  // Run mode init twice
+  const args = ['mode', 'init', dir, '--enterprise', 'true', '--branch-strategy', 'branch', '--create-pr', 'true', '--json'];
+  json(args);
+  json(args);
+
+  const attrs = readFileSync(path.join(dir, '.gitattributes'), 'utf8');
+
+  // Pocket marker should appear exactly once
+  assert.equal((attrs.match(/# Pocket Enterprise/g) || []).length, 1);
+
+  // Custom content still preserved
+  assert.match(attrs, /\*\.md text eol=lf/);
 });
 
 test('mode init fails without a git remote and writes nothing', { skip: !hasGit() }, () => {
@@ -944,7 +1005,7 @@ test('meta set creates .pocket-meta.json with stable direct-write serialization'
   const metaPath = path.join(dir, '.pocket-meta.json');
   const content = readFileSync(metaPath, 'utf8');
   assert.match(content, /\n$/);
-  assert.match(content, /^  "github_issue":/m);
+  assert.match(content, /^ {2}"github_issue":/m);
 
   const parsed = JSON.parse(content);
   assert.equal(parsed.github_issue.number, 42);
