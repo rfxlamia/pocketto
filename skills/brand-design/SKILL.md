@@ -1,6 +1,6 @@
 ---
 name: brand-design
-description: Brand-aware design system generator that acts as Head of Brand. Translates abstract brand language into a mathematically-validated, implementation-ready design system, then writes creative-brief.md as the source of truth for all UI/UX in a project. Standalone skill (like bug-hunting and hotfix — no full pipeline required). Trigger on "/brand-design", "design system", "creative brief", "define the brand", "brand identity", "set up UI tokens", or when starting UI work without an existing design authority.
+description: Brand-aware design system generator that acts as Head of Brand. Translates abstract brand language into a mathematically-validated, implementation-ready design system, writes creative-brief.md as the source of truth for all UI/UX in a project, and optionally compiles it to framework tokens (Tailwind v4 @theme, v3 preset, or plain CSS custom properties). Standalone skill (like bug-hunting and hotfix — no full pipeline required). Trigger on "/brand-design", "design system", "creative brief", "define the brand", "brand identity", "set up UI tokens", "export design tokens", "tailwind theme from brand", or when starting UI work without an existing design authority.
 ---
 
 # Brand Design
@@ -21,7 +21,7 @@ Trigger this skill when:
 
 Do NOT use for:
 - Implementing a single component when `creative-brief.md` already exists and needs no change → just read the brief and build
-- Framework config generation (Tailwind config, CSS vars) — out of scope (see bottom)
+- Regenerating framework tokens alone when the brief is unchanged — the token file is derived output; if only the wiring broke, re-run Step 8, not the whole skill
 
 This is a **standalone skill**. It does not hand off to pocket-planning. Its deliverable is `creative-brief.md` + an enforcement rule, not a pipeline.
 
@@ -74,6 +74,7 @@ step.** A step executed without its reference loaded is invalid and must be redo
 | Step 4 | `references/atomic-states.md` | invent component states instead of the 5-state template |
 | Step 4 (copy) | `references/copy-guidelines.md` | write tone-mismatched micro-copy |
 | Step 5 | `references/html-preview-template.md` | hand-roll an inconsistent preview |
+| Step 8 | `references/token-export.md` | improvise token names/targets instead of the fixed mapping |
 
 Loading is enforced inline at each step with a STOP marker. Do not rely on memory of a
 reference from a previous session — load it fresh.
@@ -364,7 +365,51 @@ The registered entry has this shape:
 
 Brand-design is complete when the brief exists, the preview was confirmed, and BOTH
 enforcement mechanisms are in place: the SessionStart hook (registered + executable) and the
-static rule file.
+static rule file. Step 8 (token export) is offered after that point but is not required for
+completion — a project can decline it and still be fully set up.
+
+---
+
+## Step 8 — Token Export (opt-in)
+
+> ⛔ **STOP. Load `references/token-export.md` now** before detecting a target or writing any
+> token file. The mapping (brief section → token name), the per-target file formats, and the
+> idempotent wiring rules all live there — improvising them defeats the point.
+
+**Goal:** Compile the confirmed brief into machine-consumable design tokens, so implementers
+use `bg-primary-500` / `var(--color-primary-500)` instead of hand-transcribing OKLCH values
+out of a markdown file every time they build UI.
+
+**Preconditions (all must hold):**
+- `creative-brief.md` was just written (Step 6) or updated (Refine Mode) — tokens are
+  derived from the brief, never written before or instead of it.
+- The Step 0 scan found a CSS surface. Pure CLI/back-end projects skip this step silently.
+
+**Flow:**
+
+1. Detect the target per the detection table in the reference: Tailwind v4 → `@theme` file;
+   Tailwind v3 → preset file; CSS-but-no-Tailwind → plain custom-properties file.
+2. Offer it to the user, naming the target and output path:
+
+   ```
+   This project uses [Tailwind v4 / Tailwind v3 / plain CSS].
+   I can compile the brief into [<css-dir>/brand.theme.css / tailwind.brand.preset.js /
+   tokens.css] so brand values are available as [utilities + CSS variables / utilities /
+   CSS variables] instead of being hand-copied from the brief.
+
+   Generate it? (yes / skip)
+   ```
+
+   The user can skip; brand-design is already complete without it.
+3. On yes: write the generated file (mandatory GENERATED header, values verbatim from the
+   brief) and add the single idempotent wiring line, exactly as specified in the reference.
+4. Run the reference's validation checklist, then report: file path, wiring location, and
+   the boundary statement (atom states, copy, and pair-validation stay in the brief — the
+   SessionStart hook still points agents there).
+
+**Hard rule:** the token file is derived output. It never contains a value the brief lacks,
+and any change request that surfaces here ("actually make the primary darker") goes through
+Refine Mode — recompute, re-preview, re-confirm, regenerate — never a direct token edit.
 
 ---
 
@@ -383,6 +428,9 @@ Entered when `docs/pocket/rule/creative-brief.md` already exists (Step 0).
 6. Overwrite creative-brief.md and update the preview HTML. Re-run Step 7's enforcement
    setup only where something is missing: the `jq` registration and the rule-file/hook writes
    are idempotent, so re-running them is safe and will not duplicate the hook entry.
+7. If a generated token file exists (Step 8 output), regenerate it from the updated brief —
+   load `references/token-export.md` first. A refined brief with a stale token file is a
+   split-brain; never leave one behind. If no token file exists, offer Step 8 as usual.
 ```
 
 Refine mode never skips the preview confirmation. A scoped change still gets visually
@@ -399,10 +447,12 @@ confirmed before it is written.
 | `references/atomic-states.md` | Step 4: 5-state template + output format for each atom |
 | `references/copy-guidelines.md` | Step 4: tone-of-voice rules and micro-copy per persona |
 | `references/html-preview-template.md` | Step 5: building the self-contained preview |
+| `references/token-export.md` | Step 8: target detection, token mapping, generated-file + wiring rules |
 
 ## Out of Scope (for now)
 
 - Multi-theme support (dark mode) — later extension
-- Framework-specific output (Tailwind config, CSS custom properties) — separate skill/extension
+- Token targets beyond Tailwind v3/v4 and plain CSS custom properties (styled-components,
+  CSS-in-JS themes, native platforms) — later extension of `token-export.md`
 - Accepting image/URL references for visual inspiration (Q7 enhancement)
 - Atomic library beyond the 4 core atoms (add manually to the brief post-generation)
