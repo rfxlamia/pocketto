@@ -35,8 +35,11 @@ function enumValue(key, value, allowed, source) {
   return value;
 }
 
-function findHeadingBlock(text, source) {
-  const lines = text.split(/\r?\n/);
+// Locates the heading + fenced-block span by line index, independent of
+// blank-line formatting between the heading and the fence. Shared by the
+// parser (findHeadingBlock) and the writer (upsertEnterpriseHeading) so the
+// two can never disagree on what counts as "an existing block".
+function locateHeadingSpan(lines, source) {
   const heading = lines.findIndex((line) => line.trim() === '## Pocket Enterprise');
   if (heading === -1) return null;
 
@@ -51,12 +54,25 @@ function findHeadingBlock(text, source) {
     invalid(`${source}: ## Pocket Enterprise must contain a fenced block.`);
   }
 
-  const block = [];
+  let close = -1;
   for (let i = open + 1; i < lines.length; i++) {
-    if (lines[i].trim().startsWith('```')) return block.join('\n');
-    block.push(lines[i]);
+    if (lines[i].trim().startsWith('```')) {
+      close = i;
+      break;
+    }
   }
-  invalid(`${source}: ## Pocket Enterprise fenced block is not closed.`);
+  if (close === -1) {
+    invalid(`${source}: ## Pocket Enterprise fenced block is not closed.`);
+  }
+
+  return { heading, open, close };
+}
+
+function findHeadingBlock(text, source) {
+  const lines = text.split(/\r?\n/);
+  const span = locateHeadingSpan(lines, source);
+  if (span === null) return null;
+  return lines.slice(span.open + 1, span.close).join('\n');
 }
 
 function parseBlock(block, source) {
@@ -183,7 +199,9 @@ function validateInitFields({ enterprise, branchStrategy, createPr, requireAppro
 
 module.exports = {
   DEFAULT_MODE,
+  FILES,
   detectMode,
+  locateHeadingSpan,
   parseConfig,
   validateInitFields,
 };

@@ -249,7 +249,7 @@ This section runs **after** the summary table is printed and review JSONs are wr
 ### Preflight: detect enterprise mode
 
 ```bash
-npx pocketto-pi mode --json --contract 2
+npx -y pocketto-pi mode --json --contract 2
 ```
 
 Parse the JSON envelope. If `ok` is false, the command is missing, or `data.enterprise` is not `true` → **skip this entire section** and proceed directly to [Chain to pocket-closing](#chain-to-pocket-closing-conditional). Fail-closed: any error or malformed output means non-enterprise.
@@ -264,11 +264,12 @@ Derive the meta location the same way create-pr and pocket-closing do — `.pock
 Read the PR number from the phase-nested path create-pr writes:
 
 ```bash
-npx pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
 ```
 
+- `ok` is `false` (e.g. `error.code == "NOT_FOUND"` — `spec_dir` doesn't exist) → treat as no-meta and fall back to branch-based discovery, same as the null-value case below.
 - `data.value` is a positive integer → use it as the PR number.
-- `data.value` is null → fall back to branch-based discovery:
+- `data.value` is null (or the envelope was `ok:false`) → fall back to branch-based discovery:
   ```bash
   branch=$(git rev-parse --abbrev-ref HEAD)
   pr_number=$(gh pr list --head "$branch" --json number --jq '.[0].number // empty')
@@ -305,7 +306,7 @@ Build the input JSON for `format comment`:
 Write to a temp file, then:
 
 ```bash
-npx pocketto-pi format comment --input <tmp-verdicts.json> --json --contract 2
+npx -y pocketto-pi format comment --input <tmp-verdicts.json> --json --contract 2
 ```
 
 Read the body from `data.bodyFile`. The body starts with the marker `<!-- pocket-phase-<N>-summary -->` — this marker is the canonical identity for upsert.
@@ -337,10 +338,16 @@ The CLI computes the set-diff (resolve/post/keep). The skill executes the result
 #### E5a. Read prior fingerprints
 
 ```bash
-npx pocketto-pi meta get <spec_dir> phases.<phase_key>.review.fingerprints --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.review.fingerprints --json --contract 2
 ```
 
-If `data.value` is null or absent, treat as `[]` (no prior findings).
+If `data.value` is null or absent, **or** the envelope is `ok:false` (e.g. `error.code == "NOT_FOUND"` — `spec_dir` doesn't exist), before defaulting to `[]`, check the pre-2.5 location once as a migration fallback:
+
+```bash
+npx -y pocketto-pi meta get <plan_dir> review.fingerprints --json --contract 2
+```
+
+If that returns a non-null `data.value`, use it as the prior fingerprints (a plan last reviewed under 2.4.x has its fingerprints here). Otherwise treat as `[]` (no prior findings). Do not let a `NOT_FOUND` on either read abort E5 — findings still get posted; only fingerprint persistence (E5f/`meta set`, which always writes the new `<spec_dir>` location) is affected, and it should fail soft (log, don't block) for the same reason.
 
 #### E5b. Compute new fingerprints
 
@@ -380,7 +387,7 @@ Write the new findings array to a temp file `<new-findings.json>`:
 #### E5c. Run reconcile
 
 ```bash
-npx pocketto-pi reconcile --prior <prior-fingerprints.json> --new <new-findings.json> --json --contract 2
+npx -y pocketto-pi reconcile --prior <prior-fingerprints.json> --new <new-findings.json> --json --contract 2
 ```
 
 Returns:
@@ -467,8 +474,10 @@ Build the updated fingerprints array:
 Write to a temp file, then persist:
 
 ```bash
-npx pocketto-pi meta set <spec_dir> phases.<phase_key>.review.fingerprints "$(cat <updated-fingerprints.json>)" --json --contract 2
+npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.review.fingerprints "$(cat <updated-fingerprints.json>)" --json --contract 2
 ```
+
+If this returns `ok:false` (e.g. `error.code == "NOT_FOUND"` — `spec_dir` doesn't exist), do not treat it as a phase failure: the inline findings from E5e were already posted successfully. Log the persistence failure and continue — the only consequence is that a future re-review won't see these as prior findings and may repost them.
 
 ### E6. Enterprise section complete
 

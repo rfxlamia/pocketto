@@ -347,6 +347,70 @@ test('mode init --file CLAUDE.md writes the block to CLAUDE.md, not AGENTS.md', 
   assert.equal(read.data.source, 'CLAUDE.md');
 });
 
+test('mode init appends a new block when the heading only appears in prose (no false no-op)', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'CLAUDE.md', 'Some doc without a `## Pocket Enterprise` block yet.\n');
+  gitInitRepoWithRemote(dir);
+
+  const env = json([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--file', 'CLAUDE.md',
+    '--json',
+  ]);
+  assert.equal(env.ok, true);
+
+  const claude = readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8');
+  assert.match(claude, /Some doc without a `## Pocket Enterprise` block yet\./);
+  assert.equal((claude.match(/## Pocket Enterprise/g) || []).length, 2);
+
+  const read = json(['mode', dir, '--json']);
+  assert.equal(read.data.enterprise, true);
+});
+
+test('mode init replaces an existing block with no blank line before the fence (no duplicate block)', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'CLAUDE.md', '## Pocket Enterprise\n```\nenterprise: false\n```\n');
+  gitInitRepoWithRemote(dir);
+
+  const env = json([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--file', 'CLAUDE.md',
+    '--json',
+  ]);
+  assert.equal(env.ok, true);
+
+  const claude = readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8');
+  assert.equal((claude.match(/## Pocket Enterprise/g) || []).length, 1);
+
+  const read = json(['mode', dir, '--json']);
+  assert.equal(read.data.enterprise, true);
+});
+
+test('mode init rejects writing AGENTS.md when CLAUDE.md already shadows it', { skip: !hasGit() }, () => {
+  const dir = tmp();
+  writeModeConfig(dir, 'CLAUDE.md', enterpriseBlock(['enterprise: false']));
+  gitInitRepoWithRemote(dir);
+
+  const res = run([
+    'mode', 'init', dir,
+    '--enterprise', 'true',
+    '--branch-strategy', 'branch',
+    '--create-pr', 'true',
+    '--file', 'AGENTS.md',
+    '--json',
+  ], { expectFail: true });
+  const env = JSON.parse(res.stdout.trim());
+  assert.equal(env.ok, false);
+  assert.equal(env.error.code, 'MODE_FILE_SHADOWED');
+  assert.equal(existsSync(path.join(dir, 'AGENTS.md')), false);
+});
+
 test('mode init rejects a --file outside AGENTS.md/CLAUDE.md', { skip: !hasGit() }, () => {
   const dir = tmp();
   gitInitRepoWithRemote(dir);
@@ -1256,6 +1320,19 @@ test('format comment renders marker + verdict table + Action Required + DoD (mix
   assert.equal(body.includes('\r'), false); // LF-only
 });
 
+test('format comment escapes pipe chars in task/verdict table cells', () => {
+  const dir = tmp();
+  const input = writeInput(dir, 'comment-pipe.json', {
+    phase: 3,
+    verdicts: [{ task: 'Parse key|value pairs', verdict: 'FAIL' }],
+    prLinked: true,
+  });
+  const env = json(['format', 'comment', '--input', input, '--json']);
+  assert.equal(env.ok, true);
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+  assert.match(body, /\| Parse key\\\|value pairs \| FAIL \|/);
+});
+
 test('format comment omits the Action Required block when all verdicts PASS', () => {
   const dir = tmp();
   const input = writeInput(dir, 'comment-pass.json', {
@@ -1316,6 +1393,28 @@ test('format tasklist renders a marker-tagged per-phase task table from log.json
   assert.match(body, /⬜ T3 \| Docs pass \| WAITING \| —/);
   assert.match(body, /Corrections: `fedcba9` \(T1\)/);
   assert.equal(body.includes('\r'), false); // LF-only
+});
+
+test('format tasklist escapes pipe chars in task name/id/status and backticks in plan_dir', () => {
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'log.json'), JSON.stringify({
+    header: { plan_dir: 'docs/pocket/plans/x`y', plan_type: 'flat', status: 'IN_PROGRESS' },
+    phases: [
+      {
+        order: 1,
+        file: 'execution-plan.md',
+        status: 'DONE',
+        tasks: [{ id: 'T1', name: 'Parse key|value pairs', status: 'DONE', done_sha: 'abcdef0123456789' }],
+      },
+    ],
+  }));
+
+  const env = json(['format', 'tasklist', dir, '--json']);
+  assert.equal(env.ok, true);
+
+  const body = readFileSync(env.data.bodyFile, 'utf8');
+  assert.match(body, /\*\*Plan:\*\* `docs\/pocket\/plans\/x'y`/);
+  assert.match(body, /✅ T1 \| Parse key\\\|value pairs \| DONE \| `abcdef0`/);
 });
 
 test('format tasklist fails with NO_LOG when log.json is missing', () => {

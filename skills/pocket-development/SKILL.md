@@ -613,7 +613,7 @@ Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the comma
    ```bash
    npx -y pocketto-pi meta get <spec_dir> github_issue.number --json --contract 2
    ```
-   If `data.value` is null or missing → emit one warning line `"Task checklist sync skipped: no linked issue in .pocket-meta.json."` and stop this step (no GitHub call).
+   If `data.value` is null or missing, **or** the envelope is `ok:false` (e.g. `error.code == "NOT_FOUND"` — `spec_dir` doesn't exist) → emit one warning line `"Task checklist sync skipped: no linked issue in .pocket-meta.json."` and stop this step (no GitHub call).
 2. Check `gh auth status` — not authenticated → emit one warning line and stop this step (the handoff itself already succeeded; never fail the phase over checklist sync).
 3. Render the checklist body from `log.json`:
    ```bash

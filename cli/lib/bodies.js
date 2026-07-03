@@ -7,6 +7,14 @@ function bulletList(items) {
   return items.map((item) => `- ${item}`).join('\n');
 }
 
+function escapeCell(value) {
+  return String(value).replace(/\|/g, '\\|');
+}
+
+function escapeInlineCode(value) {
+  return String(value).replace(/`/g, "'");
+}
+
 // Field aliases: `konteks`, `rencanaTeknis`, and `diLuarScope` are the
 // pre-2.5 input names — accepted so older skills keep working on contract 2.
 function issueBody(input) {
@@ -92,7 +100,7 @@ function summaryBody({ phase, verdicts = [], prLinked = false }) {
   const lines = [markerFor(phase), '', '## Phase Review Summary', '', '| Task | Verdict |', '|------|---------|'];
 
   for (const { task, verdict } of verdicts) {
-    lines.push(`| ${task} | ${verdict} |`);
+    lines.push(`| ${escapeCell(task)} | ${escapeCell(verdict)} |`);
   }
   lines.push('');
 
@@ -130,7 +138,7 @@ function tasklistBody(log) {
     '',
     '## Task Progress',
     '',
-    `- **Plan:** \`${header.plan_dir || 'unknown'}\``,
+    `- **Plan:** \`${escapeInlineCode(header.plan_dir || 'unknown')}\``,
     `- **Status:** ${header.status || 'unknown'}`,
     '',
   ];
@@ -146,7 +154,7 @@ function tasklistBody(log) {
     for (const t of tasks) {
       const box = t.status === 'DONE' ? '✅' : t.status === 'BLOCKED' ? '🚫' : '⬜';
       const sha = t.done_sha ? `\`${String(t.done_sha).slice(0, 7)}\`` : '—';
-      lines.push(`| ${box} ${t.id} | ${t.name} | ${t.status} | ${sha} |`);
+      lines.push(`| ${box} ${escapeCell(t.id)} | ${escapeCell(t.name)} | ${escapeCell(t.status)} | ${sha} |`);
     }
     lines.push('');
     const corrections = phase.corrections || [];

@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { CliError } = require('../lib/envelope');
-const { detectMode, validateInitFields } = require('../lib/mode');
+const { FILES, detectMode, locateHeadingSpan, parseConfig, validateInitFields } = require('../lib/mode');
 const { getRemoteUrl } = require('../lib/git');
 
 const GITATTRIBUTES = [
@@ -31,21 +31,44 @@ function buildEnterpriseBlock({ enterprise, branch_strategy, create_pr, require_
   return ['## Pocket Enterprise', '', '```', ...lines, '```', ''].join('\n');
 }
 
-function upsertEnterpriseHeading(text, block) {
+function upsertEnterpriseHeading(text, block, source) {
   const normalized = (text || '').replace(/\r\n/g, '\n');
-  const heading = '## Pocket Enterprise';
   const blockBody = block.trimEnd();
+  const lines = normalized.split('\n');
+  const span = locateHeadingSpan(lines, source);
 
-  if (normalized.includes(heading)) {
-    const replaced = normalized
-      .replace(/\n## Pocket Enterprise\n\n```[\s\S]*?```\n?/, `\n${blockBody}\n`)
-      .replace(/^## Pocket Enterprise\n\n```[\s\S]*?```\n?/, `${blockBody}\n`);
+  if (span !== null) {
+    const replacedLines = [
+      ...lines.slice(0, span.heading),
+      ...blockBody.split('\n'),
+      ...lines.slice(span.close + 1),
+    ];
+    const replaced = replacedLines.join('\n');
     return replaced.endsWith('\n') ? replaced : `${replaced}\n`;
   }
 
   if (normalized.trim() === '') return block;
   const prefix = normalized.endsWith('\n') ? normalized : `${normalized}\n`;
   return `${prefix}\n${block}`;
+}
+
+function checkShadow(dir, targetFile) {
+  const idx = FILES.indexOf(targetFile);
+  for (let i = idx + 1; i < FILES.length; i++) {
+    const other = FILES[i];
+    const otherPath = path.join(dir, other);
+    if (!fs.existsSync(otherPath)) continue;
+    const parsed = parseConfig(fs.readFileSync(otherPath, 'utf8'), other);
+    if (parsed) {
+      throw new CliError(
+        'MODE_FILE_SHADOWED',
+        `${other} already defines a ## Pocket Enterprise block and takes precedence over ${targetFile} (mode precedence: ${FILES.join(' > ')}, last wins).`,
+        {
+          human: `Error: ${other} already has a Pocket Enterprise block and overrides ${targetFile}. Remove/update ${other} first, or run \`mode init --file ${other}\` instead.`,
+        },
+      );
+    }
+  }
 }
 
 function runInit(targetDir, { enterprise, branchStrategy, createPr, requireApproval, file }) {
@@ -61,6 +84,8 @@ function runInit(targetDir, { enterprise, branchStrategy, createPr, requireAppro
     );
   }
 
+  checkShadow(dir, config.file);
+
   const modePath = path.join(dir, config.file);
   const attrsPath = path.join(dir, '.gitattributes');
   const existing = fs.existsSync(modePath) ? fs.readFileSync(modePath, 'utf8') : '';
@@ -71,7 +96,7 @@ function runInit(targetDir, { enterprise, branchStrategy, createPr, requireAppro
     require_approval: config.require_approval,
   });
 
-  fs.writeFileSync(modePath, upsertEnterpriseHeading(existing, block), 'utf8');
+  fs.writeFileSync(modePath, upsertEnterpriseHeading(existing, block, config.file), 'utf8');
   fs.writeFileSync(attrsPath, GITATTRIBUTES, 'utf8');
 
   return {
