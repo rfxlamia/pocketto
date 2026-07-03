@@ -6,7 +6,7 @@ const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const META_FILE = '.pocket-meta.json';
 
 // .pocket-meta.json schema is additive:
-// { slug, github_issue: { number, url, created_at }, phases: { "<phase>": { github_pr: { number, url }, fingerprints: [] } }, external_tracker: string|null }
+// { slug, github_issue: { number, url, created_at }, phases: { "<phase>": { github_pr: { number, url }, review: { fingerprints: [] } } }, external_tracker: string|null }
 function emptyMeta() {
   return {
     slug: null,
@@ -94,17 +94,6 @@ function setPr(meta, phase, pr) {
   return meta;
 }
 
-function getFingerprints(meta, phase) {
-  const fingerprints = ((meta.phases || {})[phase] || {}).fingerprints;
-  return Array.isArray(fingerprints) ? fingerprints : [];
-}
-
-function setFingerprints(meta, phase, fingerprints) {
-  const entry = phaseEntry(meta, phase);
-  entry.fingerprints = Array.isArray(fingerprints) ? fingerprints : [];
-  return meta;
-}
-
 module.exports = {
   META_FILE,
   emptyMeta,
@@ -117,6 +106,4 @@ module.exports = {
   setIssue,
   getPr,
   setPr,
-  getFingerprints,
-  setFingerprints,
 };

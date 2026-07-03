@@ -1,9 +1,11 @@
 # Pocketto
 
-> Structured AI coding workflows for Claude Code and Pi. 13 skills take work
+> Structured AI coding workflows for Claude Code and Pi. 15 skills take work
 > from a rough idea to reviewed, shipped code without the agent skipping steps:
-> an 8-stage chained pipeline plus 5 standalone skills, backed by one
-> cross-platform Node CLI. Skills use the `pocketto:` namespace.
+> an 8-stage chained pipeline plus 7 standalone skills, backed by one
+> cross-platform Node CLI. Skills use the `pocketto:` namespace. An opt-in
+> Pocket Enterprise mode mirrors the pipeline to GitHub (issues, PRs, review
+> verdicts) for teams.
 
 Core ideas: plan before code (specs + acceptance criteria + TDD plans),
 delegate with contracts (every subagent gets a "Pocket Packet" — objective,
@@ -24,6 +26,8 @@ verification, stop conditions; no packet, no spawn), and gate before done
 ## Standalone skills (no pipeline needed)
 
 - [pocket-help](skills/pocket-help/SKILL.md): Compact onboarding + routing — what Pocket is and which skill to use, without loading every skill.
+- [pocket-init](skills/pocket-init/SKILL.md): Brownfield onboarding — scans the repo, writes a merge-safe CLAUDE.md/AGENTS.md project guide, optionally enables Pocket Enterprise and scaffolds GitHub templates.
+- [create-pr](skills/create-pr/SKILL.md): Pocket Enterprise recorder — opens/reuses the phase PR on the current branch, linked to the Pocket issue; commits traveling state first.
 - [bug-hunting](skills/bug-hunting/SKILL.md): Systematic debugging with confirmed root cause before any fix; reactive and proactive modes.
 - [hotfix](skills/hotfix/SKILL.md): Fast iteration for small-to-medium changes with brief-plan + subagent-review gates.
 - [brand-design](skills/brand-design/SKILL.md): Brand-aware design system generator; writes creative-brief.md as the UI/UX source of truth.
@@ -37,6 +41,11 @@ verification, stop conditions; no packet, no spawn), and gate before done
 - `npx pocketto-pi log close <plan_dir>`: finalize log after all phases complete.
 - `npx pocketto-pi doctor [--strict]`: check which required/recommended Pi extensions are installed.
 - `npx pocketto-pi setup-extensions [--all]`: install the required Pi extensions (and recommended with `--all`) via `pi install`.
+- `npx pocketto-pi mode [<dir>]` / `mode init [--file CLAUDE.md] …`: read / write the Pocket Enterprise config block.
+- `npx pocketto-pi meta get|set <dir> <field> [value]`: read/write .pocket-meta.json (issue/PR linkage).
+- `npx pocketto-pi format <issue|pr|comment|closeout> --input <json>` and `format tasklist <plan_dir>`: render GitHub bodies to temp files.
+- `npx pocketto-pi scaffold github [--dry-run]`: write .github issue/PR templates (idempotent).
+- `npx pocketto-pi reconcile --prior <json> --new <json>`: set-diff review findings for PR thread upserts.
 - Add `--json` for a stable output envelope, `--contract <N>` for a version handshake.
 
 ## Install

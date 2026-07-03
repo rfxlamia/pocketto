@@ -62,9 +62,9 @@ Recommended (with `--all`): `@juicesharp/rpiv-ask-user-question`, `@tintinweb/pi
 | Kind | Skills | Use for |
 |------|--------|---------|
 | **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-review · pocket-correction · pocket-closing | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
-| **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · structured-research · pocket-help | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
+| **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · structured-research · pocket-help · pocket-init · create-pr | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
 
-The `pocket-*` prefix marks a skill as part of the chained pipeline. `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks.
+The `pocket-*` prefix marks a skill as part of the chained pipeline (`pocket-init` and `pocket-help` are the exceptions — standalone setup/routing helpers). `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks. `create-pr` is the Pocket Enterprise PR recorder (see below).
 
 ## Router — Which Skill Right Now?
 
@@ -85,6 +85,8 @@ Match your situation to one skill. Open only that skill.
 | Design system / brand identity / UI tokens | `brand-design` | standalone |
 | An assumption to validate before it enters planning | `structured-research` | standalone |
 | "What is Pocket / which skill / how does this flow?" | `pocket-help` (you are here) | standalone |
+| New/existing repo needs Pocket set up (CLAUDE.md, enterprise) | `pocket-init` | standalone |
+| Enterprise phase done — open the linked PR | `create-pr` | standalone (enterprise) |
 
 **Routing rules of thumb:**
 - Don't know if the problem is even well-formed? → `pocket-pitching`.
@@ -136,6 +138,18 @@ plan closed (fix findings & loop phases until every phase is DONE)
 > `pocket-closing` is the terminal stage: it reconciles review verdicts, advances `REVIEW → DONE`, runs `log close`, and writes a `closeout.md`. Without it a fully reviewed plan stays in `IN_PROGRESS`/`REVIEW` limbo. Any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task makes it `CLOSE_BLOCKED` — follow pocket-review's Action Required block before re-reviewing.
 
 For the flow walked stage-by-stage with a worked example and every gate, load `references/end-to-end-flow.md`.
+
+## Pocket Enterprise (opt-in team layer)
+
+The pipeline above is local-first. With **Pocket Enterprise** enabled (`/pocketto:pocket-init` or `pocketto-pi mode init`), the same stages also leave a GitHub trace — nothing else changes:
+
+- `pocket-grinding` → creates a GitHub issue from the approved spec (summary + full spec in a collapsible section).
+- `pocket-development` → offers `/pocketto:create-pr` at PHASE_COMPLETE and syncs a task-checklist comment to the issue.
+- `create-pr` → opens the phase PR on the current branch, linked to the issue (`refs`/`closes`).
+- `pocket-review` → posts verdicts as a PR summary comment + inline findings (reconciled, no duplicates).
+- `pocket-closing` → posts the closeout comment to the issue; with `require_approval: true` it blocks the close until the PR is APPROVED. Pocket never merges PRs or closes issues — humans do.
+
+Detection is fail-closed: without a valid `## Pocket Enterprise` block in `AGENTS.md`/`CLAUDE.md`, every skill behaves exactly as local mode with **zero** GitHub calls.
 
 ## When Pocket Beats a Lighter Flow
 

@@ -126,6 +126,35 @@ The **current** per-task verdict decides the gate — an old `REVIEW_FAIL` super
 
 Non-blocking observations (`stage_2` Minor issues, strengths, out-of-scope notes on PASSing tasks) do NOT block. Collect them — they go into the closeout summary as "carried forward."
 
+## Enterprise Mode (opt-in): Approval Gate (E0)
+
+Runs **after** the verdict gate passes and **before** any `log.json` mutation (Advance State / Close). This is the formal sign-off gate: with it on, a plan cannot close until a human approved the PR.
+
+1. Detect mode:
+   ```bash
+   npx -y pocketto-pi mode --json --contract 2
+   ```
+   If `ok: false`, or `data.enterprise` is not `true`, or `data.require_approval` is not `true` → **skip this gate entirely** (proceed to Advance State). Non-enterprise runs and enterprise runs without `require_approval` are byte-identical to today.
+2. Discover the target phase's PR — same derivation as Step E5 below: `phase_key` from the phase file name, then
+   ```bash
+   npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
+   ```
+   falling back to `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number --jq '.[0].number // empty'`.
+   If no PR is found → **STOP** with state `APPROVAL_PENDING`: `require_approval` is explicitly configured, so a missing PR is a gate failure, not a skip (fail-closed). Tell the user to run `/pocketto:create-pr <plan_dir> <phase_file>` first.
+3. Check the review decision:
+   ```bash
+   gh pr view <pr_number> --json reviewDecision
+   ```
+   - `reviewDecision == "APPROVED"` → gate passes; proceed to Advance State.
+   - Anything else (`REVIEW_REQUIRED`, `CHANGES_REQUESTED`, empty) → **STOP** with state `APPROVAL_PENDING` and no `log.json` change:
+     ```text
+     APPROVAL_PENDING — PR #<N> is not APPROVED (<reviewDecision>).
+     Ask a supervisor to review and approve the PR, then re-run:
+     /pocketto:pocket-closing <plan_dir>
+     ```
+
+The gate reads GitHub; it never writes. Re-running pocket-closing after approval proceeds normally.
+
 ## Advance State
 
 For each phase that **passed the gate**, advance it `REVIEW → DONE` at the phase level only:
@@ -199,6 +228,16 @@ gh issue comment <issue-number> --body-file <bodyFile>
 
 **[CRITICAL] Do NOT call `gh issue close`.** The issue closes when the supervisor **merges** the final PR (`closes #<issue>` in the PR body). Merge is the human gate — Pocket never closes the issue directly.
 
+### Step E4b: Refresh the task checklist comment
+
+Bring the issue's task-checklist comment (written by pocket-development at PHASE_COMPLETE) up to final state so the issue shows every phase DONE:
+
+```bash
+npx -y pocketto-pi format tasklist <plan_dir> --json --contract 2
+```
+
+Parse `data.bodyFile` and `data.marker` (`<!-- pocket-tasklist -->`), then upsert exactly one marker-tagged comment on issue `<issue-number>` — list comments via `gh api repos/<owner>/<repo>/issues/<issue-number>/comments --paginate`, filter to bodies starting with the marker, create if none / PATCH the earliest if found (delete later duplicates). If this step fails (e.g. `gh` hiccup), emit a one-line warning and continue — the closeout itself already succeeded.
+
 ### Step E5: Discover linking PR number
 
 Derive `<phase_key>` from the target phase file name, mirroring create-pr: `phase-N` from the phase file name (`execution-plan-phase-N.md` → `phase-N`); flat single-file plan → `phase-1`. The PR number is written by create-pr at the phase-nested path, so read it there:
@@ -253,6 +292,7 @@ Closeout: <plan_dir>/closeout.md
 | `CLOSED` | All phases DONE, header `DONE` + `date_completed`, closeout.md written |
 | `PHASE_ADVANCED` | Reviewed phase advanced to DONE; other phases remain — plan continues |
 | `CLOSE_BLOCKED` | Preflight failed, a verdict is missing, or a task is REVIEW_FAIL/REVIEW_BLOCKED |
+| `APPROVAL_PENDING` | Enterprise `require_approval: true` and the phase PR is missing or not APPROVED — no `log.json` change; approve the PR and re-run |
 | `ALREADY_CLOSED` | Header already `DONE` — idempotent no-op |
 
 ## Iron Laws

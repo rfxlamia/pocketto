@@ -5,9 +5,10 @@ const path = require('node:path');
 const { mkdtempSync, writeFileSync, readFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { CliError } = require('../lib/envelope');
-const { issueBody, prBody, summaryBody, closeoutBody } = require('../lib/bodies');
+const { issueBody, prBody, summaryBody, closeoutBody, tasklistBody, TASKLIST_MARKER } = require('../lib/bodies');
+const { readLog } = require('../lib/logjson');
 
-const KINDS = new Set(['issue', 'pr', 'comment', 'closeout']);
+const KINDS = new Set(['issue', 'pr', 'comment', 'closeout', 'tasklist']);
 
 function readInput(inputPath) {
   if (!inputPath) {
@@ -78,10 +79,37 @@ function runCloseout(input) {
   };
 }
 
-function run({ kind, inputPath }) {
-  if (!kind || !KINDS.has(kind)) {
-    throw new CliError('USAGE', 'Usage: pocketto-pi format <issue|pr|comment|closeout> --input <json-file>');
+// `format tasklist` reads log.json directly — the CLI owns that file, so the
+// skill layer never transcribes task state into an input JSON by hand.
+function runTasklist(planDir) {
+  if (!planDir) {
+    throw new CliError('USAGE', 'Usage: pocketto-pi format tasklist <plan_dir>');
   }
+  const logPath = path.join(planDir, 'log.json');
+  if (!fs.existsSync(logPath)) {
+    throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
+  }
+  let log;
+  try {
+    log = readLog(logPath);
+  } catch {
+    throw new CliError('BAD_INPUT', `Invalid JSON in ${logPath}`);
+  }
+  const body = tasklistBody(log);
+  const bodyFile = writeBodyFile(body);
+  return {
+    command: 'format tasklist',
+    exit: 0,
+    human: [`Wrote task checklist: ${bodyFile}`],
+    data: { kind: 'tasklist', bodyFile, marker: TASKLIST_MARKER },
+  };
+}
+
+function run({ kind, inputPath, positionals = [] }) {
+  if (!kind || !KINDS.has(kind)) {
+    throw new CliError('USAGE', 'Usage: pocketto-pi format <issue|pr|comment|closeout|tasklist> [--input <json-file>]');
+  }
+  if (kind === 'tasklist') return runTasklist(positionals[0]);
   const input = readInput(inputPath);
   if (kind === 'issue') return runIssue(input);
   if (kind === 'pr') return runPr(input);

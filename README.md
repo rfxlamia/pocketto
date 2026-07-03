@@ -22,7 +22,7 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 - **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
 - **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
 
-13 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work.
+15 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work. Working in a team? Opt into [Pocket Enterprise](#pocket-enterprise-opt-in) and the same pipeline tracks itself on GitHub — issues, PRs, and review verdicts.
 
 <p align="center">
   <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development → review → closing, plus standalone skills (pocket-help, bug-hunting, hotfix, brand-design, structured-research)" width="100%">
@@ -90,7 +90,7 @@ Or just fix something:
 /pocketto:hotfix        "bump the rate-limit window to 60s"
 ```
 
-## The 13 skills
+## The 15 skills
 
 ### Pipeline (chained)
 
@@ -114,10 +114,12 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 | Skill | When to reach for it |
 |-------|----------------------|
 | `pocket-help` | "What is Pocket?", which skill to use, how the flow works |
+| `pocket-init` | Onboard an existing project: generate CLAUDE.md/AGENTS.md, enable enterprise |
 | `bug-hunting` | Fix a bug, debug a failure, audit code for hidden bugs |
 | `hotfix` | Small-to-medium change where the full pipeline is overkill |
 | `brand-design` | Design system, creative brief, brand identity, UI tokens |
 | `structured-research` | Validate an explicit assumption before it enters planning |
+| `create-pr` | Open the phase PR linked to the Pocket issue (enterprise mode) |
 
 <details>
 <summary><b>📖 Full skill reference</b> — what each skill actually does</summary>
@@ -161,15 +163,46 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 **`pocket-help`** — Compact onboarding and routing guide for the whole system. Explains what Pocket is, when it beats lighter flows, and which skill to invoke — without loading every skill into context.
 *Trigger:* "what is pocket", "how do I use pocket", "which pocket skill", "pocket-help".
 
+**`pocket-init`** — Onboards an existing (brownfield) project onto Pocket. Scans the codebase and writes an evidence-based project memory file (`CLAUDE.md` on Claude Code, `AGENTS.md` on Pi) in a merge-safe managed section, then optionally enables Pocket Enterprise (`pocketto-pi mode init`) and scaffolds GitHub issue/PR templates (`pocketto-pi scaffold github`). Enterprise stays strictly opt-in.
+*Trigger:* "pocket-init", "set up pocket", "onboard this project", "generate CLAUDE.md", "enable enterprise mode".
+
+**`create-pr`** — Pocket Enterprise recorder that opens (or reuses) the GitHub PR for a completed development phase on the **current branch** — it never manages branches. Commits traveling state (`log.json` + plan/spec docs), formats a structured What/Why/How-to-Test body linked to the Pocket issue (`refs`/`closes`), and records the PR in `.pocket-meta.json`. Requires enterprise mode.
+*Trigger:* "create-pr", "open a PR", or offered by `pocket-development` after a phase completes in enterprise mode.
+
 **`structured-research`** — Validates an explicit assumption before it leaks into planning or code. Operationalizes the belief into a falsifiable question, recommends a research methodology (non-binding) from a catalog of techniques, gathers cited evidence, then returns a graded verdict — Confirmed / Refuted / Inconclusive — with an advisory recommendation.
 *Trigger:* "structured-research", "validate this assumption", "is it true that", "research whether", "verify my assumption".
 *Deliverables:* `docs/pocket/research/<date>-<slug>/research-report.md`.
 
 </details>
 
+## Pocket Enterprise (opt-in)
+
+Pocket is local-first — everything above works with zero GitHub coupling. **Pocket Enterprise** is the opt-in team layer: the same pipeline, but every stage leaves a trace on GitHub so the team can follow progress without opening your filesystem.
+
+| Stage | What enterprise mode adds |
+|-------|---------------------------|
+| `pocket-init` | One-time setup: enables the mode, scaffolds `.github/` issue + PR templates, creates the `pocket-plan` label |
+| `pocket-grinding` | Creates a GitHub issue from the approved spec — structured summary plus the **full spec** in a collapsible section |
+| `pocket-development` | Offers `/pocketto:create-pr` when a phase completes; syncs a live task checklist comment to the issue |
+| `create-pr` | Opens the phase PR on the current branch, linked to the issue (`refs`/`closes`), with traveling state committed |
+| `pocket-review` | Posts per-task verdicts as a PR summary comment + inline findings, reconciled across re-runs (no duplicates) |
+| `pocket-closing` | Posts the closeout comment to the issue; with `require_approval: true`, blocks the close until the PR is APPROVED |
+
+**Enable it:** run `/pocketto:pocket-init` (guided), or directly:
+
+```bash
+npx pocketto-pi mode init --enterprise true --branch-strategy branch --create-pr true
+```
+
+This writes a `## Pocket Enterprise` block into `AGENTS.md` (or `CLAUDE.md` via `--file CLAUDE.md`) plus a `.gitattributes` for LF-normalized traveling state. Requirements: a git remote and an authenticated [`gh` CLI](https://cli.github.com). Design guarantees:
+
+- **Opt-in & fail-closed** — without the config block (or on any mode error), no skill ever calls GitHub; the workflow is byte-identical to local mode.
+- **One-way sync** — GitHub is the output, your repo stays the source of truth.
+- **Human gates stay human** — Pocket never merges PRs and never closes issues; the issue closes when a supervisor merges the final PR (`closes #N`).
+
 ## CLI
 
-The `pocket-structuring` and `pocket-development` skills drive a single cross-platform Node CLI, run via `npx` — no install, PATH setup, or Python required. Works the same on Windows, macOS, and Linux. Requires Node.js ≥ 18.
+The pocket skills drive a single cross-platform Node CLI, run via `npx` — no install, PATH setup, or Python required. Works the same on Windows, macOS, and Linux. Requires Node.js ≥ 18.
 
 | Command | What it does |
 |---------|--------------|
@@ -177,6 +210,14 @@ The `pocket-structuring` and `pocket-development` skills drive a single cross-pl
 | `npx pocketto-pi log init <plan_dir>` | Initialize `log.json` for a plan directory |
 | `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN]` | Update phase or task status |
 | `npx pocketto-pi log close <plan_dir>` | Finalize log after all phases complete |
+| `npx pocketto-pi doctor [--strict]` | Check required/recommended Pi extensions |
+| `npx pocketto-pi mode [<dir>]` | Report Pocket Enterprise mode (from `AGENTS.md`/`CLAUDE.md`) |
+| `npx pocketto-pi mode init [--file CLAUDE.md] …` | Write the enterprise config block + `.gitattributes` |
+| `npx pocketto-pi meta get\|set <dir> <field> [value]` | Read/write `.pocket-meta.json` (issue/PR linkage) |
+| `npx pocketto-pi format <issue\|pr\|comment\|closeout> --input <json>` | Render GitHub bodies to a temp file (`--body-file` safe) |
+| `npx pocketto-pi format tasklist <plan_dir>` | Render the issue task-checklist comment from `log.json` |
+| `npx pocketto-pi scaffold github [--dry-run]` | Write `.github/` issue + PR templates (idempotent) |
+| `npx pocketto-pi reconcile --prior <json> --new <json>` | Set-diff review findings for PR thread upserts |
 
 Status flow: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
 
