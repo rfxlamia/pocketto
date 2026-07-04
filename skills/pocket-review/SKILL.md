@@ -88,6 +88,8 @@ files_changed = git diff --name-only <prev_sha>..<task.done_sha>
 
 If zero tasks are reviewable (no non-empty-diff DONE tasks found) → `PHASE_BLOCKED: "No reviewable tasks found. Ensure all tasks are DONE with done_sha."`. Empty-diff tasks flagged for stubs do **not** count toward this threshold.
 
+Note: a duplicate `done_sha` across sibling tasks (collapsed parallel-group merge) is now blocked at log time — `pocketto-pi log update` refuses it with `DUPLICATE_DONE_SHA` unless `--allow-duplicate-sha` was passed deliberately, so an empty diff here normally means a genuine no-change task.
+
 #### Corrections: attribution, range-union, and re-review trigger
 
 After applying the first-cycle rules above, also read `phase.corrections` from `log.json` (absent or null → treat as empty array `[]`).

@@ -208,7 +208,7 @@ The pocket skills drive a single cross-platform Node CLI, run via `npx` — no i
 |---------|--------------|
 | `npx pocketto-pi structure <execution-plan.md> [--dry-run]` | Split a plan into phase files (passthrough if < 7 tasks) |
 | `npx pocketto-pi log init <plan_dir>` | Initialize `log.json` for a plan directory |
-| `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN]` | Update phase or task status |
+| `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha]` | Update phase or task status |
 | `npx pocketto-pi log close <plan_dir>` | Finalize log after all phases complete |
 | `npx pocketto-pi doctor [--strict]` | Check required/recommended Pi extensions |
 | `npx pocketto-pi mode [<dir>]` | Report Pocket Enterprise mode (from `AGENTS.md`/`CLAUDE.md`) |

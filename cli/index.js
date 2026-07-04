@@ -5,7 +5,7 @@
 //
 //   pocketto-pi structure <execution-plan.md> [--dry-run] [--json]
 //   pocketto-pi log init   <plan_dir>                      [--json]
-//   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
+//   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
 //   pocketto-pi log close  <plan_dir>                      [--json]
 //   pocketto-pi meta get   <dir> <field>                   [--json]
 //   pocketto-pi meta set   <dir> <field> <value>           [--json]
@@ -55,6 +55,8 @@ function parseArgs(argv) {
     newInput: null,
     correction: null,
     forTask: null,
+    sha: null,
+    allowDuplicateSha: false,
   };
 
   // A flag that takes a value must actually have one — guard against it being
@@ -100,6 +102,9 @@ function parseArgs(argv) {
     else if (a.startsWith('--correction=')) flags.correction = requireValue(a.slice('--correction='.length), '--correction');
     else if (a === '--for-task') flags.forTask = requireValue(argv[++i], '--for-task');
     else if (a.startsWith('--for-task=')) flags.forTask = requireValue(a.slice('--for-task='.length), '--for-task');
+    else if (a === '--sha') flags.sha = requireValue(argv[++i], '--sha');
+    else if (a.startsWith('--sha=')) flags.sha = requireValue(a.slice('--sha='.length), '--sha');
+    else if (a === '--allow-duplicate-sha') flags.allowDuplicateSha = true;
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -136,7 +141,7 @@ const HELP = `pocketto-pi — CLI for the pocket-* development skills
 Usage:
   pocketto-pi structure <execution-plan.md> [--dry-run] [--json]
   pocketto-pi log init   <plan_dir>                       [--json]
-  pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--json]
+  pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
   pocketto-pi log update <plan_dir> <phase_file> --correction <sha> [--for-task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
   pocketto-pi meta get   <dir> <field>                    [--json]
@@ -159,6 +164,10 @@ Flags:
   --task <id>       (log update) update a task within a phase, e.g. --task T1
   --correction <sha> (log update) record a correction commit on a phase
   --for-task <id>   (log update) task a correction is primarily for, e.g. --for-task T1
+  --sha <commit>    (log update) record this commit as the task's done_sha instead of HEAD
+                    (repairs a collapsed parallel-group merge; requires --task and status DONE)
+  --allow-duplicate-sha (log update) permit a done_sha already recorded by a sibling task
+                    (only for tasks that legitimately produced no new commit)
   --strict          (doctor) exit nonzero when a required extension is missing
   --all             (setup-extensions) also install the recommended extensions
   --version, -v     Print version + contract
@@ -224,6 +233,8 @@ function main() {
         task: flags.task,
         correction: flags.correction,
         forTask: flags.forTask,
+        sha: flags.sha,
+        allowDuplicateSha: flags.allowDuplicateSha,
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'meta') {
