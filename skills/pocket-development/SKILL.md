@@ -450,7 +450,12 @@ next task. NEVER merge the whole group first and log afterwards — every
 `log update` would capture the final merge commit, collapsing all tasks onto a
 single `done_sha`. That silently empties pocket-review's per-task diff range
 (`<prev_sha>..<done_sha>`) for the 2nd+ task, so it goes unreviewed. The CLI
-warns when it detects a duplicate `done_sha` across sibling tasks in a phase.
+refuses a duplicate `done_sha` across sibling tasks in a phase
+(`DUPLICATE_DONE_SHA`, exit 1, nothing written). Recover by re-running with
+`--sha <that task's own merge commit>` (find it via `git log --merges
+--oneline`); only for a task that legitimately produced no new commit, pass
+`--allow-duplicate-sha` to record the duplicate anyway (pocket-review emits a
+skip stub for it).
 
 Merge commit SHA becomes that task's `done_sha` in log.json — **schema stays linear**, pocket-review preflight unchanged.
 
@@ -775,7 +780,7 @@ When delegation pressure threatens to bypass structure:
 - Accept vague escalation ("I'm stuck" without reason)
 - Dispatch a parallel group without creating worktrees first — collision risk on `git status`, `git log`, lockfiles, shared registries
 - Merge a parallel group before ALL tasks in the group audit-pass — partial merges create ambiguous parent SHAs for the rest
-- Merge the whole parallel group, THEN `log update` each task — every update captures the final merge commit, collapsing all tasks onto one `done_sha` and silently voiding their per-task review scope. Merge + log one task at a time
+- Merge the whole parallel group, THEN `log update` each task — every update captures the final merge commit, collapsing all tasks onto one `done_sha` and silently voiding their per-task review scope. Merge + log one task at a time. The CLI hard-errors on the duplicate (`DUPLICATE_DONE_SHA`); repair with `--sha <that task's own merge commit>`
 
 **If agent asks questions:**
 - Answer clearly and completely

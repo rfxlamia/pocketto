@@ -95,4 +95,33 @@ function commitExists(cwd, sha) {
   }
 }
 
-module.exports = { getGitSha, getRemoteUrl, getCommitFiles, getRangeFiles, commitExists };
+// Resolves <ref> (full/short sha, branch, tag…) to a full commit sha, or null
+// (invalid ref, not a commit, or git unavailable). Never throws.
+function resolveCommit(cwd, ref) {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// Returns true if <sha> is an ancestor of HEAD (or HEAD itself), false
+// otherwise. Never throws — false when git is unavailable.
+function isAncestorOfHead(cwd, sha) {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', sha, 'HEAD'], {
+      cwd,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { getGitSha, getRemoteUrl, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead };

@@ -8,7 +8,7 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { readLog, writeLog, todayISO } = require('../lib/logjson');
-const { getGitSha, getCommitFiles, getRangeFiles, commitExists } = require('../lib/git');
+const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
 const VALID_SET = new Set(VALID_STATUSES);
@@ -101,6 +101,8 @@ function init(positionals) {
 
   if (existsSync(logPath)) return migrateExisting(planDir, logPath);
 
+  // A fresh init cannot produce duplicate done_sha values: tasks are created
+  // without done_sha, which is only ever set by `log update … DONE`.
   const phases = collectPlanFiles(planDir);
   const planType = phases.length > 1 || phases[0].file.includes('phase') ? 'phased' : 'flat';
 
@@ -131,6 +133,41 @@ function init(positionals) {
   };
 }
 
+// Pre-existing logs may carry duplicate done_sha values recorded before the
+// CLI started refusing them (issue #38: collapsed parallel-group merge).
+// Returns { <phaseFile>: { <sha>: [taskIds…] } } or null when clean.
+function findDuplicateDoneShas(log) {
+  const result = {};
+  for (const phase of log.phases) {
+    const bySha = {};
+    for (const t of phase.tasks || []) {
+      if (!t.done_sha) continue;
+      if (!bySha[t.done_sha]) bySha[t.done_sha] = [];
+      bySha[t.done_sha].push(t.id);
+    }
+    const dupes = {};
+    for (const [sha, ids] of Object.entries(bySha)) {
+      if (ids.length > 1) dupes[sha] = ids;
+    }
+    if (Object.keys(dupes).length) result[phase.file] = dupes;
+  }
+  return Object.keys(result).length ? result : null;
+}
+
+// Non-fatal by design: init must adopt existing plans, not brick them, so
+// duplicates found here are warned about with repair instructions.
+function warnDuplicateDoneShas(human, duplicateDoneShas) {
+  if (!duplicateDoneShas) return;
+  for (const [file, groups] of Object.entries(duplicateDoneShas)) {
+    for (const [sha, ids] of Object.entries(groups)) {
+      human.push(`⚠ ${file}: done_sha ${sha} is shared by ${ids.join(', ')} — pocket-review will skip the 2nd+ task.`);
+    }
+  }
+  human.push(
+    `  Repair each task with: pocketto-pi log update <plan_dir> <phase_file> DONE --task <id> --sha <that task's own merge commit>`,
+  );
+}
+
 function migrateExisting(planDir, logPath) {
   const log = readLog(logPath);
   let migrated = 0;
@@ -145,13 +182,16 @@ function migrateExisting(planDir, logPath) {
     migrated++;
   }
 
+  const duplicateDoneShas = findDuplicateDoneShas(log);
+
   if (migrated === 0) {
     const human = [`log.json already exists at ${logPath} — no migration needed.`];
+    warnDuplicateDoneShas(human, duplicateDoneShas);
     return {
       command: 'log init',
       exit: 0,
       human,
-      data: { planDir, logPath, migrated: false, phaseCount: log.phases.length, phases: log.phases },
+      data: { planDir, logPath, migrated: false, phaseCount: log.phases.length, phases: log.phases, duplicateDoneShas },
     };
   }
 
@@ -161,25 +201,35 @@ function migrateExisting(planDir, logPath) {
     const ids = (phase.tasks || []).map((t) => t.id).join(', ');
     human.push(`  [${phase.order}] ${phase.file} (${phase.status}) → tasks: ${ids || 'none'}`);
   }
+  warnDuplicateDoneShas(human, duplicateDoneShas);
   return {
     command: 'log init',
     exit: 0,
     human,
-    data: { planDir, logPath, migrated: true, phaseCount: log.phases.length, phases: log.phases },
+    data: { planDir, logPath, migrated: true, phaseCount: log.phases.length, phases: log.phases, duplicateDoneShas },
   };
 }
 
 // ─── UPDATE ─────────────────────────────────────────────────────────────────
 
-function update(positionals, taskId) {
+function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSha = false } = {}) {
   if (positionals.length !== 3) {
-    throw new CliError('USAGE', 'Usage: pocketto-pi log update <plan_dir> <phase_file> <status> [--task <task_id>]');
+    throw new CliError(
+      'USAGE',
+      'Usage: pocketto-pi log update <plan_dir> <phase_file> <status> [--task <task_id>] [--sha <commit>] [--allow-duplicate-sha]',
+    );
   }
   const [planDirArg, phaseFile, statusArg] = positionals;
   const planDir = resolvePlanDir(planDirArg); // accept a plan file or its directory, like `init`
   const newStatus = statusArg.toUpperCase();
   if (!VALID_SET.has(newStatus)) {
     throw new CliError('BAD_STATUS', `status must be one of [${VALID_STATUSES.join(', ')}], got '${statusArg}'.`);
+  }
+  if (shaOverride && !taskId) {
+    throw new CliError('USAGE', '--sha requires --task <id> — it records a specific task\'s done_sha.');
+  }
+  if (shaOverride && newStatus !== 'DONE') {
+    throw new CliError('USAGE', `--sha only applies when marking a task DONE, got status '${statusArg}'.`);
   }
 
   const logPath = path.join(planDir, 'log.json');
@@ -214,32 +264,80 @@ function update(positionals, taskId) {
       );
     }
     const oldStatus = task.status;
-    task.status = newStatus;
     let shaCollision = null;
+    let doneSha = null;
     if (newStatus === 'DONE') {
-      const sha = getGitSha(planDir);
-      if (sha) {
-        task.done_sha = sha;
+      if (shaOverride) {
+        // Normalize to the full sha so the collision check below compares like
+        // with like (stored done_sha values are full 40-char rev-parse output).
+        doneSha = resolveCommit(planDir, shaOverride);
+        if (!doneSha) {
+          throw new CliError('UNKNOWN_SHA', `--sha '${shaOverride}' is not a commit in '${planDir}'.`);
+        }
+        // done_sha must sit on the current branch history — pocket-review's
+        // <prev_sha>..<done_sha> ranges assume a linear first-parent chain.
+        if (!isAncestorOfHead(planDir, doneSha)) {
+          throw new CliError(
+            'SHA_NOT_ANCESTOR',
+            `--sha '${shaOverride}' is not an ancestor of HEAD — pass a commit on the current branch history ` +
+              `(e.g. this task's own merge commit from 'git log --merges --oneline').`,
+          );
+        }
+      } else {
+        doneSha = getGitSha(planDir);
+      }
+      if (doneSha) {
         // A sibling task in this phase already carries this exact SHA — the
         // signature of a collapsed parallel-group merge. When parallel tasks
         // are merged in a batch and only logged afterwards, every `log update`
         // captures the same final HEAD (one merge commit) instead of each
         // task's own merge commit, which silently empties pocket-review's
         // per-task diff range (<prev_sha>..<done_sha>) for the 2nd+ task.
-        // Warn, but don't fail — the status change itself is legitimate.
+        // Refuse before anything is written, unless --allow-duplicate-sha
+        // deliberately accepts it (a task that produced no new commit).
         const dupes = (phase.tasks || [])
-          .filter((t) => t.id !== task.id && t.done_sha === sha)
+          .filter((t) => t.id !== task.id && t.done_sha === doneSha)
           .map((t) => t.id);
+        if (dupes.length && !allowDuplicateSha) {
+          throw new CliError(
+            'DUPLICATE_DONE_SHA',
+            `done_sha ${doneSha} is already recorded for ${dupes.join(', ')} in '${phaseFile}' — nothing written. ` +
+              `Merge and log parallel tasks one at a time; to repair, re-run with --sha <${task.id}'s own merge commit> ` +
+              `(find it via 'git log --merges --oneline'). If ${task.id} legitimately produced no new commit, ` +
+              `re-run with --allow-duplicate-sha.`,
+            {
+              exitCode: 1,
+              human: [
+                `done_sha ${doneSha} is already recorded for ${dupes.join(', ')} in this phase — refusing to mark ${task.id} DONE.`,
+                `Nothing was written to log.json.`,
+                ``,
+                `Cause: a parallel group was merged in a batch and logged afterwards, so this update`,
+                `captured the same HEAD (the final merge commit) as a sibling task. pocket-review diffs`,
+                `each task as <prev_sha>..<done_sha>, so a duplicate done_sha silently empties the 2nd+`,
+                `task's review range and the task goes unreviewed.`,
+                ``,
+                `Fix — record ${task.id}'s own merge commit instead of HEAD:`,
+                `  1. git log --merges --oneline            # find the "Merge ${task.id}" commit`,
+                `  2. pocketto-pi log update ${planDir} ${phaseFile} DONE --task ${task.id} --sha <merge_sha>`,
+                ``,
+                `If ${task.id} legitimately produced no new commit (no-change task), re-run with`,
+                `--allow-duplicate-sha — pocket-review will emit a skip stub for it.`,
+              ].join('\n'),
+            },
+          );
+        }
         if (dupes.length) shaCollision = dupes;
       }
     }
+    task.status = newStatus;
+    if (doneSha) task.done_sha = doneSha;
     writeLog(logPath, log);
     human = [`Updated ${phaseFile} / ${task.id} (${task.name}): ${oldStatus} → ${newStatus}`];
     if (shaCollision) {
       human.push(
         `⚠ done_sha ${task.done_sha} is already recorded for ${shaCollision.join(', ')} in this phase.`,
-        `  Parallel-group tasks must be merged and logged one at a time (merge → log update),`,
-        `  so each captures its own merge commit. See pocket-development → Group Merge.`,
+        `  Recorded anyway because --allow-duplicate-sha was passed — pocket-review will emit`,
+        `  a skip stub for ${task.id}'s empty diff range instead of reviewing it.`,
       );
     }
     data = {
@@ -472,11 +570,16 @@ function close(positionals) {
 
 // ─── DISPATCH ───────────────────────────────────────────────────────────────
 
-function run({ sub, positionals, task, correction, forTask }) {
+function run({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha }) {
   if (sub === 'init') return init(positionals);
   if (sub === 'update') {
-    if (correction) return recordCorrection(positionals, correction, forTask);
-    return update(positionals, task);
+    if (correction) {
+      if (sha) {
+        throw new CliError('USAGE', `--sha cannot be combined with --correction (pass the sha as --correction's value).`);
+      }
+      return recordCorrection(positionals, correction, forTask);
+    }
+    return update(positionals, task, { sha, allowDuplicateSha });
   }
   if (sub === 'close') return close(positionals);
   throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'log' subcommand: ${sub || '(none)'}. Use init | update | close.`);

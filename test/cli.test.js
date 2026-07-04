@@ -1074,10 +1074,12 @@ function gitInitRepo(dir) {
 	git(dir, ["commit", "--allow-empty", "-q", "-m", "init"]);
 }
 
-// Issue #28: when a parallel group is merged in a batch and logged afterwards,
-// every `log update --task` captures the same HEAD (one merge commit), so the
-// 2nd+ task reuses a sibling's done_sha. The CLI must surface that collision.
-test("log update warns when a task reuses a sibling done_sha (collapsed parallel merge)", {
+// Issue #38 (supersedes the #28 warning): when a parallel group is merged in a
+// batch and logged afterwards, every `log update --task` captures the same
+// HEAD (one merge commit), so the 2nd+ task would reuse a sibling's done_sha —
+// which silently empties pocket-review's per-task diff range. The CLI must
+// refuse the duplicate without writing anything.
+test("log update errors when a task reuses a sibling done_sha (collapsed parallel merge)", {
 	skip: !hasGit(),
 }, () => {
 	const dir = tmp();
@@ -1102,19 +1104,20 @@ test("log update warns when a task reuses a sibling done_sha (collapsed parallel
 	assert.ok(t2.data.doneSha, "expected a real done_sha inside a git repo");
 	assert.equal(t2.data.shaCollision, null);
 
-	// T3 DONE with NO new commit → same HEAD → same done_sha → collision on T2.
-	const t3 = json([
-		"log",
-		"update",
-		dir,
-		phase,
-		"DONE",
-		"--task",
-		"T3",
-		"--json",
-	]);
-	assert.equal(t3.data.doneSha, t2.data.doneSha);
-	assert.deepEqual(t3.data.shaCollision, ["T2"]);
+	// T3 DONE with NO new commit → same HEAD → same done_sha → refused.
+	const t3 = json(
+		["log", "update", dir, phase, "DONE", "--task", "T3", "--json"],
+		{ expectFail: true },
+	);
+	assert.equal(t3.ok, false);
+	assert.equal(t3.error.code, "DUPLICATE_DONE_SHA");
+	assert.match(t3.error.message, /--sha/);
+
+	// Nothing was persisted: T3 keeps its old status and has no done_sha.
+	let logJson = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	let t3Entry = logJson.phases[0].tasks.find((t) => t.id === "T3");
+	assert.equal(t3Entry.status, "WAITING");
+	assert.equal(t3Entry.done_sha, undefined);
 
 	// Advance HEAD, then T4 DONE → distinct done_sha → no collision.
 	git(dir, ["commit", "--allow-empty", "-q", "-m", "advance"]);
@@ -1131,7 +1134,114 @@ test("log update warns when a task reuses a sibling done_sha (collapsed parallel
 	assert.notEqual(t4.data.doneSha, t2.data.doneSha);
 	assert.equal(t4.data.shaCollision, null);
 
-	// The human (non-JSON) path surfaces the warning too.
+	// The human (non-JSON) path fails too, with repair instructions on stderr.
+	const human = run(
+		["log", "update", dir, phase, "DONE", "--task", "T3", "--sha", t2.data.doneSha],
+		{ expectFail: true },
+	);
+	assert.match(human.stderr, /refusing to mark T3 DONE/);
+	assert.match(human.stderr, /--sha <merge_sha>/);
+	assert.match(human.stderr, /--allow-duplicate-sha/);
+});
+
+test("log update --sha records an explicit commit (short shas normalized)", {
+	skip: !hasGit(),
+}, () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	gitInitRepo(dir);
+	run(["log", "init", dir]);
+
+	const phase = "execution-plan-phase-1.md";
+	const t2 = json(["log", "update", dir, phase, "DONE", "--task", "T2", "--json"]);
+
+	// Two more commits: B (T3's own commit) and C (current HEAD).
+	git(dir, ["commit", "--allow-empty", "-q", "-m", "commit B"]);
+	const shaB = git(dir, ["rev-parse", "HEAD"]).trim();
+	git(dir, ["commit", "--allow-empty", "-q", "-m", "commit C"]);
+
+	// Repair path: record T3 against B (not HEAD), passed as a SHORT sha —
+	// the stored done_sha must be the normalized full sha.
+	const t3 = json([
+		"log",
+		"update",
+		dir,
+		phase,
+		"DONE",
+		"--task",
+		"T3",
+		"--sha",
+		shaB.slice(0, 7),
+		"--json",
+	]);
+	assert.equal(t3.data.doneSha, shaB);
+	assert.equal(t3.data.shaCollision, null);
+	const logJson = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.equal(
+		logJson.phases[0].tasks.find((t) => t.id === "T3").done_sha,
+		shaB,
+	);
+
+	// An unknown sha is rejected before anything is written.
+	const unknown = json(
+		["log", "update", dir, phase, "DONE", "--task", "T4", "--sha", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "--json"],
+		{ expectFail: true },
+	);
+	assert.equal(unknown.error.code, "UNKNOWN_SHA");
+
+	// An explicit --sha that collides with a sibling is still refused.
+	const collide = json(
+		["log", "update", dir, phase, "DONE", "--task", "T4", "--sha", t2.data.doneSha, "--json"],
+		{ expectFail: true },
+	);
+	assert.equal(collide.error.code, "DUPLICATE_DONE_SHA");
+
+	// A commit off the current branch history is refused (ranges must stay linear).
+	const mainBranch = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+	git(dir, ["checkout", "-q", "-b", "side"]);
+	git(dir, ["commit", "--allow-empty", "-q", "-m", "off-chain"]);
+	const offChain = git(dir, ["rev-parse", "HEAD"]).trim();
+	git(dir, ["checkout", "-q", mainBranch]);
+	const ancestor = json(
+		["log", "update", dir, phase, "DONE", "--task", "T4", "--sha", offChain, "--json"],
+		{ expectFail: true },
+	);
+	assert.equal(ancestor.error.code, "SHA_NOT_ANCESTOR");
+});
+
+test("log update --allow-duplicate-sha deliberately records a duplicate (no-change task)", {
+	skip: !hasGit(),
+}, () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	gitInitRepo(dir);
+	run(["log", "init", dir]);
+
+	const phase = "execution-plan-phase-1.md";
+	const t2 = json(["log", "update", dir, phase, "DONE", "--task", "T2", "--json"]);
+
+	const t3 = json([
+		"log",
+		"update",
+		dir,
+		phase,
+		"DONE",
+		"--task",
+		"T3",
+		"--allow-duplicate-sha",
+		"--json",
+	]);
+	assert.equal(t3.data.doneSha, t2.data.doneSha);
+	assert.deepEqual(t3.data.shaCollision, ["T2"]);
+	const logJson = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.equal(
+		logJson.phases[0].tasks.find((t) => t.id === "T3").done_sha,
+		t2.data.doneSha,
+	);
+
+	// The human path surfaces the warning (stdout, exit 0).
 	const human = run([
 		"log",
 		"update",
@@ -1140,8 +1250,76 @@ test("log update warns when a task reuses a sibling done_sha (collapsed parallel
 		"DONE",
 		"--task",
 		"T3",
+		"--allow-duplicate-sha",
 	]).stdout;
 	assert.match(human, /done_sha .* is already recorded for/);
+});
+
+test("log update --sha usage guards", { skip: !hasGit() }, () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	gitInitRepo(dir);
+	run(["log", "init", dir]);
+
+	const phase = "execution-plan-phase-1.md";
+	const sha = git(dir, ["rev-parse", "HEAD"]).trim();
+
+	// --sha without --task
+	const noTask = json(
+		["log", "update", dir, phase, "DONE", "--sha", sha, "--json"],
+		{ expectFail: true },
+	);
+	assert.equal(noTask.error.code, "USAGE");
+
+	// --sha with a non-DONE status
+	const notDone = json(
+		["log", "update", dir, phase, "REVIEW", "--task", "T2", "--sha", sha, "--json"],
+		{ expectFail: true },
+	);
+	assert.equal(notDone.error.code, "USAGE");
+
+	// --sha combined with --correction
+	const withCorrection = json(
+		["log", "update", dir, phase, "--correction", sha, "--sha", sha, "--json"],
+		{ expectFail: true },
+	);
+	assert.equal(withCorrection.error.code, "USAGE");
+
+	// bare --sha at the end of argv
+	const missing = json(
+		["log", "update", dir, phase, "DONE", "--task", "T2", "--json", "--sha"],
+		{ expectFail: true },
+	);
+	assert.equal(missing.error.code, "MISSING_VALUE");
+});
+
+test("log init warns about pre-existing duplicate done_sha values", () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	run(["log", "init", dir]);
+
+	// Simulate a log corrupted by a pre-fix collapsed parallel merge.
+	const logPath = path.join(dir, "log.json");
+	const logJson = JSON.parse(readFileSync(logPath, "utf8"));
+	const [a, b] = logJson.phases[0].tasks;
+	a.status = "DONE";
+	a.done_sha = "1111111111111111111111111111111111111111";
+	b.status = "DONE";
+	b.done_sha = "1111111111111111111111111111111111111111";
+	writeFileSync(logPath, JSON.stringify(logJson, null, 2) + "\n");
+
+	// Re-running init adopts the existing log and surfaces the duplicates.
+	const res = json(["log", "init", dir, "--json"]);
+	assert.deepEqual(res.data.duplicateDoneShas, {
+		"execution-plan-phase-1.md": {
+			"1111111111111111111111111111111111111111": [a.id, b.id],
+		},
+	});
+	const human = run(["log", "init", dir]).stdout;
+	assert.match(human, /done_sha .* is shared by/);
+	assert.match(human, /--sha/);
 });
 
 test("log update refreshes done_sha when an already-DONE last task is re-marked DONE", {
