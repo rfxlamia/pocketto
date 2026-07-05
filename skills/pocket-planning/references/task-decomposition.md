@@ -4,6 +4,7 @@ Load this during Phase 3 when: a rule is ambiguous to decompose, tasks share an 
 
 ## Contents
 - [Shared Interface Pattern](#shared-interface-pattern)
+- [Shared Helper Pattern](#shared-helper-pattern)
 - [Event-Driven Decomposition](#event-driven-decomposition)
 - [Phased Rollout Decomposition](#phased-rollout-decomposition)
 - [Over-Split vs Under-Split Detection](#over-split-vs-under-split-detection)
@@ -29,6 +30,32 @@ T3: Frontend implementation                    [depends: T1] [parallel: T2]
 - Backend and frontend both reference a data shape
 - Two modules communicate via an event or message format
 - Multiple files import from a shared types file
+
+---
+
+## Shared Helper Pattern
+
+**Problem:** Two or more tasks need the same *logic* (validation, formatting, parsing, error mapping, retry) — not just a shared contract.
+
+**Solution:** Extract the helper as its own prerequisite task — named and domain-scoped, never a generic `utils`.
+
+```
+T1: Shared helper module (e.g. auth/token-utils)   [prereq]
+T2: Feature A, imports helper                      [depends: T1]
+T3: Feature B, imports helper                      [depends: T1] [parallel: T2]
+```
+
+**Why:** Parallel subagents cannot see each other's code. Without T1, T2 and T3 each write their own copy of the same logic — and no later phase merges them, so the duplication ships.
+
+**When to apply:**
+- Two tasks' steps describe the same computation, validation, or transformation
+- A GWT precondition repeats across tasks in different modules
+- You catch yourself pasting identical step content into two packets (the No Placeholders
+  rule makes duplication visible — treat that as a decomposition signal, not a chore)
+
+**In Pocket Packets:**
+- T1's DELIVERABLE: unit-tested helper API (its own GWT scenarios)
+- T2/T3's QUALITY BAR must-not: reimplementing the helper locally instead of importing it
 
 ---
 
@@ -83,6 +110,7 @@ T3: Enable feature (remove flag or cutover)    [depends: T2]
 - Task includes both "define contract" and "implement against it" — split (see Shared Interface Pattern)
 - Task has two independent GWT rules — split into one task per rule
 - Steps inside task say "if X is done, otherwise do Y" — this is a dependency disguised as a step
+- Two tasks' steps describe the same logic — that's a shared helper `[prereq]` task in disguise (see Shared Helper Pattern)
 
 ### Decision: Split or Step?
 

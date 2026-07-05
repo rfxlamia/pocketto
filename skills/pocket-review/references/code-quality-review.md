@@ -64,7 +64,9 @@ From QUALITY BAR, verify each must-not-have is absent:
 From QUALITY BAR, check for red flag patterns:
 
 ```
-[ ] "While extracting, I improved the code" → REVERT
+[ ] Improvements touching files OUTSIDE the task's scope → REVERT
+    (an in-scope refactor mandated by the packet's "Refactor while green" step is
+    NOT a violation — verify it stayed within scoped files + declared helpers)
 [ ] Missing function signatures → FIX
 [ ] Hardcoded credentials → CRITICAL
 [ ] SQL injection risk → CRITICAL
@@ -77,8 +79,8 @@ Beyond QUALITY BAR, assess:
 
 **Structure:**
 - Clean separation of concerns?
-- Functions/classes sized appropriately?
-- No code duplication?
+- Functions/classes sized appropriately? File >~300 lines or function >~50 lines left unsplit → [Important]
+- No code duplication? Same logic 3+ times in scope, or duplicated across files of the same plan → [Important]
 
 **Patterns:**
 - Follows existing codebase conventions?

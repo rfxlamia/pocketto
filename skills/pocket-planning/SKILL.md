@@ -7,7 +7,7 @@ description: Converts a pocket-grinding spec into a TDD-structured execution pla
 
 Bridges pocket-grinding spec and pocket-development execution. Scans codebase context, maps file structure, decomposes acceptance criteria into TDD-structured tasks, generates Pocket Packets with test-first steps and commits, then runs spec reviewer and test-architect subagents before handoff.
 
-**Core principle:** Every task is red → green → commit. Steps live inside the task. Pocket enforces execution order and parallelism.
+**Core principle:** Every task is red → green → refactor → commit. Steps live inside the task. Pocket enforces execution order and parallelism.
 
 ## When to Use
 
@@ -67,6 +67,7 @@ Read the spec file at Phase 1. The table below is a checklist of what to extract
 | Design decision | Spec `## Design Decision` | Yes — GATE 3 |
 | Open questions / assumptions | Spec `## Open Questions` | If present |
 | Out-of-scope list | Spec `## Scope → Out-of-Scope` | Yes |
+| Dependencies | Spec `## Dependencies` | If present |
 | Rollback plan | Spec `## Rollback Plan` | If present |
 
 ---
@@ -84,6 +85,8 @@ Scan identified areas:
 - Check recent commits in affected paths: `git log --oneline -10 -- <path>`
 - Identify existing test patterns: framework, naming conventions, folder layout
 - Identify existing file conventions: module boundaries, error handling, logging
+- Search for existing shared helpers/utilities the plan can reuse (glob/grep for `*util*`,
+  `*helper*`, `lib/`, `shared/`) — tasks must import these instead of reinventing them
 
 **Test framework gate:** If zero test files exist in the codebase:
 → STOP. Ask user: "No test files found. Confirm the test framework to use (e.g., pytest, Jest, go test, RSpec) before continuing."
@@ -92,7 +95,7 @@ Do not proceed until test framework is confirmed.
 
 ### Library Docs Search
 
-For every unfamiliar dependency in the spec's tech stack or architecture constraints:
+For every unfamiliar dependency in the spec's tech stack or architecture constraints, and every dependency listed in the spec's `## Dependencies` section (existing to leverage + newly proposed):
 - Use context7 MCP (`resolve-library-id` then `query-docs`) to fetch current docs
 - Focus on: API usage, version-specific behavior, known constraints, test utilities
 - Do NOT skip this for libraries not in your training data — query them
@@ -109,6 +112,7 @@ PREFLIGHT COMPLETE
 Codebase scanned: <areas reviewed>
 Test framework: <framework + conventions found, or user-specified>
 File conventions: <key patterns>
+Existing helpers: <reusable helper/util modules found, or none>
 Library docs fetched: <list of libraries queried>
 Key findings: <anything surprising or constraining for the plan>
 Unknown areas: <gaps — missing docs, unreadable files, etc.>
@@ -168,9 +172,14 @@ Rule: <rule name>
 ```
 
 **File mapping rules:**
-- Each file must have one clear responsibility — no "utils" catch-alls
+- Each file must have one clear responsibility — no generic catch-alls (`utils.ts`, `helpers.py`)
+- When 2+ mapped files need the same logic, plan a named, domain-scoped helper module
+  (e.g. `auth/token-utils.ts`) as an explicit Create entry — do not inline duplicates.
+  Reuse helpers found in Preflight before creating new ones.
 - Files that change together should live together (by feature, not by layer)
-- In existing codebases, follow established patterns unless the file is already unwieldy
+- In existing codebases, follow established patterns unless the file is already unwieldy —
+  a mapped Modify file already over ~300 lines (or pushed past it by this work) → plan the
+  extraction as part of the task and add the extracted file(s) to this map
 - Every non-trivial implementation file must have a corresponding test file listed
 - Exact paths — no relative paths, no `src/*/...` wildcards
 
@@ -259,7 +268,7 @@ For advanced patterns (shared interfaces, event-driven, phased rollouts):
 
 | Pocket Field | Source |
 |---|---|
-| OBJECTIVE | Rule + TDD steps + commit |
+| OBJECTIVE | Rule + TDD steps (red → green → refactor) + commit |
 | REFERENCES LOADED | Spec path + preflight codebase files read |
 | WHY THIS APPROACH | Task type → complexity assessment |
 | SANDWICH CONTEXT | Architecture constraints + design decision |
@@ -300,16 +309,25 @@ Steps:
    `<exact command>`
    Expected: PASS
 
-5. Commit:
+5. Refactor while green (bounded):
+   - Rule of three: same logic appears 3+ times in the files in scope → extract a named,
+     domain-scoped helper (e.g. `auth/token-utils.ts`) — never a generic `utils.ts`
+   - A modified file crosses ~300 lines, or a function exceeds ~50 lines → split/extract
+   - Refactor only within task-scope files plus helper files declared in the file map
+   - Re-run test: `<exact command>` — must stay PASS
+   - Nothing to refactor → say so and move to commit
+
+6. Commit:
    `git add exact/path/file.ext tests/exact/path/test.ext`
    `git commit -m "<type>(<scope>): <description>"`
    Valid types: `feat | fix | test | refactor | chore`
    Scope = module or feature name from spec (e.g., `feat(auth): add JWT validation`)
+   If Step 5 extracted a helper, commit it separately as `refactor(<scope>): <description>`
 
-[Add additional test→implement→commit cycles if rule has multiple GWT scenarios]
+[Add additional test→implement→refactor→commit cycles if rule has multiple GWT scenarios]
 
 **Non-testable tasks** (scaffold, directory creation, config setup — no behavioral GWT):
-Replace Steps 1–4 with:
+Replace Steps 1–6 with:
 1. Create the structure / file / config
 2. Verify: `<exact validation command, e.g., ls -la, config lint, or startup check>`
 3. Commit: `git commit -m "chore(<scope>): <description>"`
@@ -351,6 +369,7 @@ Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 Must-have:
   - <acceptance criteria item>
   - Tests written BEFORE implementation (TDD — not after)
+  - Rule of three enforced — no logic left duplicated 3+ times in the files in scope
   - Commit message follows conventional commits format
 
 Must-not-have:

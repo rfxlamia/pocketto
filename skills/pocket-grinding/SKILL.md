@@ -57,6 +57,7 @@ GATE 5: EDGE CASE HUNTER MUST RUN before Phase 5 and before handoff.
 
 **Project-level** (always scan):
 - Stack, frameworks, language versions
+- Dependency manifest: read `package.json` / `requirements.txt` / `Cargo.toml` / `go.mod` / `pom.xml` — list installed dependencies relevant to this feature (they are free accelerators; hand-rolling what an installed dep already does is waste)
 - Architecture pattern (monolith / microservices / modular monolith)
 - Key conventions: naming, folder structure, error handling, logging
 
@@ -176,6 +177,7 @@ Pick the most relevant:
 - "Does this fit the current architecture, or does it require a new pattern?"
 - "What are the performance constraints? Any latency or throughput SLA?"
 - "Are there existing abstractions to reuse, or do we build new ones?"
+- "Is there an established library — or an already-installed dependency from the Phase 1 manifest scan — that solves part of this, or must it be custom? Why?"
 - "What are the integration points — external APIs, queues, DB schemas, events?"
 - "Are there data migration concerns? What's the rollback strategy?"
 - "What's the deployment path — feature flag, gradual rollout, hard cutover?"
@@ -298,6 +300,8 @@ Recommendation: Option <X>
 - Each option validated against Phase 4 scenarios explicitly
 - An option that fails critical scenarios must be flagged, not softened
 - Recommendation must cite scenarios, not just preference
+- **Build-vs-buy:** for commodity problems (crypto, auth, parsing, retry/backoff, date/time, validation, caching, …) at least one option must be library-based — prefer dependencies already installed (Phase 1 manifest scan). If no library option is proposed, state explicitly why none is viable. Never hand-roll crypto or auth without naming the rejected library and the reason.
+- Unknown library capability → quick check first (context7 / web search — see pocket-pitching's spike protocol), don't guess
 
 ---
 
@@ -311,6 +315,7 @@ Recommendation: Option <X>
 [ ] Respects layer boundaries defined in Phase 2?
 [ ] Follows existing patterns found in Phase 1 context scan?
 [ ] No new dependencies that violate architecture constraints?
+[ ] Build-vs-buy considered — not hand-rolling a commodity problem an installed or established dependency already solves?
 [ ] Rollback / undo strategy is defined?
 [ ] No silent data migrations or breaking changes to contracts?
 [ ] Performance characteristics acceptable for this layer?

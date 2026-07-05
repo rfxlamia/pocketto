@@ -29,7 +29,7 @@ Prompt:
   | Spec coverage | Every acceptance criteria rule has ≥1 task implementing it |
   | No placeholders | No "TBD", "TODO", "implement later", "handle edge cases", "similar to Task N" |
   | Task scope | Every task names exact files — no wildcards or vague references |
-  | TDD structure | Every task has: write test → verify fail → implement → verify pass → commit |
+  | TDD structure | Every task has: write test → verify fail → implement → verify pass → refactor while green → commit |
   | Commit steps | Every task ends with a git commit step with a conventional commit message |
   | GWT traceability | Every task's DELIVERABLE contains GWT scenarios from the spec |
   | Out-of-scope | No task touches items listed in spec Out-of-Scope section |

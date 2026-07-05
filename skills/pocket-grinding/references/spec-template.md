@@ -67,6 +67,20 @@ Copy and fill in. Remove sections that don't apply — but never remove Acceptan
 
 ---
 
+## Dependencies
+
+### Existing (to leverage)
+<From Phase 1 manifest scan — installed dependencies this design uses.>
+- <dependency> — <what it covers in this design>
+
+### New (proposed)
+<Only if the chosen design adds a dependency. pocket-planning fetches docs for these in Phase 0.>
+- <name>@<version> — <why needed>; alternatives rejected: <list, with reason>
+
+*(No new dependencies → write "none". Hand-rolling a commodity problem — crypto, auth, parsing, retry, date/time, validation — must be justified here.)*
+
+---
+
 ## Stories + Scenarios
 
 ### Story: <story name>
@@ -195,6 +209,9 @@ Date: YYYY-MM-DD | Status: approved
 
 ## Scope
 In: <list> | Out: <list>
+
+## Dependencies
+Existing: <list> | New: <list, or none>
 
 ## Acceptance Criteria
 Rule: <name>

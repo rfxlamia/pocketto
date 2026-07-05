@@ -30,7 +30,7 @@ Two kinds of skills:
 - **Skip when:** Trivial single-line fixes, or work that already has an approved spec.
 
 ### pocket-planning
-- **What:** Converts a spec into a TDD-structured execution plan. Scans codebase, maps files, decomposes acceptance criteria into bounded tasks, writes full 7-field Pocket Packets (red → green → commit), then runs a spec-reviewer and a test-architect subagent.
+- **What:** Converts a spec into a TDD-structured execution plan. Scans codebase, maps files, decomposes acceptance criteria into bounded tasks, writes full 7-field Pocket Packets (red → green → refactor → commit), then runs a spec-reviewer and a test-architect subagent.
 - **Input:** A completed pocket-grinding spec (path + acceptance criteria + architecture constraints + design decision).
 - **Output:** An execution plan of Pocket Packets with tests designed (`docs/pocket/plans/<date>-<slug>/execution-plan.md`).
 - **Handoff:** After the user approves, validates the plan with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
