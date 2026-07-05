@@ -39,7 +39,7 @@ T3: Frontend implementation                    [depends: T1] [parallel: T2]
 
 **Solution:** Extract the helper as its own prerequisite task — named and domain-scoped, never a generic `utils`.
 
-```
+```text
 T1: Shared helper module (e.g. auth/token-utils)   [prereq]
 T2: Feature A, imports helper                      [depends: T1]
 T3: Feature B, imports helper                      [depends: T1] [parallel: T2]

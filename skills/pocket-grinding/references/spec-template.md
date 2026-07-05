@@ -212,6 +212,7 @@ In: <list> | Out: <list>
 
 ## Dependencies
 Existing: <list> | New: <list, or none>
+*(Hand-rolling a commodity problem — crypto, auth, parsing, retry, date/time, validation — must be justified; if this applies, use the full template's Dependencies section.)*
 
 ## Acceptance Criteria
 Rule: <name>

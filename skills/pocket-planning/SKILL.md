@@ -85,8 +85,10 @@ Scan identified areas:
 - Check recent commits in affected paths: `git log --oneline -10 -- <path>`
 - Identify existing test patterns: framework, naming conventions, folder layout
 - Identify existing file conventions: module boundaries, error handling, logging
-- Search for existing shared helpers/utilities the plan can reuse (glob/grep for `*util*`,
-  `*helper*`, `lib/`, `shared/`) — tasks must import these instead of reinventing them
+- Search for existing shared helpers/utilities the plan can reuse — glob for helper-style
+  names (`*util*`, `*helper*`, `lib/`, `shared/`) AND grep for exported symbols used across
+  files in the related feature areas, since domain-scoped helpers rarely carry "util" in
+  their filename — tasks must import these instead of reinventing them
 
 **Test framework gate:** If zero test files exist in the codebase:
 → STOP. Ask user: "No test files found. Confirm the test framework to use (e.g., pytest, Jest, go test, RSpec) before continuing."
