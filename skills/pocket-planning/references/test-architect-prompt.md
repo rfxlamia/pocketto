@@ -78,7 +78,8 @@ Prompt:
   - Step 2 is "Run test — verify FAIL"
   - Step 3 is "Implement minimal code"
   - Step 4 is "Run test — verify PASS"
-  - Step 5 is "Commit"
+  - Step 5 is "Refactor while green (bounded)"
+  - Step 6 is "Commit"
 
   If a task has this order inverted (implement → then test) → fix it.
   If a task is missing any TDD step → add it.
