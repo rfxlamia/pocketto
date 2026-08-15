@@ -410,7 +410,9 @@ Dispatch ALL tasks in the group in ONE batch — single message containing N par
 
 ### Per-Worktree Quick Audit (main agent)
 
-When a subagent reports DONE, audit runs against ITS worktree:
+When a subagent reports DONE, run the in-loop cycle against ITS worktree. Cite `references/two-stage-review.md` for every rule — do not restate them here. The main agent never judges code; every criterion is executed by a read-only auditor subagent.
+
+1. **Mechanical gate** (main agent) — command-and-commit evidence only, inside the worktree:
 
 ```bash
 WT=.worktree/<task_id>
@@ -423,11 +425,17 @@ WT=.worktree/<task_id>
 
 # 3. Tests (if plan specifies a test command) — inside worktree
 git -C $WT <test_command>
-
-# 4. DELIVERABLE checklist verified against worktree state
 ```
 
-Audit fail → re-dispatch implementer with same WORKTREE field. Worktree RETAINED until audit passes.
+Mechanical fail → re-dispatch implementer with same WORKTREE field. Do not dispatch the auditor. Worktree RETAINED.
+
+2. **Deep audit** — dispatch a read-only auditor subagent against the worktree tip (see `references/two-stage-review.md`). The auditor writes the verdict artifact. The main agent reads labels from that artifact; it does not assess code.
+3. **Fix/refactor round** — when the artifact requires a round, re-dispatch the implementer with the same WORKTREE field, then re-run the mechanical gate, then re-dispatch the auditor.
+4. **Re-audit** — same auditor path as step 2, against the new worktree tip.
+
+On `audit-failed` or `auditor-unavailable`, halt the group — no merge (see `references/two-stage-review.md`). Worktrees RETAINED.
+
+Passing in-worktree audits proceed to Group Merge below. Do not pass `--sha` of the worktree tip.
 
 ### Group Merge (main agent, after ALL group tasks audit-pass)
 
@@ -503,7 +511,7 @@ Plan: T5, T6, T7 — parallel group after T4
 
 4. Dispatch [T5, T6, T7] in ONE message — each packet has its WORKTREE field
 
-5. All return DONE → audit each in its worktree → all pass
+5. All return DONE → mechanical gate then read-only auditor against each worktree tip → all pass
 
 6. Main agent merges sequentially, logging each task BEFORE the next merge
    (one merge + one log update per iteration — never merge all three then log):
