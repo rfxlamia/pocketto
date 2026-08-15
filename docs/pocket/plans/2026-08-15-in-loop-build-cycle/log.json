@@ -1,0 +1,128 @@
+{
+  "header": {
+    "plan_dir": "/Users/rfxlamia/project/pocketto/docs/pocket/plans/2026-08-15-in-loop-build-cycle",
+    "plan_type": "phased",
+    "status": "IN_PROGRESS",
+    "date_started": "2026-08-15",
+    "date_completed": null,
+    "baseline_sha": "2be3cde862acb995ab0d6e94f0f5fb054f09afc3",
+    "pipeline": 3
+  },
+  "phases": [
+    {
+      "order": 1,
+      "file": "execution-plan-phase-1.md",
+      "status": "REVIEW",
+      "tasks": [
+        {
+          "id": "T1",
+          "name": "CLI — PIPELINE marker constant and stamping at log init",
+          "status": "DONE",
+          "done_sha": "2be3cde862acb995ab0d6e94f0f5fb054f09afc3"
+        },
+        {
+          "id": "T3",
+          "name": "Rewrite two-stage-review.md as the audit-loop contract",
+          "status": "DONE",
+          "done_sha": "9d747160c137a8cec9ad72388e3e80b1201463f5"
+        },
+        {
+          "id": "T2",
+          "name": "CLI — pipeline-marker refusal gate at the readLog choke point",
+          "status": "DONE",
+          "depends": "T1",
+          "done_sha": "a0a6ab4df2732920016088b86bec9e2579113ce6"
+        },
+        {
+          "id": "T4",
+          "name": "pocket-development SKILL.md — the per-task in-loop build cycle",
+          "status": "DONE",
+          "depends": "T3",
+          "done_sha": "93e0f4875ac3c02d5aca5fcaf0d0c97f79159920"
+        },
+        {
+          "id": "T5",
+          "name": "pocket-planning — refactor becomes auditor-judged, not self-reported",
+          "status": "DONE",
+          "depends": "T3",
+          "done_sha": "96099fb047c04f6422dd601b0bbfa6f980eb9bf3"
+        }
+      ]
+    },
+    {
+      "order": 2,
+      "file": "execution-plan-phase-2.md",
+      "status": "WAITING",
+      "tasks": [
+        {
+          "id": "T6",
+          "name": "Comprehension review — Phase A",
+          "status": "WAITING",
+          "depends": "T2, T4, T5"
+        },
+        {
+          "id": "T7",
+          "name": "references/phase-level-pass.md — the phase pass and its corrections",
+          "status": "WAITING",
+          "depends": "T6"
+        },
+        {
+          "id": "T8",
+          "name": "references/enterprise-reporting.md — E1–E6 relocated",
+          "status": "WAITING",
+          "depends": "T6"
+        }
+      ]
+    },
+    {
+      "order": 3,
+      "file": "execution-plan-phase-3.md",
+      "status": "WAITING",
+      "tasks": [
+        {
+          "id": "T9",
+          "name": "pocket-development SKILL.md — phase-completion wiring",
+          "status": "WAITING",
+          "depends": "T7, T8"
+        },
+        {
+          "id": "T10",
+          "name": "Comprehension review — Phase B",
+          "status": "WAITING",
+          "depends": "T9"
+        },
+        {
+          "id": "T11",
+          "name": "Deprecate the pocket-review and pocket-correction skills",
+          "status": "WAITING",
+          "depends": "T9"
+        }
+      ]
+    },
+    {
+      "order": 4,
+      "file": "execution-plan-phase-4.md",
+      "status": "WAITING",
+      "tasks": [
+        {
+          "id": "T12",
+          "name": "Documentation sync for the deprecated skills",
+          "status": "WAITING",
+          "depends": "T11"
+        },
+        {
+          "id": "T13",
+          "name": "Version 3.0.0, manifest sync, and migration release notes",
+          "status": "WAITING",
+          "depends": "T12"
+        },
+        {
+          "id": "T14",
+          "name": "Final comprehension review and end-to-end verification",
+          "status": "WAITING",
+          "depends": "T13"
+        }
+      ]
+    }
+  ]
+}
