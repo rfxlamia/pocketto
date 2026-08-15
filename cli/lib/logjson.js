@@ -24,6 +24,12 @@ function assertPipeline(log, logPath) {
   }
 }
 
+function readLogChecked(logPath) {
+  const log = readLog(logPath);
+  assertPipeline(log, logPath);
+  return log;
+}
+
 function writeLog(logPath, log) {
   writeFileSync(logPath, JSON.stringify(log, null, 2) + '\n');
 }
@@ -37,4 +43,4 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
-module.exports = { readLog, writeLog, todayISO, assertPipeline };
+module.exports = { readLog, writeLog, todayISO, assertPipeline, readLogChecked };
