@@ -68,16 +68,16 @@ pocket-development receives two distinct input formats. Identify which type befo
 
 ## Main Agent Role (HARDENED)
 
-Main agent = **Delegator + Auditor only**. This is non-negotiable.
+Main agent = **Delegator + Auditor only**. This is non-negotiable. Auditor here means: run the mechanical gate and dispatch the read-only auditor subagent — never judge code. Cite `references/two-stage-review.md`.
 
 | Main agent MUST | Main agent MUST NOT |
 |-----------------|---------------------|
 | Initialize and update pocket log | Write, edit, or create implementation code |
-| Construct Pocket Packets and dispatch subagents | Invoke `pocket-review` during execution (it's user-triggered post-phase) |
-| Run quick audit after each implementer DONE | Do full two-stage review during development |
-| Emit PHASE_COMPLETE handoff with pocket-review command | Take over a task because "it's faster to do it myself" |
+| Construct Pocket Packets and dispatch subagents | Invoke `pocket-review` as the per-task reviewer — dispatch the in-loop auditor instead |
+| Run the mechanical gate, then dispatch the read-only auditor | Judge code quality or spec compliance itself |
+| Emit PHASE_COMPLETE handoff | Take over a task because "it's faster to do it myself" |
 
-**Full two-stage review (`pocket-review`) is user-triggered after ALL tasks are DONE — pocket-development does NOT invoke it. Per-task review during execution is a quick audit only (see [Review](#review) section).**
+**Per-task review is the in-loop cycle (see [Review](#review)): mechanical gate, then a read-only auditor subagent. The main agent never judges code — every criterion is executed by that auditor. Cite `references/two-stage-review.md`.**
 
 ---
 
@@ -178,6 +178,7 @@ Before constructing any Pocket Packet, you MUST load the relevant reference file
 | Entry gate fails | `references/entry-gate.md`, `references/iron-laws.md` |
 | Plan has `[parallel: TX]` annotations | `references/entry-gate.md` (classification rules) |
 | Status is BLOCKED/NEEDS_CONTEXT | `references/status-handling.md` |
+| Per-task in-loop audit (after implementer DONE) | `references/two-stage-review.md` |
 
 ### Citation Requirement
 
@@ -293,7 +294,7 @@ Escalate when: Auth logic intertwined with user data access
 | Task | Workflow | Access |
 |------|----------|--------|
 | **Implementation** | Delegate to implementer | Read + Write |
-| **Review** | `pocket-review` skill | Read-only |
+| **Review** | In-loop auditor subagent (`references/two-stage-review.md`) | Read-only |
 
 ### Complexity Assessment
 
@@ -331,17 +332,22 @@ digraph pocket_process {
 
     "Wait for status" -> { "DONE" "NEEDS_CONTEXT" "BLOCKED" "DONE_WITH_CONCERNS" };
 
-    "DONE" -> "Quick audit (git log + tests + DELIVERABLE check)";
-    "Quick audit (git log + tests + DELIVERABLE check)" -> { "Audit pass" "Audit fail" };
-    "Audit pass" -> "Mark task DONE in log";
-    "Audit fail" -> "Re-dispatch implementer with failure reason";
+    "DONE" -> "Mechanical gate";
+    "Mechanical gate" -> { "Gate pass" "Gate fail" };
+    "Gate fail" -> "Re-dispatch implementer with failure reason";
     "Re-dispatch implementer with failure reason" -> "Wait for status";
+    "Gate pass" -> "Dispatch read-only auditor";
+    "Dispatch read-only auditor" -> { "Audit pass" "Fix/refactor round" "audit-failed" "auditor-unavailable" };
+    "Fix/refactor round" -> "Re-dispatch implementer with failure reason";
+    "Audit pass" -> "Mark task DONE in log (--sha audited_head)";
+    "audit-failed" -> "Mark task BLOCKED";
+    "auditor-unavailable" -> "Mark task BLOCKED";
 
     "NEEDS_CONTEXT" -> "Provide context -> Re-dispatch (no work)";
     "BLOCKED" -> "Categorize blocker -> Fix -> Re-dispatch";
-    "DONE_WITH_CONCERNS" -> "Assess concerns -> Correctness risk? -> Address first or proceed to quick audit";
+    "DONE_WITH_CONCERNS" -> "Assess concerns -> Correctness risk? -> Address first or proceed to mechanical gate";
 
-    "Mark task DONE in log" -> "More tasks?";
+    "Mark task DONE in log (--sha audited_head)" -> "More tasks?";
     "More tasks?" -> "Extract task N+1" [label="yes"];
     "More tasks?" -> "Emit PHASE_COMPLETE handoff" [label="no"];
     "Emit PHASE_COMPLETE handoff" -> "Phase file?";
@@ -563,24 +569,19 @@ Match prompting complexity to task complexity:
 
 Two distinct review phases. Do NOT conflate them.
 
-### Per-Task Quick Audit (during execution)
+### Per-Task In-Loop Audit (during execution)
 
-When implementer reports DONE, main agent runs a quick audit inline — no subagent, no pocket-review:
+When the implementer reports DONE, run the in-loop cycle. Cite `references/two-stage-review.md` for every rule — do not restate them here. The main agent never judges code; every criterion is executed by a read-only auditor subagent.
 
-1. Run `git log --oneline -5` — confirm a commit exists for this task
-2. Run tests if the plan specifies a test command — confirm green
-3. Check the packet's DELIVERABLE checklist — all items must be met
+1. **Mechanical gate** (main agent) — command-and-commit evidence only. On failure, re-dispatch the implementer; do not dispatch the auditor.
+2. **Deep audit** — dispatch a read-only auditor subagent. The auditor writes the verdict artifact. The main agent reads labels from that artifact; it does not assess code.
+3. **Fix/refactor round** — when the artifact requires a round, re-dispatch the implementer, then re-run the mechanical gate, then re-dispatch the auditor.
+4. **Re-audit** — same auditor path as step 2, against the new HEAD.
+5. **DONE** — after a passing audit, `log update --task TN DONE --sha <audited_head>`.
 
-**Audit pass** → mark task DONE in log, proceed to next task.
+On `audit-failed` or `auditor-unavailable`, mark the task BLOCKED (see `references/two-stage-review.md`). Do not start the next task.
 
-**Audit fail** → re-dispatch implementer with specific failure reason:
-```
-AUDIT FAILED: [what failed — missing commit / failing tests / DELIVERABLE item N not met]
-Fix this specific issue. Do not scope-creep.
-```
-Do NOT mark task DONE until audit passes.
-
-**DONE_WITH_CONCERNS:** Assess concerns first. If correctness risk → address before running quick audit. If observation only → proceed with quick audit normally (concerns go into the final pocket-review phase).
+**DONE_WITH_CONCERNS:** Assess concerns first. If correctness risk → address before the mechanical gate. If observation only → proceed with the in-loop cycle.
 
 ### End-of-Execution Handoff (after all tasks done)
 
@@ -643,10 +644,10 @@ Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the comma
 
 | Status | Controller Action |
 |--------|-------------------|
-| **DONE** | Quick audit (git log + tests + DELIVERABLE check) → mark task DONE if pass; re-dispatch with failure reason if fail |
-| **DONE_WITH_CONCERNS** | Assess concerns → correctness risk: address first; observation only: proceed to quick audit |
+| **DONE** | Mechanical gate, then dispatch the read-only auditor (`references/two-stage-review.md`). On pass: `log update --task TN DONE --sha <audited_head>`. On gate fail: re-dispatch implementer. |
+| **DONE_WITH_CONCERNS** | Assess concerns → correctness risk: address first; observation only: proceed to mechanical gate then auditor |
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
-| **BLOCKED** | Categorize blocker type → Fix → Re-dispatch |
+| **BLOCKED** | Categorize blocker type. In-loop categories `audit-failed` and `auditor-unavailable`: persist and halt (see `references/two-stage-review.md`). Other categories: Fix → Re-dispatch |
 | **REVIEW_FAIL** (from pocket-review) | The phase already terminated at PHASE_COMPLETE — you are NOT mid-phase. Re-enter via `/pocketto:pocket-correction <plan_dir>/<phase_file>`: it delegates each fix to an implementer subagent (you stay Delegator + Auditor), records an append-only correction, then hands back for user-triggered re-review. Do NOT write the fix yourself; do NOT refresh done_sha. |
 
 `REVIEW_FAIL` is a post-phase verdict (not a subagent return status); it is handled by the standalone `pocket-correction` skill, keeping `pocket-development` one-shot.
@@ -703,14 +704,14 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns 
 |--------|---------|
 | Session start (no `log.json`) | `log init` — see **Startup** section above |
 | Session start (log.json exists, tasks missing) | `log init` — auto-migrates tasks into existing phases |
-| Quick audit passes for a task | `log update --task TN` → `DONE` |
+| In-loop audit passes for a task | `log update --task TN DONE --sha <audited_head>` |
 | Unresolvable BLOCKED (task) | `log update --task TN` → `BLOCKED` |
 | All tasks in phase DONE → emit PHASE_COMPLETE handoff | `log update` (phase) → `REVIEW` |
 | pocket-review passes (user runs it separately) | `log update` (phase) → `DONE` |
 | Unresolvable BLOCKED (phase) | `log update` (phase) → `BLOCKED` |
 | All phases complete (Type B only) | `log close` |
 
-**IMPORTANT:** NEVER set task status to `DONE` before quick audit (git log + tests + DELIVERABLE check) completes. NEVER set task status to `REVIEW` — that status is for phases only.
+**IMPORTANT:** NEVER set task status to `DONE` before the in-loop audit completes and `--sha <audited_head>` is passed. NEVER set task status to `REVIEW` — that status is for phases only.
 
 `log.json` lives in `docs/pocket/plans/{slug}/log.json` — this is pocket-closing's primary input.
 
@@ -768,13 +769,14 @@ When delegation pressure threatens to bypass structure:
 
 **Main agent role violations (HARDENED — see [Main Agent Role](#main-agent-role-hardened) section):**
 - Implement code yourself instead of delegating to a subagent
-- Invoke `pocket-review` directly — it is user-triggered post-phase, not called by pocket-development
-- Mark task DONE in the log without running the quick audit first
+- Invoke `pocket-review` as the per-task reviewer — per-task review is the in-loop auditor (see `references/two-stage-review.md`)
+- Mark task DONE in the log without a passing in-loop audit (mechanical gate + read-only auditor)
+- Mark a task DONE without passing `--sha <audited_head>`
 
 **Delegation violations:**
 - Delegate without a Pocket Packet
 - Skip the Entry Gate Checklist
-- Trust a subagent's report without verification (quick audit: git log + tests + DELIVERABLE)
+- Trust a subagent's report without verification (mechanical gate, then dispatch the read-only auditor — the main agent never judges code)
 - Give ambiguous prompts ("handle X", "fix Y")
 - Proceed with BLOCKED status without categorizing
 - Accept vague escalation ("I'm stuck" without reason)
@@ -802,6 +804,7 @@ Load these reference files when SKILL.md says "see reference for details" or whe
 | `references/entry-gate.md` | Gate checklist fails, need decision matrix or KEEP LOCAL examples, OR plan has `[parallel: TX]` annotations | Decision tree for gate pass/fail; Foundation/Parallel-Group/Solo classification rules |
 | `references/pocket-packet.md` | Packet construction unclear, need field-by-field guide | Complete field definitions with examples |
 | `references/sandwich-prompt.md` | Need attention mechanic details or method selection | Sandwich structure variations |
+| `references/two-stage-review.md` | After implementer reports DONE; mechanical gate, auditor dispatch, fix/refactor, SHA pinning | Normative in-loop audit contract. Cite it; do not restate it. |
 
 | `references/status-handling.md` | BLOCKED/NEEDS_CONTEXT unclear, need categorization details | Blocker types and actions |
 
