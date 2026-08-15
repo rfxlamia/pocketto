@@ -1,11 +1,27 @@
 'use strict';
 
 const { readFileSync, writeFileSync } = require('node:fs');
+const { CliError } = require('./envelope');
+const { PIPELINE } = require('./version');
 
 // log.json is written with 2-space indent + trailing newline to match the
 // previous Python writer byte-for-byte (json.dumps(..., indent=2) + "\n").
 function readLog(logPath) {
   return JSON.parse(readFileSync(logPath, 'utf8'));
+}
+
+// State-changing commands call this AFTER readLog and BEFORE any mutation or
+// writeLog. Read-only consumers (format tasklist) must keep using readLog.
+function assertPipeline(log, logPath) {
+  const detected = log && log.header ? log.header.pipeline : undefined;
+  if (detected == null || detected < PIPELINE) {
+    const named = detected == null ? 'absent' : detected;
+    throw new CliError(
+      'PIPELINE_TOO_OLD',
+      `${logPath}: pipeline marker is ${named} (current is ${PIPELINE}). ` +
+        `Pin the CLI with npx -y pocketto-pi@2.4.4 and close the plan under the old pipeline before updating.`,
+    );
+  }
 }
 
 function writeLog(logPath, log) {
@@ -21,4 +37,4 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
-module.exports = { readLog, writeLog, todayISO };
+module.exports = { readLog, writeLog, todayISO, assertPipeline };

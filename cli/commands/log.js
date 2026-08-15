@@ -7,7 +7,7 @@
 const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
-const { readLog, writeLog, todayISO } = require('../lib/logjson');
+const { readLog, writeLog, todayISO, assertPipeline } = require('../lib/logjson');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 const { PIPELINE } = require('../lib/version');
 
@@ -172,6 +172,7 @@ function warnDuplicateDoneShas(human, duplicateDoneShas) {
 
 function migrateExisting(planDir, logPath) {
   const log = readLog(logPath);
+  assertPipeline(log, logPath);
   let migrated = 0;
   for (const phase of log.phases) {
     if ('tasks' in phase) continue;
@@ -240,6 +241,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
   }
 
   const log = readLog(logPath);
+  assertPipeline(log, logPath);
   const phase = log.phases.find((p) => p.file === phaseFile);
   if (!phase) {
     const available = log.phases.map((p) => p.file);
@@ -391,6 +393,7 @@ function recordCorrection(positionals, sha, forTask) {
     throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
   }
   const log = readLog(logPath);
+  assertPipeline(log, logPath);
   const phase = log.phases.find((p) => p.file === phaseFile);
   if (!phase) {
     const available = log.phases.map((p) => p.file);
@@ -532,6 +535,7 @@ function close(positionals) {
   }
 
   const log = readLog(logPath);
+  assertPipeline(log, logPath);
   const notDone = log.phases.filter((p) => p.status !== 'DONE');
   if (notDone.length) {
     const lines = ['Cannot close — phases not DONE:'];
