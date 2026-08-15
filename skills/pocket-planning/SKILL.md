@@ -317,7 +317,7 @@ Steps:
    - A modified file crosses ~300 lines, or a function exceeds ~50 lines → split/extract
    - Refactor only within task-scope files plus helper files declared in the file map
    - Re-run test: `<exact command>` — must stay PASS
-   - Nothing to refactor → say so and move to commit
+   - The auditor judges the refactor heuristics from the diff; no implementer self-report is required or accepted. A diff violating none of the thresholds proceeds to commit
 
 6. Commit:
    `git add exact/path/file.ext tests/exact/path/test.ext`
@@ -371,7 +371,7 @@ Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 Must-have:
   - <acceptance criteria item>
   - Tests written BEFORE implementation (TDD — not after)
-  - Rule of three enforced — no logic left duplicated 3+ times in the files in scope
+  - Rule of three enforced — no logic left duplicated 3+ times in the files in scope (enforcement verified by the auditor from the diff, not asserted by the implementer)
   - Commit message follows conventional commits format
 
 Must-not-have:
