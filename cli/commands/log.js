@@ -9,6 +9,7 @@ const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { readLog, writeLog, todayISO } = require('../lib/logjson');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
+const { PIPELINE } = require('../lib/version');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
 const VALID_SET = new Set(VALID_STATUSES);
@@ -114,6 +115,7 @@ function init(positionals) {
       date_started: todayISO(),
       date_completed: null,
       baseline_sha: getGitSha(planDir),
+      pipeline: PIPELINE, // execution-pipeline generation; independent of CONTRACT
     },
     phases,
   };

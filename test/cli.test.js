@@ -24,6 +24,7 @@ const identity = require("../cli/lib/identity");
 const extensions = require("../cli/lib/extensions");
 const setupExtensions = require("../cli/commands/setup-extensions");
 const gitlib = require("../cli/lib/git");
+const version = require("../cli/lib/version");
 
 function run(args, { expectFail = false, env } = {}) {
 	// Merge env overrides onto process.env so PATH (needed to spawn `node`) survives.
@@ -971,6 +972,31 @@ test("log init creates a phased log.json with tasks + SHA tracking field", () =>
 		["T1", "T2", "T3", "T4"],
 	);
 	assert.equal(log.phases[0].tasks[0].status, "WAITING");
+});
+
+test("log init stamps the pipeline marker into a fresh log.json header", () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+
+	const env = json(["log", "init", dir, "--json"]);
+	assert.equal(env.ok, true);
+	assert.equal(env.command, "log init");
+	assert.equal(env.contract, 2); // CONTRACT is NOT bumped by the pipeline marker
+	assert.equal(env.data.migrated, false);
+	// `init`'s data never echoed the header — the envelope shape stays unchanged.
+	assert.equal("header" in env.data, false);
+
+	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.equal(Number.isInteger(version.PIPELINE), true);
+	assert.equal(Number.isInteger(log.header.pipeline), true);
+	assert.equal(log.header.pipeline, version.PIPELINE);
+
+	// Every other header field is untouched.
+	assert.equal(log.header.plan_type, "phased");
+	assert.equal(log.header.status, "IN_PROGRESS");
+	assert.equal(log.header.date_completed, null);
+	assert.ok("baseline_sha" in log.header);
 });
 
 test("log init migrates tasks into an existing task-less log.json, preserving status", () => {
