@@ -3,18 +3,19 @@
 **Date:** 2026-08-15
 **Original plan:** docs/pocket/plans/2026-08-15-in-loop-build-cycle/execution-plan.md
 **Prerequisite:** Phase 2 must be COMPLETE — all tests green, all commits created
-**Contains tasks:** {T9, T10, T11}
+**Contains tasks:** {T9, T10, T11, T15}
 **Unlocks next:** Phase 4
 
 ---
 
 ## Task List
 
-Total: 3 tasks | Prerequisite phases must be complete before starting
+Total: 4 tasks | Prerequisite phases must be complete before starting
 
 T9: pocket-development SKILL.md — phase-completion wiring [depends: T7, T8]
 T10: Comprehension review — Phase B [depends: T9]
 T11: Deprecate the pocket-review and pocket-correction skills [depends: T9]
+T15: pocket-structuring SKILL.md — wait for pocket-closing before advancing phases [depends: T9]
 
 ---
 
@@ -316,6 +317,96 @@ Red flags:
 Done when: DELIVERABLE checks pass, commit created
 Uncertain when: a host requires more than a description change to stop routing
 Escalate when: deprecating would orphan a reference another skill cites
+
+---
+
+### Task 15: pocket-structuring SKILL.md — wait for pocket-closing before advancing phases [depends: T9]
+
+## OBJECTIVE
+
+Update `skills/pocket-structuring/SKILL.md` § Step 3 "Sequential Handoff to pocket-development" and its Phase Completion Gate so the orchestrator waits for phase status `REVIEW` and user-triggered `pocket-closing` before invoking the next phase file — closing the gap T9 opened when it moved phase-completion from `DONE` to `REVIEW`.
+
+Files:
+- Modify: `skills/pocket-structuring/SKILL.md`
+
+This is a **non-testable structural task**.
+
+Steps:
+
+1. `skills/pocket-structuring/SKILL.md:108-117` (Step 3 numbered list) currently reads "pocket-development completes Phase 1 → wait for explicit DONE confirmation" then "Verify Phase 1 gate ... Gate passes → invoke pocket-development with Phase 2". Rewrite so it reflects: pocket-development now stops a phase at status `REVIEW`, never `DONE`. The orchestrator must wait for `REVIEW`, then **halt and tell the user to run `/pocketto:pocket-closing <plan_dir>/<phase_file>`** — it must NOT invoke pocket-closing itself and must NOT treat `REVIEW` as sufficient to advance. Only after `pocket-closing` sets the phase to `DONE` may Phase N+1 be invoked.
+2. Update `### Phase Completion Gate` (`SKILL.md:119-125`) to add an explicit condition: phase status is `DONE` (set by user-triggered `pocket-closing`), not merely "every task DONE". Keep the existing task/test/commit/BLOCKED conditions — this is additive, not a replacement.
+3. Add one `[CRITICAL]` line stating pocket-structuring must never call `pocket-closing` itself — it is user-triggered, same boundary pocket-development already respects for `REVIEW → DONE`.
+4. Verify:
+   `grep -n "REVIEW\|pocket-closing" skills/pocket-structuring/SKILL.md` returns matches inside both Step 3 and the Phase Completion Gate section (not just incidental mentions elsewhere).
+5. Commit:
+   `git add skills/pocket-structuring/SKILL.md`
+   `git commit -m "fix(pocket-structuring): wait for pocket-closing before advancing phases"`
+
+Mark in QUALITY BAR: `[no-tdd — structural task]`
+
+## REFERENCES LOADED
+
+docs/pocket/plans/2026-08-15-in-loop-build-cycle/reviews/comprehension-phase-b.md — T10's BLOCKED finding: pocket-structuring's gate has no awareness of `REVIEW` status or `pocket-closing`, contradicting the invariant T9 just wired into pocket-development
+skills/pocket-development/SKILL.md — the invariant this task must stay consistent with: "never advances a phase beyond REVIEW"; `pocket-closing` owns `REVIEW → DONE`
+skills/pocket-structuring/SKILL.md:108-125 — the Step 3 handoff loop and Phase Completion Gate being fixed
+
+[CRITICAL: Without this section, packet is incomplete]
+
+## WHY THIS APPROACH
+
+Justification: one file, two sections, additive change — no existing behavior removed, only a missing wait-condition added.
+Complexity: mechanical
+
+## SANDWICH CONTEXT
+
+[CRITICAL: Do NOT make pocket-structuring invoke pocket-closing itself. It only waits for the user to run it, then checks phase status == DONE before proceeding to the next phase file.]
+You are closing a gap between pocket-development's new REVIEW-gate design and pocket-structuring's older phase-handoff loop.
+Files in scope: `skills/pocket-structuring/SKILL.md` only.
+Test framework: none — verified by the grep check in Step 4 and by T14's end-to-end verification.
+Available after: T9
+Architecture rule: `pocket-closing` remains the sole owner of `REVIEW → DONE`; pocket-structuring only reads status, never writes it.
+[RESTATE: pocket-structuring waits for REVIEW, then for the user to run pocket-closing, then checks for DONE. It never calls pocket-closing itself.]
+
+## DELIVERABLE
+
+Verification — task is DONE when all pass:
+
+Given Phase N reaches status `REVIEW`, When pocket-structuring's Step 3 is read, Then it instructs waiting for user-triggered `pocket-closing`, not immediate advancement.
+Given the Phase Completion Gate, When read, Then it requires phase status `DONE` (not just "tasks DONE") before invoking Phase N+1.
+Given the file, When searched, Then pocket-structuring is never instructed to invoke `pocket-closing` itself.
+[must-not] Given this task's diff, When inspected, Then no file outside `skills/pocket-structuring/SKILL.md` may appear.
+
+Commit exists matching `fix(pocket-structuring): ...`.
+
+Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
+
+## QUALITY BAR
+
+Must-have:
+  - `[no-tdd — structural task]`
+  - Step 3 and Phase Completion Gate both updated consistently
+  - Explicit statement that pocket-structuring never calls pocket-closing itself
+
+Must-not-have:
+  - pocket-structuring invoking pocket-closing directly
+  - Removing or weakening the existing task/test/commit/BLOCKED gate conditions
+  - Modifications to files outside the listed scope
+
+Open question risks:
+  - none
+
+Rollback note:
+  - Revert restores the pre-T15 handoff text; the gap T10 found reopens
+
+Red flags:
+  - pocket-structuring calling pocket-closing itself → STOP
+  - Gate weakened instead of extended → STOP
+
+## STOP CONDITIONS
+
+Done when: DELIVERABLE checks pass, commit created
+Uncertain when: wording conflicts with how T9 phrased the same invariant in pocket-development
+Escalate when: fixing this appears to require changes to pocket-closing or pocket-development
 
 ---
 

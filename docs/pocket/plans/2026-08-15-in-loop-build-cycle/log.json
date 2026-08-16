@@ -12,7 +12,7 @@
     {
       "order": 1,
       "file": "execution-plan-phase-1.md",
-      "status": "REVIEW",
+      "status": "DONE",
       "tasks": [
         {
           "id": "T1",
@@ -47,30 +47,42 @@
           "depends": "T3",
           "done_sha": "96099fb047c04f6422dd601b0bbfa6f980eb9bf3"
         }
+      ],
+      "corrections": [
+        {
+          "sha": "42427117b665249b7a3b3e8f22b028347a748ede",
+          "files": [
+            "skills/pocket-development/SKILL.md"
+          ],
+          "for_task": "T4"
+        }
       ]
     },
     {
       "order": 2,
       "file": "execution-plan-phase-2.md",
-      "status": "WAITING",
+      "status": "DONE",
       "tasks": [
         {
           "id": "T6",
           "name": "Comprehension review — Phase A",
-          "status": "WAITING",
-          "depends": "T2, T4, T5"
+          "status": "DONE",
+          "depends": "T2, T4, T5",
+          "done_sha": "191097f6f09168218321a252ae8d69a3f5815a26"
         },
         {
           "id": "T7",
           "name": "references/phase-level-pass.md — the phase pass and its corrections",
-          "status": "WAITING",
-          "depends": "T6"
+          "status": "DONE",
+          "depends": "T6",
+          "done_sha": "c406a5d4910d4e83a65e846134b9780d08d6f867"
         },
         {
           "id": "T8",
           "name": "references/enterprise-reporting.md — E1–E6 relocated",
-          "status": "WAITING",
-          "depends": "T6"
+          "status": "DONE",
+          "depends": "T6",
+          "done_sha": "abe9c836039343658559178c46338edbee2bcd4b"
         }
       ]
     },
@@ -82,20 +94,29 @@
         {
           "id": "T9",
           "name": "pocket-development SKILL.md — phase-completion wiring",
-          "status": "WAITING",
-          "depends": "T7, T8"
+          "status": "DONE",
+          "depends": "T7, T8",
+          "done_sha": "79f383eda14c9c15b817360091dca93fe9699aca"
         },
         {
           "id": "T10",
           "name": "Comprehension review — Phase B",
-          "status": "WAITING",
-          "depends": "T9"
+          "status": "DONE",
+          "depends": "T9",
+          "done_sha": "8a50938ca67653ba320b12507cb72e602f1b8c5e"
         },
         {
           "id": "T11",
           "name": "Deprecate the pocket-review and pocket-correction skills",
           "status": "WAITING",
           "depends": "T9"
+        },
+        {
+          "id": "T15",
+          "name": "pocket-structuring SKILL.md — wait for pocket-closing before advancing phases",
+          "status": "DONE",
+          "depends": "T9",
+          "done_sha": "0fcbe755ab04695c9dfd5d2863cf0b4e983ad711"
         }
       ]
     },

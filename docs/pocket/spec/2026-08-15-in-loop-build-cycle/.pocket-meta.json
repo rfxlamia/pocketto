@@ -10,6 +10,14 @@
       "github_pr": {
         "number": 42,
         "url": "https://github.com/rfxlamia/pocketto/pull/42"
+      },
+      "review": {
+        "fingerprints": []
+      }
+    },
+    "phase-2": {
+      "review": {
+        "fingerprints": []
       }
     }
   },
