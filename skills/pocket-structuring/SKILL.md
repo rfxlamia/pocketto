@@ -108,17 +108,23 @@ Do not start Phase 1 until the user says yes.
 ## Step 3: Sequential Handoff to pocket-development
 
 1. User approves → invoke `pocket-development` with `execution-plan-phase-1.md`
-2. pocket-development completes Phase 1 → **wait for explicit DONE confirmation**
-3. Verify Phase 1 gate (all tasks done, tests green, commits exist)
-4. Gate passes → invoke `pocket-development` with `execution-plan-phase-2.md`
-5. Repeat until all phases complete
+2. pocket-development completes Phase 1 → it runs its phase-level review pass and sets phase status to `REVIEW` (it never advances a phase beyond `REVIEW` on its own) → **wait for the phase status to reach `REVIEW`**
+3. On `REVIEW`, **halt** — do not invoke the next phase file. Tell the user to run `/pocketto:pocket-closing <plan_dir>/execution-plan-phase-N.md` themselves.
+4. Wait for the user-triggered `pocket-closing` to run and advance the phase from `REVIEW` to `DONE`.
+5. Verify Phase N gate (phase status DONE, all tasks done, tests green, commits exist)
+6. Gate passes → invoke `pocket-development` with `execution-plan-phase-(N+1).md`
+7. Repeat until all phases complete
 
-**NEVER start Phase N+1 until Phase N gate is confirmed DONE.**
+**NEVER start Phase N+1 until Phase N gate is confirmed DONE (set by user-triggered pocket-closing, not merely all tasks DONE).**
+**NEVER treat phase status REVIEW as sufficient to advance — REVIEW is a checkpoint for the user, not a handoff signal.**
 **NEVER hand all phase files simultaneously to pocket-development.**
+
+[CRITICAL] pocket-structuring must never invoke `pocket-closing` itself, anywhere in this flow — it is strictly user-triggered, the same REVIEW → DONE boundary that pocket-development itself already respects.
 
 ### Phase Completion Gate
 
 Before handing off to the next phase, confirm ALL of:
+- Phase status is `DONE` (set only by user-triggered `pocket-closing` — a status of `REVIEW` does not satisfy this)
 - Every task in the phase: status DONE
 - All tests pass
 - All commits created with correct format
