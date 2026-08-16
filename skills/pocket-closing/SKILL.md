@@ -1,25 +1,25 @@
 ---
 name: pocket-closing
-description: Terminal pocket stage. User invokes after pocket-review writes verdicts. Reconciles reviews against log.json, gates on REVIEW_FAIL/REVIEW_BLOCKED, advances REVIEW→DONE, runs `log close`, and emits a closeout summary. Trigger on "pocket-closing", "close the plan", "close out", "finalize plan", or when a plan is fully reviewed and all verdicts pass.
+description: Terminal pocket stage. User invokes after pocket-development's phase-level pass writes verdicts. Reconciles reviews against log.json, gates on REVIEW_FAIL/REVIEW_BLOCKED, advances REVIEW→DONE, runs `log close`, and emits a closeout summary. Trigger on "pocket-closing", "close the plan", "close out", "finalize plan", or when a plan is fully reviewed and all verdicts pass.
 ---
 
 # Pocket Closing
 
-The terminal stage of the Pocket pipeline. Invoked directly by the user after pocket-review has written verdicts for a phase or flat plan. It reconciles those verdicts against the execution log, gates closure on review results, advances state, and produces the closeout artifact that ends the plan.
+The terminal stage of the Pocket pipeline. Invoked directly by the user after pocket-development's phase-level pass has written verdicts for a phase or flat plan. It reconciles those verdicts against the execution log, gates closure on review results, advances state, and produces the closeout artifact that ends the plan.
 
-**Core principle:** Verdicts decide. pocket-closing never re-reviews and never improvises a close — it reads what pocket-review wrote and translates it into an accept-and-close or a block. No clean verdict, no close.
+**Core principle:** Verdicts decide. pocket-closing never re-reviews and never improvises a close — it reads what pocket-development's phase-level pass wrote and translates it into an accept-and-close or a block. No clean verdict, no close.
 
 ## Position in Pocket Bundle
 
 ```text
-pocket-grinding → pocket-planning → pocket-structuring → pocket-development → pocket-review → POCKET-CLOSING
-                                                                                                    ↑
-                                                                                  User invokes — or pocket-review
-                                                                                  auto-chains here (one confirmation)
-                                                                                       when all tasks pass review
+pocket-grinding → pocket-planning → pocket-structuring → pocket-development → POCKET-CLOSING
+                                                                                    ↑
+                                                                  User invokes — or pocket-development's
+                                                                  phase-level pass auto-chains here (one
+                                                                  confirmation) when all tasks pass review
 ```
 
-pocket-closing runs whichever way the user reaches it: invoked **directly** (`/pocketto:pocket-closing <path>`), or **auto-chained** by pocket-review after a phase passes with all `REVIEW_PASS` — pocket-review surfaces a one-prompt confirmation and, on **yes**, hands the plan path here. Either path, pocket-closing owns the close from scratch: pocket-review deliberately does NOT update `log.json` ("leave to user or pocket-closing"), so this skill still runs its full preflight, verdict gate, freshness check, and `log close`. pocket-development names `log.json` as "pocket-closing's primary input." This skill is where the loop actually closes.
+pocket-closing runs whichever way the user reaches it: invoked **directly** (`/pocketto:pocket-closing <path>`), or **auto-chained** by pocket-development's phase-level pass after a phase passes with all `REVIEW_PASS` — the phase-level pass surfaces a one-prompt confirmation and, on **yes**, hands the plan path here. Either path, pocket-closing owns the close from scratch: the phase-level pass deliberately does NOT update `log.json` ("leave to user or pocket-closing"), so this skill still runs its full preflight, verdict gate, freshness check, and `log close`. pocket-development names `log.json` as "pocket-closing's primary input." This skill is where the loop actually closes.
 
 ## Invocation
 
@@ -83,15 +83,15 @@ Verify:
 ls <plan_dir>/reviews/
 ```
 
-Read every `reviews/<task_id>-review.json`. For each reviewable task in each target phase (the same task set pocket-review computed — `status == DONE` with a non-null `done_sha`):
+Read every `reviews/<task_id>-review.json`. For each reviewable task in each target phase (the same task set the phase-level pass computed — `status == DONE` with a non-null `done_sha`):
 
 | Condition | Reconciliation |
 |-----------|----------------|
 | `DONE` + `done_sha` + review file **current for that `done_sha`** | Reviewable — record its `overall` verdict |
-| `DONE` + `done_sha` + review file **stale** (predates the current `done_sha`) | `CLOSE_BLOCKED` — "T{id} verdict is stale: reviewed before the current done_sha. Re-run pocket-review." |
-| `DONE` + `done_sha` but NO review file | `CLOSE_BLOCKED` — "T{id} has no verdict. Run pocket-review before closing." |
-| Task is not `DONE` / missing `done_sha` | Not reviewable — was skipped by pocket-review; note and exclude from the gate |
-| `reviews/` dir absent or empty | `CLOSE_BLOCKED` — "No reviews found. Run pocket-review first." |
+| `DONE` + `done_sha` + review file **stale** (predates the current `done_sha`) | `CLOSE_BLOCKED` — "T{id} verdict is stale: reviewed before the current done_sha. Re-run pocket-development's phase-level pass." |
+| `DONE` + `done_sha` but NO review file | `CLOSE_BLOCKED` — "T{id} has no verdict. Run pocket-development's phase-level pass before closing." |
+| Task is not `DONE` / missing `done_sha` | Not reviewable — was skipped by the phase-level pass; note and exclude from the gate |
+| `reviews/` dir absent or empty | `CLOSE_BLOCKED` — "No reviews found. Run pocket-development's phase-level pass first." |
 
 **Freshness check (mandatory).** A review proves a verdict only for the SHA it actually reviewed. If a task was corrected after review, the old verdict lingers — closing on it would accept code that was never reviewed at the current boundary. For each reviewable task `T`, compute:
 
@@ -104,9 +104,9 @@ where tasks(c) = ({ c.for_task } if present) ∪ { owner[f] : f ∈ c.files and 
       owner[f]  = the task whose original done-range (prev..done_sha, in plan order) last touched f
 ```
 
-This is **the identical attribution set pocket-review uses** (Task 4), so `reviewed_sha(T)` written by pocket-review equals `latest_owned_sha(T)` by construction. The set MUST include corrections where `c.for_task == T` even when no file `c` touches is owned by `T`; using owner-only attribution here would make a `for_task` correction invisible to closing and produce a permanent `CLOSE_BLOCKED` for that task.
+This is **the identical attribution set the phase-level pass uses** (Task 4), so `reviewed_sha(T)` written by the phase-level pass equals `latest_owned_sha(T)` by construction. The set MUST include corrections where `c.for_task == T` even when no file `c` touches is owned by `T`; using owner-only attribution here would make a `for_task` correction invisible to closing and produce a permanent `CLOSE_BLOCKED` for that task.
 
-The verdict is current iff `reviews/<T>-review.json`.`reviewed_sha == latest_owned_sha(T)` (exact SHA match). If any correction attributed to `T` is newer than its review — meaning `reviewed_sha` lags behind `latest_owned_sha(T)` — the verdict is stale → `CLOSE_BLOCKED: "T{id} verdict is stale: a correction changed its files after review. Re-run pocket-review."`.
+The verdict is current iff `reviews/<T>-review.json`.`reviewed_sha == latest_owned_sha(T)` (exact SHA match). If any correction attributed to `T` is newer than its review — meaning `reviewed_sha` lags behind `latest_owned_sha(T)` — the verdict is stale → `CLOSE_BLOCKED: "T{id} verdict is stale: a correction changed its files after review. Re-run pocket-development's phase-level pass."`.
 
 **Fallback (legacy reviews only).** If `reviewed_sha` is absent from the review file (older reviews predating this template change), fall back to the timestamp proxy: run `git show -s --format=%cI <latest_owned_sha(T)>` and require the review `timestamp` to be at or after that commit time. This path is a compatibility shim — any review produced after Task 4 lands will carry `reviewed_sha` and use the exact-match path above.
 
@@ -118,7 +118,7 @@ A phase may advance ONLY when every reviewable task in it is `REVIEW_PASS`.
 
 | Any task verdict | Action |
 |------------------|--------|
-| `REVIEW_FAIL` | `CLOSE_BLOCKED`. Print each failing task's `fix_instructions` verbatim. Fix → re-run pocket-review → re-run pocket-closing. |
+| `REVIEW_FAIL` | `CLOSE_BLOCKED`. Print each failing task's `fix_instructions` verbatim. Fix → re-run pocket-development's phase-level pass → re-run pocket-closing. |
 | `REVIEW_BLOCKED` | `CLOSE_BLOCKED`. Print the escalation `fix_instructions`. Resolve the escalation before closing. |
 | all `REVIEW_PASS` | Phase passes the gate — proceed to Advance State. |
 
@@ -163,7 +163,7 @@ For each phase that **passed the gate**, advance it `REVIEW → DONE` at the pha
 npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --json --contract 2
 ```
 
-[CRITICAL] Phase-level update only. NEVER pass `--task` here — task `DONE` recomputes `done_sha` from current HEAD and would corrupt the review's SHA range. Tasks were already marked DONE by pocket-development; leave them untouched. Correction commits are recorded by pocket-correction (via `pocketto-pi log update --correction`), never by closing — this rule is unaffected by the correction cycle.
+[CRITICAL] Phase-level update only. NEVER pass `--task` here — task `DONE` recomputes `done_sha` from current HEAD and would corrupt the review's SHA range. Tasks were already marked DONE by pocket-development; leave them untouched. Correction commits are recorded by pocket-development's phase-level pass (via `pocketto-pi log update --correction`), never by closing — this rule is unaffected by the correction cycle.
 
 Parse the envelope, confirm `ok: true` and `data.newStatus == "DONE"` before continuing.
 
@@ -182,7 +182,7 @@ npx -y pocketto-pi log close <plan_dir> --json --contract 2
 | `ok: true`, `data.status == "DONE"` | All phases DONE → header set to `DONE` + `date_completed` | `CLOSED` — write closeout.md, emit final report |
 | `ok: false`, code `PHASES_NOT_DONE` | Other phases still `WAITING`/`REVIEW` (Type B, plan not finished) | `PHASE_ADVANCED` — the reviewed phase is DONE; name the next phase to run. Do NOT treat the non-zero exit as an error. |
 
-`PHASE_ADVANCED` is the normal mid-pipeline state for phased plans: you advanced one phase, the plan continues. Point the user back to pocket-development / pocket-review for the next phase.
+`PHASE_ADVANCED` is the normal mid-pipeline state for phased plans: you advanced one phase, the plan continues. Point the user back to pocket-development for the next phase.
 
 ## Enterprise Mode (opt-in): Closeout
 
@@ -312,7 +312,7 @@ Closeout: <plan_dir>/closeout.md
 
 3. NO CODE READING BY MAIN AGENT
    pocket-closing reconciles verdicts; it never re-reviews implementation.
-   WHY: Re-reviewing duplicates pocket-review and invites the main agent
+   WHY: Re-reviewing duplicates pocket-development's phase-level pass and invites the main agent
    to override an independent verdict with its own judgment.
 
 4. NO MANUAL log.json EDIT
@@ -327,7 +327,7 @@ Closeout: <plan_dir>/closeout.md
 
 ## Sample log.json — Before and After
 
-**Before** (the canonical end state pocket-review leaves — flat plan, all passed, still open):
+**Before** (the canonical end state pocket-development's phase-level pass leaves — flat plan, all passed, still open):
 
 ```json
 {

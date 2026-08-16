@@ -4,7 +4,7 @@ How pocket-closing maps each reviewable task to its review verdict, decides the 
 
 ## The review file contract
 
-pocket-review writes one file per reviewed task (batch mode):
+pocket-development's phase-level pass writes one file per reviewed task (batch mode):
 
 ```text
 <plan_dir>/reviews/<task_id>-review.json
@@ -16,7 +16,7 @@ Fields pocket-closing reads:
 |-------|-----|
 | `task_id` | Join key back to `log.json` task `id` (case-insensitive: `T1`) |
 | `overall` | The verdict: `REVIEW_PASS` \| `REVIEW_FAIL` \| `REVIEW_BLOCKED` |
-| `reviewed_sha` | **Primary freshness anchor** — the boundary SHA pocket-review actually reviewed. Exact-matched against `latest_owned_sha(T)` to prove the verdict covers current code. Present on any review produced after Task 4 of #34 landed. |
+| `reviewed_sha` | **Primary freshness anchor** — the boundary SHA the phase-level pass actually reviewed. Exact-matched against `latest_owned_sha(T)` to prove the verdict covers current code. Present on any review produced after Task 4 of #34 landed. |
 | `timestamp` | When the review was produced — **legacy fallback only**, used when `reviewed_sha` is absent (older reviews predating `reviewed_sha` support). |
 | `fix_instructions` | Printed verbatim on a block. Empty string when PASS |
 | `stage_2.issues[]` | `severity` Critical/Important/Minor — Minor on a PASS = carried-forward observation |
@@ -35,7 +35,7 @@ stale      = []   # verdict does not cover latest owned sha → blocks
 for phase in target_phases:
     for task in phase.tasks:
         if task.status != "DONE" or not task.done_sha:
-            skipped.append(task)                 # pocket-review skipped it too
+            skipped.append(task)                 # the phase-level pass skipped it too
             continue
         verdict_file = reviews/<task.id>-review.json
         if not exists(verdict_file):
@@ -85,10 +85,10 @@ A phase passes only when **every** reviewable task in it is `REVIEW_PASS`.
 
 `REVIEW_FAIL` vs `REVIEW_BLOCKED`:
 
-- `REVIEW_FAIL` — issues were found. Path: fix the code → re-run pocket-review (overwrites the verdict) → re-run pocket-closing.
+- `REVIEW_FAIL` — issues were found. Path: fix the code → re-run pocket-development's phase-level pass (overwrites the verdict) → re-run pocket-closing.
 - `REVIEW_BLOCKED` — the reviewer could not complete or escalated (e.g. plan/spec unreadable, repeated failures). `fix_instructions` starts with `ESCALATE:`. This needs a human decision, not just a code fix. Surface it and stop.
 
-A `REVIEW_BLOCKED` **stub** may also appear when pocket-review's subagent could not run at all. Treat any `overall == REVIEW_BLOCKED` identically: block and print its `fix_instructions`.
+A `REVIEW_BLOCKED` **stub** may also appear when the phase-level pass's subagent could not run at all. Treat any `overall == REVIEW_BLOCKED` identically: block and print its `fix_instructions`.
 
 ## Carried-forward observations (PASS only)
 
@@ -105,10 +105,10 @@ These never block a close. They are recorded so the next person sees what review
 | Situation | Handling |
 |-----------|----------|
 | Header `status` already `DONE` | `ALREADY_CLOSED` — idempotent no-op, do not re-run CLI |
-| `reviews/` absent or empty | `CLOSE_BLOCKED: "No reviews found. Run pocket-review first."` |
+| `reviews/` absent or empty | `CLOSE_BLOCKED: "No reviews found. Run pocket-development's phase-level pass first."` |
 | Verdict file present for a non-DONE task | Stale verdict from a prior cycle — ignore; the task is not reviewable now |
-| `review.reviewed_sha` present and `!= latest_owned_sha(T)` | Stale — a correction landed after this review. `CLOSE_BLOCKED: "T{id} verdict is stale: a correction changed its files after review. Re-run pocket-review."` Never close on it. |
-| `review.reviewed_sha` absent and `review.timestamp < committer_time(latest_owned_sha(T))` | Legacy stale — code boundary advanced after review (timestamp proxy). `CLOSE_BLOCKED: "T{id} verdict is stale. Re-run pocket-review."` Never close on it. |
-| Review `timestamp` missing/unparseable and `reviewed_sha` absent | Cannot prove freshness → treat as stale → `CLOSE_BLOCKED`. Re-run pocket-review to regenerate the verdict |
+| `review.reviewed_sha` present and `!= latest_owned_sha(T)` | Stale — a correction landed after this review. `CLOSE_BLOCKED: "T{id} verdict is stale: a correction changed its files after review. Re-run pocket-development's phase-level pass."` Never close on it. |
+| `review.reviewed_sha` absent and `review.timestamp < committer_time(latest_owned_sha(T))` | Legacy stale — code boundary advanced after review (timestamp proxy). `CLOSE_BLOCKED: "T{id} verdict is stale. Re-run pocket-development's phase-level pass."` Never close on it. |
+| Review `timestamp` missing/unparseable and `reviewed_sha` absent | Cannot prove freshness → treat as stale → `CLOSE_BLOCKED`. Re-run pocket-development's phase-level pass to regenerate the verdict |
 | Phase has zero reviewable tasks (all skipped) | Cannot attest a close — `CLOSE_BLOCKED: "Phase <file> has no reviewed tasks."` |
 | Dir invocation, one phase blocks, others pass | Advance the passing phases, then `log close` returns `PHASES_NOT_DONE` → report `CLOSE_BLOCKED` for the blocked phase. Never close while any target phase is blocked. |

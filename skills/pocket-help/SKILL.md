@@ -61,7 +61,7 @@ Recommended (with `--all`): `@juicesharp/rpiv-ask-user-question`, `@tintinweb/pi
 
 | Kind | Skills | Use for |
 |------|--------|---------|
-| **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-review · pocket-correction · pocket-closing | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
+| **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-closing | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
 | **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · structured-research · pocket-help · pocket-init · create-pr | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
 
 The `pocket-*` prefix marks a skill as part of the chained pipeline (`pocket-init` and `pocket-help` are the exceptions — standalone setup/routing helpers). `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks. `create-pr` is the Pocket Enterprise PR recorder (see below).
@@ -76,10 +76,8 @@ Match your situation to one skill. Open only that skill.
 | Clear problem — need a spec + acceptance criteria | `pocket-grinding` | chained |
 | Approved spec — need a TDD execution plan | `pocket-planning` | chained |
 | Execution plan ready — sequence/phase it | `pocket-structuring` | chained |
-| Plan or phase file ready — execute task-by-task | `pocket-development` | chained |
-| A phase/plan is DONE — review it | `pocket-review` | chained |
-| pocket-review returned REVIEW_FAIL — fix and re-record | `pocket-correction` | chained |
-| Reviews all pass — close out the plan | `pocket-closing` | chained |
+| Plan or phase file ready — execute task-by-task (in-loop audit + phase-level pass included) | `pocket-development` | chained |
+| Phase-level pass done, all verdicts pass — close out the plan | `pocket-closing` | chained |
 | A bug, a failure, or "audit this code" | `bug-hunting` | standalone |
 | Small-to-medium change, full pipeline is overkill | `hotfix` | standalone |
 | Design system / brand identity / UI tokens | `brand-design` | standalone |
@@ -112,16 +110,14 @@ execution plan
    │  pocket-structuring     ≤6 tasks: passthrough · ≥7: split to phases [hands phases one at a time]
    ▼
 plan / phase file
-   │  pocket-development      delegate task-by-task via subagents         [emits PHASE_COMPLETE]
+   │  pocket-development      delegate task-by-task via subagents;        [emits PHASE_COMPLETE]
+   │                          in-loop audit per task (mechanical gate +
+   │                          read-only auditor) + phase-level pass once
+   │                          every task is DONE, incl. append-only fixes
+   │                          for any REVIEW_FAIL finding
    ▼
-phase DONE
-   │  pocket-review          USER triggers · parallel review subagents    [PHASE_REVIEWED / BLOCKED]
-   ▼
-reviews written (REVIEW_FAIL?)
-   │  pocket-correction      USER triggers on REVIEW_FAIL · sequential fixes · append-only corrections [CORRECTIONS_RECORDED]
-   ▼ (re-run pocket-review)
-reviews written (all pass)
-   │  pocket-closing         USER or review auto-chains · gate · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
+phase-level pass written (all pass)
+   │  pocket-closing         USER or phase-level pass auto-chains · gate · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
    ▼
 plan closed (fix findings & loop phases until every phase is DONE)
 ```
@@ -130,12 +126,10 @@ plan closed (fix findings & loop phases until every phase is DONE)
 - `pocket-grinding` **auto-invokes** `pocket-planning` after you approve the spec.
 - `pocket-planning`, after you approve the plan, validates it with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
 - `pocket-structuring` runs only for **≥7-task (split)** plans from planning: it splits them into phase files handed off **one at a time**. (Invoked directly, it also handles ≤6-task passthrough.)
-- `pocket-development` does **NOT** call `pocket-review`. It emits a `PHASE_COMPLETE` handoff; **you** invoke `pocket-review` afterward.
-- `pocket-review` **auto-chains** to `pocket-closing` after **one confirmation** when every task is `REVIEW_PASS` — it still does **NOT** touch `log.json` on passing runs (closing owns that). On `PHASE_BLOCKED` (preflight failure) it stops with the preflight failure message. On any `REVIEW_FAIL` it does **not** chain; it prints an Action Required block pointing to `pocket-correction`. On `REVIEW_BLOCKED` it halts — resolve the escalation before re-reviewing.
-- `pocket-correction` is the **REVIEW_FAIL fix stage** (user-triggered). It delegates each failed task's fix to an implementer subagent (main agent stays Delegator + Auditor), records an append-only correction commit via `pocketto-pi log update --correction` (done_sha never moves), and hands back for user-triggered re-review. Corrections are SEQUENTIAL — never parallel.
+- `pocket-development` runs the review in-loop — it does **NOT** wait for a separate user-triggered reviewer. After every task's implementer reports DONE it runs the in-loop audit (mechanical gate, then a read-only auditor subagent covering spec compliance and code quality). Once all tasks in the phase are DONE, it dispatches a phase-level pass over the whole phase and, for any `REVIEW_FAIL` finding, delegates and records an append-only fix as part of that same flow (main agent stays Delegator + Auditor — never writes the fix itself). It emits a `PHASE_COMPLETE` handoff naming `pocket-closing` as the user-triggered next step, and on an all-`REVIEW_PASS` phase can auto-chain there after **one confirmation** — it still does **NOT** touch `log.json`'s phase/plan status on passing runs (closing owns that).
 - `pocket-pitching` does **not** auto-chain — it presents handoff options and you choose whether to start `pocket-grinding`.
 
-> `pocket-closing` is the terminal stage: it reconciles review verdicts, advances `REVIEW → DONE`, runs `log close`, and writes a `closeout.md`. Without it a fully reviewed plan stays in `IN_PROGRESS`/`REVIEW` limbo. Any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task makes it `CLOSE_BLOCKED` — follow pocket-review's Action Required block before re-reviewing.
+> `pocket-closing` is the terminal stage: it reconciles review verdicts, advances `REVIEW → DONE`, runs `log close`, and writes a `closeout.md`. Without it a fully reviewed plan stays in `IN_PROGRESS`/`REVIEW` limbo. Any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task makes it `CLOSE_BLOCKED` — resolve it through `pocket-development`'s phase-level pass before re-closing.
 
 For the flow walked stage-by-stage with a worked example and every gate, load `references/end-to-end-flow.md`.
 
@@ -144,9 +138,8 @@ For the flow walked stage-by-stage with a worked example and every gate, load `r
 The pipeline above is local-first. With **Pocket Enterprise** enabled (`/pocketto:pocket-init` or `pocketto-pi mode init`), the same stages also leave a GitHub trace — nothing else changes:
 
 - `pocket-grinding` → creates a GitHub issue from the approved spec (summary + full spec in a collapsible section).
-- `pocket-development` → offers `/pocketto:create-pr` at PHASE_COMPLETE and syncs a task-checklist comment to the issue.
+- `pocket-development` → offers `/pocketto:create-pr` at PHASE_COMPLETE, posts the phase-level pass's verdicts as a PR summary comment + inline findings (reconciled, no duplicates), and syncs a task-checklist comment to the issue.
 - `create-pr` → opens the phase PR on the current branch, linked to the issue (`refs`/`closes`).
-- `pocket-review` → posts verdicts as a PR summary comment + inline findings (reconciled, no duplicates).
 - `pocket-closing` → posts the closeout comment to the issue; with `require_approval: true` it blocks the close until the PR is APPROVED. Pocket never merges PRs or closes issues — humans do.
 
 Detection is fail-closed: without a valid `## Pocket Enterprise` block in `AGENTS.md`/`CLAUDE.md`, every skill behaves exactly as local mode with **zero** GitHub calls.

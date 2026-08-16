@@ -120,7 +120,7 @@ If any PR is returned → reuse the first match, record via [Record PR](#record-
 
 ## Commit Traveling State (before `gh pr create`)
 
-Enterprise mode requires `log.json` and plan/spec docs on the PR so pocket-review can compute per-task SHA scope.
+Enterprise mode requires `log.json` and plan/spec docs on the PR so pocket-development's phase-level pass can compute per-task SHA scope.
 
 ```bash
 git add -f <plan_dir>/log.json <plan_dir> <spec_dir>
