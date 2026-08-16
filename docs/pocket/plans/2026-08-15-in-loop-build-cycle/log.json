@@ -124,25 +124,40 @@
     {
       "order": 4,
       "file": "execution-plan-phase-4.md",
-      "status": "WAITING",
+      "status": "REVIEW",
       "tasks": [
         {
           "id": "T12",
           "name": "Documentation sync for the deprecated skills",
-          "status": "WAITING",
-          "depends": "T11"
+          "status": "DONE",
+          "depends": "T11",
+          "done_sha": "fe3d55d2f783869f797dd9bcbaf4719000420d6e"
         },
         {
           "id": "T13",
           "name": "Version 3.0.0, manifest sync, and migration release notes",
-          "status": "WAITING",
-          "depends": "T12"
+          "status": "DONE",
+          "depends": "T12",
+          "done_sha": "0bd9670daec0738b924cdf45813e46bc36184bba"
         },
         {
           "id": "T14",
           "name": "Final comprehension review and end-to-end verification",
-          "status": "WAITING",
-          "depends": "T13"
+          "status": "DONE",
+          "depends": "T13",
+          "done_sha": "c4dee283e02c504bf00c4fb2e5dbc3538130a355"
+        }
+      ],
+      "corrections": [
+        {
+          "sha": "ba5d8b047211d8764c04f1b259ad5a38dd7846dc",
+          "files": [
+            "skills/pocket-closing/SKILL.md",
+            "skills/pocket-help/SKILL.md",
+            "skills/pocket-help/references/end-to-end-flow.md",
+            "skills/pocket-help/references/skill-map.md"
+          ],
+          "for_task": "T12"
         }
       ]
     }
