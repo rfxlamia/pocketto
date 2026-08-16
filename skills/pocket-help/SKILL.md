@@ -117,7 +117,7 @@ plan / phase file
    │                          for any REVIEW_FAIL finding
    ▼
 phase-level pass written (all pass)
-   │  pocket-closing         USER or phase-level pass auto-chains · gate · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
+   │  pocket-closing         User invokes · gate · log close [CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED]
    ▼
 plan closed (fix findings & loop phases until every phase is DONE)
 ```
@@ -126,7 +126,7 @@ plan closed (fix findings & loop phases until every phase is DONE)
 - `pocket-grinding` **auto-invokes** `pocket-planning` after you approve the spec.
 - `pocket-planning`, after you approve the plan, validates it with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
 - `pocket-structuring` runs only for **≥7-task (split)** plans from planning: it splits them into phase files handed off **one at a time**. (Invoked directly, it also handles ≤6-task passthrough.)
-- `pocket-development` runs the review in-loop — it does **NOT** wait for a separate user-triggered reviewer. After every task's implementer reports DONE it runs the in-loop audit (mechanical gate, then a read-only auditor subagent covering spec compliance and code quality). Once all tasks in the phase are DONE, it dispatches a phase-level pass over the whole phase and, for any `REVIEW_FAIL` finding, delegates and records an append-only fix as part of that same flow (main agent stays Delegator + Auditor — never writes the fix itself). It emits a `PHASE_COMPLETE` handoff naming `pocket-closing` as the user-triggered next step, and on an all-`REVIEW_PASS` phase can auto-chain there after **one confirmation** — it still does **NOT** touch `log.json`'s phase/plan status on passing runs (closing owns that).
+- `pocket-development` runs the review in-loop — it does **NOT** wait for a separate user-triggered reviewer. After every task's implementer reports DONE it runs the in-loop audit (mechanical gate, then a read-only auditor subagent covering spec compliance and code quality). Once all tasks in the phase are DONE, it dispatches a phase-level pass over the whole phase and, for any `REVIEW_FAIL` finding, delegates and records an append-only fix as part of that same flow (main agent stays Delegator + Auditor — never writes the fix itself). It emits a `PHASE_COMPLETE` handoff naming `pocket-closing` as the user-triggered next step — pocket-closing is always invoked directly by the user, never auto-chained — and it still does **NOT** touch `log.json`'s phase/plan status on passing runs (closing owns that).
 - `pocket-pitching` does **not** auto-chain — it presents handoff options and you choose whether to start `pocket-grinding`.
 
 > `pocket-closing` is the terminal stage: it reconciles review verdicts, advances `REVIEW → DONE`, runs `log close`, and writes a `closeout.md`. Without it a fully reviewed plan stays in `IN_PROGRESS`/`REVIEW` limbo. Any `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed task makes it `CLOSE_BLOCKED` — resolve it through `pocket-development`'s phase-level pass before re-closing.

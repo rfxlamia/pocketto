@@ -14,12 +14,12 @@ The terminal stage of the Pocket pipeline. Invoked directly by the user after po
 ```text
 pocket-grinding → pocket-planning → pocket-structuring → pocket-development → POCKET-CLOSING
                                                                                     ↑
-                                                                  User invokes — or pocket-development's
-                                                                  phase-level pass auto-chains here (one
-                                                                  confirmation) when all tasks pass review
+                                                                  User invokes directly after
+                                                                  pocket-development's phase-level pass
+                                                                  reaches REVIEW on all tasks passing
 ```
 
-pocket-closing runs whichever way the user reaches it: invoked **directly** (`/pocketto:pocket-closing <path>`), or **auto-chained** by pocket-development's phase-level pass after a phase passes with all `REVIEW_PASS` — the phase-level pass surfaces a one-prompt confirmation and, on **yes**, hands the plan path here. Either path, pocket-closing owns the close from scratch: the phase-level pass deliberately does NOT update `log.json` ("leave to user or pocket-closing"), so this skill still runs its full preflight, verdict gate, freshness check, and `log close`. pocket-development names `log.json` as "pocket-closing's primary input." This skill is where the loop actually closes.
+pocket-closing is always invoked **directly** by the user (`/pocketto:pocket-closing <path>`) — pocket-development never auto-chains to it. When a phase passes with all `REVIEW_PASS`, the phase-level pass advances the phase to `REVIEW` and emits a `PHASE_COMPLETE` handoff naming pocket-closing as the next step; the user then runs it. pocket-closing owns the close from scratch: the phase-level pass deliberately does NOT update `log.json` ("leave to user or pocket-closing"), so this skill still runs its full preflight, verdict gate, freshness check, and `log close`. pocket-development names `log.json` as "pocket-closing's primary input." This skill is where the loop actually closes.
 
 ## Invocation
 

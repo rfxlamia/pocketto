@@ -49,7 +49,7 @@ Two kinds of skills:
 - **What:** Precise subagent delegation, task-by-task. Main agent is **delegator + auditor only** — it never writes implementation code. Every spawn requires a Pocket Packet (the contract). Enforces 6 iron laws and an entry gate; after each implementer reports DONE it runs a mechanical gate (git log + tests + DELIVERABLE) then dispatches a read-only auditor subagent for the in-loop audit (spec compliance + code quality). Once every task in the phase is DONE it dispatches a phase-level pass over the whole phase — one read-only subagent over every task's diff range and packet — and, for any `REVIEW_FAIL` finding, delegates and records an append-only fix (never writes the fix itself). Supports parallel groups via git worktrees.
 - **Input:** A flat plan (`execution-plan.md`, Type A) or a phase file (`execution-plan-phase-N.md`, Type B).
 - **Output:** Committed, audited code, per-task review JSON (`<plan_dir>/reviews/<task>-review.json`), task statuses tracked in `log.json` via the CLI.
-- **Handoff:** Emits a `PHASE_COMPLETE` handoff message naming `pocket-closing` as the user-triggered next step; on an all-`REVIEW_PASS` phase it can also auto-chain there after one confirmation.
+- **Handoff:** Emits a `PHASE_COMPLETE` handoff message naming `pocket-closing` as the user-triggered next step. Never auto-chains to it — the user always invokes `pocket-closing` directly.
 - **Use when:** A plan/phase is ready and tasks are mostly independent; "execute plan", "delegate tasks", "dispatch subagents".
 - **Skip when:** No plan yet (→ pocket-planning), or tasks are tightly coupled (manual execution / redesign).
 
@@ -58,7 +58,7 @@ Two kinds of skills:
 - **Input:** A reviewed phase/plan: `log.json` plus `reviews/<task>-review.json` for every reviewable task.
 - **Output:** `log.json` header set to `DONE` + `date_completed`; `<plan_dir>/closeout.md`. States: `CLOSED`, `PHASE_ADVANCED`, `CLOSE_BLOCKED`, `ALREADY_CLOSED`.
 - **Handoff:** Terminal — this is where the pipeline ends. For phased plans, `PHASE_ADVANCED` points back to pocket-development for the next phase.
-- **Use when:** Reached automatically when pocket-development's phase-level pass chains here on an all-`REVIEW_PASS` phase (after one confirmation), or invoked directly by the user after reviews are written: `/pocketto:pocket-closing <plan_dir>`.
+- **Use when:** Invoked directly by the user after pocket-development's phase-level pass writes reviews and reaches `REVIEW` on an all-`REVIEW_PASS` phase: `/pocketto:pocket-closing <plan_dir>`. Always user-triggered — pocket-development never auto-chains to it.
 - **Skip when:** Any task is still `REVIEW_FAIL`/`REVIEW_BLOCKED` or unreviewed — follow pocket-development's phase-level pass Action Required block before re-closing.
 
 ---

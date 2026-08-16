@@ -47,10 +47,10 @@ Main agent is **delegator + auditor only** — it never writes implementation co
 - **Gates:** 6 iron laws (no packet = no spawn; no trust without evidence; etc.); for phase files, the prerequisite phase must be confirmed COMPLETE before starting.
 - **Produces:** Committed, audited code; per-task review JSON (`<plan_dir>/reviews/<task>-review.json`); statuses tracked in `log.json`.
 - **Once every task is DONE:** dispatches the phase-level pass — one read-only subagent over the whole phase's diff ranges and packets — and, for any `REVIEW_FAIL` finding, delegates and records an append-only fix as part of the same in-loop flow (never a separate stage). Sets the phase to `REVIEW`.
-- **Next:** Emits a `PHASE_COMPLETE` handoff naming `pocket-closing` as the user-triggered next step; on an all-`REVIEW_PASS` phase it can also auto-chain there after one confirmation.
+- **Next:** Emits a `PHASE_COMPLETE` handoff naming `pocket-closing` as the user-triggered next step. pocket-development never auto-chains to it — the user always runs `pocket-closing` directly.
 
-### 6. pocket-closing — close (auto-chained or user-triggered)
-Reached automatically when pocket-development's phase-level pass chains here on an all-`REVIEW_PASS` phase (after a single confirmation), or run directly by the user: `/pocketto:pocket-closing <plan_dir>`. Main agent is **reconciler + closer only** — it reads `log.json` + every `reviews/*.json`, gates the close on verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes `closeout.md`.
+### 6. pocket-closing — close (user-triggered)
+Always invoked directly by the user: `/pocketto:pocket-closing <plan_dir>`, after pocket-development's phase-level pass reaches `REVIEW` on an all-`REVIEW_PASS` phase and emits its `PHASE_COMPLETE` handoff. Main agent is **reconciler + closer only** — it reads `log.json` + every `reviews/*.json`, gates the close on verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` → `CLOSE_BLOCKED`), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes `closeout.md`.
 - **Output states:** `CLOSED` (header `DONE` + `date_completed`), `PHASE_ADVANCED` (one phase done, plan continues), `CLOSE_BLOCKED`, or `ALREADY_CLOSED`.
 - **Closes the loop:** without this stage a finished plan sits in `IN_PROGRESS`/`REVIEW` limbo. This is the terminal step.
 
