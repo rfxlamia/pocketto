@@ -1,0 +1,29 @@
+{
+  "task_id": "T11",
+  "task_name": "Deprecate the pocket-review and pocket-correction skills",
+  "cycle": 1,
+  "timestamp": "2026-08-16T13:35:00Z",
+  "reviewer_mode": "read-only",
+  "reviewer_config": "main-agent-direct",
+  "stage_1": {
+    "status": "PASS",
+    "issues": [],
+    "concerns_addressed": []
+  },
+  "stage_2": {
+    "status": "PASS",
+    "strengths": [
+      "grep -il deprecated lists both SKILL.md files",
+      "All four reference files under skills/pocket-review/references/ still present, none deleted",
+      "node field-presence check on review-report-template.md exits 0 — no schema field renamed",
+      "Diff scoped to exactly the four listed files, nothing under cli/"
+    ],
+    "issues": [],
+    "assessment": "Approved"
+  },
+  "overall": "REVIEW_PASS",
+  "fix_instructions": "",
+  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 1 },
+  "reviewed_sha": "cbf4802670feaad52285326a88b1d04a5083cb00",
+  "audit_note": "Verified by main agent directly (git show --stat, grep, ls, node field check all re-run and confirmed). The phase-level pass separately found that three OTHER live files (pocket-closing/SKILL.md, pocket-closing/references/verdict-reconciliation.md, pocket-help/SKILL.md + references, create-pr/SKILL.md) still reference pocket-review/pocket-correction as live stages — those are explicitly out of T11's own file scope and are deferred to T12 (see reviews/phase-pass-phase-3.json), not a defect in T11 itself. Written retroactively as part of Phase 3's phase-level pass / enterprise-reporting prerequisites."
+}
