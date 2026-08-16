@@ -60,7 +60,7 @@ Record shape (clean pass, zero findings):
   "timestamp": "<UTC ISO 8601 now>",
   "reviewer_mode": "read-only",
   "findings": [],
-  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 1 },
+  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 2 },
   "status": "PHASE_PASS_CLEAN"
 }
 ```
@@ -90,7 +90,7 @@ If the round cap is reached with findings still outstanding, the phase SHALL NOT
 
 ## Fix rounds and the round cap
 
-The phase-level pass has the same round budget as a task: **2 rounds**. The record's `loop_info` (`current_cycle`, `max_cycles: 2`, `cycles_remaining`) tracks it exactly as `two-stage-review.md` § Round budget tracks a task's rounds — a clean first pass records `current_cycle: 1`, `cycles_remaining: 1`, no round consumed; each fix round that follows a non-empty finding set consumes one round.
+The phase-level pass has the same fix-round budget as a task: **2 rounds**. The record's `loop_info` (`current_cycle`, `max_cycles: 2`, `cycles_remaining`) tracks it exactly as `two-stage-review.md` § Round budget tracks a task's rounds — a clean first pass records `current_cycle: 1`, `cycles_remaining: 2`, with no round consumed; each fix/re-audit round that follows a non-empty finding set consumes one round.
 
 - **Round 1:** pass runs, findings recorded (or `findings: []` and done — no round needed).
 - If findings exist: fixes are dispatched, one correction commit per fix (see [Correction recording](#correction-recording)), then the pass **re-runs** to confirm the findings are resolved. This re-run consumes round 1.

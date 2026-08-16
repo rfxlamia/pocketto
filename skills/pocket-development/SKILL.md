@@ -758,7 +758,8 @@ Phase-level pass: <PHASE_PASS_CLEAN | PHASE_PASS_RESOLVED> at
   <plan_dir>/reviews/phase-pass-<phase_key>.json
 Phase status: REVIEW
 Gate: PASS
-→ pocket-structuring may proceed to Phase N+1
+Next: user runs `/pocketto:pocket-closing <plan_dir>/<phase_file>`.
+→ Phase N+1 may start only after pocket-closing reports this phase DONE
 ```
 
 If any condition fails:
@@ -780,7 +781,7 @@ Unblocking action: human resolves the outstanding findings
 → Do NOT proceed to Phase N+1; phase status MUST NOT become REVIEW
 ```
 
-This report is the signal pocket-structuring polls for in its Handoff Protocol ("wait for explicit DONE confirmation").
+This report tells pocket-structuring that the phase reached `REVIEW`; pocket-structuring then halts and directs the user to run `/pocketto:pocket-closing <plan_dir>/<phase_file>`, and proceeds to Phase N+1 only after pocket-closing reports the phase `DONE`.
 
 ---
 
@@ -838,4 +839,3 @@ Load these reference files when SKILL.md says "see reference for details" or whe
 | `references/phase-level-pass.md` | All tasks in the phase are DONE — before the phase may become `REVIEW`, or a `REVIEW_FAIL` needs its correction path | Phase-level pass contract: dispatch, result record, round cap and PHASE_BLOCKED, append-only corrections, verdict fan-out. Cite it; do not restate it. |
 | `references/enterprise-reporting.md` | Enterprise-mode phase completion, after the phase is `REVIEW` | E1–E6 verdict-posting steps behind the fail-closed mode preflight. Cite it; do not restate it. |
 | `references/status-handling.md` | BLOCKED/NEEDS_CONTEXT unclear, need categorization details | Blocker types and actions |
-

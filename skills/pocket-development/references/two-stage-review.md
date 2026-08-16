@@ -52,13 +52,13 @@ If `prev_sha..HEAD` (sequential) contains no file changes, the main agent SHALL 
 
 ## Criteria
 
-The auditor SHALL apply all three of the following, in the dispatch, by loading the cited files verbatim. The main agent SHALL pass these absolute paths in the dispatch prompt and SHALL NOT paraphrase their contents.
+The auditor SHALL apply all three of the following, in the dispatch, by loading the cited files verbatim. Before dispatch, the main agent SHALL resolve `<skills_root>` as the parent directory of the active `pocket-development` skill directory, construct absolute paths from it, and pass those resolved paths in the dispatch prompt. It SHALL NOT pass the literal placeholders or paraphrase the files' contents.
 
 1. **QUALITY BAR** from the task packet: every must-have present and correct; every must-not-have absent; every red flag checked.
 2. **Spec compliance** — reuse verbatim:
-   `/Users/rfxlamia/project/pocketto/skills/pocket-review/references/spec-compliance-review.md`
+   `<skills_root>/pocket-review/references/spec-compliance-review.md`
 3. **Code quality** — reuse verbatim:
-   `/Users/rfxlamia/project/pocketto/skills/pocket-review/references/code-quality-review.md`
+   `<skills_root>/pocket-review/references/code-quality-review.md`
 
 The auditor SHALL emit `stage_1` (spec compliance) and `stage_2` (code quality, including QUALITY BAR and refactor heuristics) into the verdict artifact. The main agent SHALL NOT substitute its own checklist for these files.
 
@@ -88,15 +88,14 @@ A verdict that contains any Critical or Important finding SHALL enter a fix or r
 
 ## Round budget
 
-Each task has a budget of **2 rounds**. `loop_info` is the durable round counter. For every audited task the artifact SHALL set `loop_info.max_cycles` to `2`.
+Each task has a budget of **2 fix/refactor rounds**. `loop_info` is the durable counter: `current_cycle` is the number of audit cycles written (the initial audit is cycle 1), while `cycles_remaining` is `max(0, 2 - consumed_rounds)`. For every audited task the artifact SHALL set `loop_info.max_cycles` to `2`; `max_cycles` caps fix/refactor rounds, so a second-round re-audit may be audit cycle 3.
 
-**Consumes one round** (increment `loop_info.current_cycle` by 1; set `loop_info.cycles_remaining` to `max(0, 2 - consumed_rounds)`):
+**Consumes one round** (decrement `loop_info.cycles_remaining` once when the round is entered):
 
-- an audit FAIL at Critical or Important
-- a refactor round (entered because the auditor emitted a refactor-heuristic finding)
-- a new finding introduced by a fix (the re-audit FAIL consumes the round)
+- a fix/refactor round entered because an audit emitted any Critical or Important finding, including a refactor-heuristic finding
+- another fix/refactor round entered because the re-audit still has a Critical or Important finding, including a new finding introduced by the previous fix
 
-A single re-audit that both re-states an unfixed Critical/Important and reports a new finding consumes one round, not two.
+The finding and the fix/refactor it triggers are one consuming event, not two. A single re-audit that both re-states an unfixed Critical/Important and reports a new finding starts at most one next round.
 
 **Does not consume a round:**
 
@@ -106,10 +105,9 @@ A single re-audit that both re-states an unfixed Critical/Important and reports 
 
 Auditor infrastructure failure does not consume a round. It yields exactly one separate retry. After two consecutive infrastructure failures the task is BLOCKED with category `auditor-unavailable`. The round count in `loop_info` stays unchanged through both the retry and the BLOCKED write.
 
-On a clean first PASS (no consumed round), the artifact SHALL still record `loop_info.current_cycle: 1` (this audit) with `max_cycles: 2` and `cycles_remaining: 2`.
+On a clean first PASS (no consumed round), the artifact SHALL record `loop_info.current_cycle: 1`, `max_cycles: 2`, and `cycles_remaining: 2`.
 
-After the first consuming event: `current_cycle: 1`, `max_cycles: 2`, `cycles_remaining: 1`.
-After the second consuming event: `current_cycle: 2`, `max_cycles: 2`, `cycles_remaining: 0`. If Critical or Important findings remain, the task is BLOCKED with category `audit-failed`.
+After the initial audit starts the first fix/refactor round, its artifact records `current_cycle: 1`, `max_cycles: 2`, `cycles_remaining: 1`; the following re-audit records `current_cycle: 2` and keeps `cycles_remaining: 1` if it passes. If that re-audit starts the second round, it records `current_cycle: 2`, `cycles_remaining: 0`; the final re-audit records `current_cycle: 3`, `cycles_remaining: 0`. If Critical or Important findings remain after that final re-audit, the task is BLOCKED with category `audit-failed`.
 
 ## BLOCKED categories
 

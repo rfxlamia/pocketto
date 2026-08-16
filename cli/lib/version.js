@@ -9,6 +9,8 @@
 //                only, so older skills keep working against a newer CLI.
 //   PIPELINE     integer execution-pipeline generation. Bumped independently
 //                of CONTRACT when the in-repo skill pipeline changes.
+//   PIPELINE_FLOOR_CLI
+//                CLI version that can finish logs from before PIPELINE.
 
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
@@ -25,4 +27,5 @@ module.exports = {
   CLI_VERSION: version,
   CONTRACT: 2,
   PIPELINE: 3,
+  PIPELINE_FLOOR_CLI: '2.4.4',
 };

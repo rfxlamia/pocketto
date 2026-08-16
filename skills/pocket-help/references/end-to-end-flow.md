@@ -61,8 +61,8 @@ Always invoked directly by the user: `/pocketto:pocket-closing <plan_dir>`, afte
 3. **`pocket-planning`** preflights the auth module, maps files, decomposes into 8 tasks (schema, endpoint, rotation logic, revocation, tests, etc.), writes Pocket Packets, runs spec-reviewer + test-architect. User approves → validates via `structure --dry-run` → 8 tasks (≥7) → routes to **structuring**.
 4. **`pocket-structuring`** runs the CLI → 8 tasks ⇒ **split** into Phase 1 (schema + scaffolding) and Phase 2 (endpoint + rotation + revocation). Hands Phase 1 to development.
 5. **`pocket-development`** executes Phase 1 task-by-task (packet → spawn → in-loop audit → log DONE). Once every task is DONE, it dispatches the phase-level pass over Phase 1, sets the phase to `REVIEW`, and emits `PHASE_COMPLETE`.
-6. Phase-level pass is clean → structuring proceeds to Phase 2 → development runs its in-loop audit and phase-level pass again.
-7. Repeat until both phases are DONE and reviewed, then run `/pocketto:pocket-closing <plan_dir>`.
+6. Phase-level pass is clean → development emits `PHASE_COMPLETE` with Phase 1 at `REVIEW` → user runs `/pocketto:pocket-closing <plan_dir>/execution-plan-phase-1.md` → closing reports `PHASE_ADVANCED` and marks Phase 1 `DONE` → structuring proceeds to Phase 2.
+7. Development runs Phase 2's in-loop audits and phase-level pass. The user runs pocket-closing again after its `PHASE_COMPLETE`; the final phase returns `CLOSED` instead of `PHASE_ADVANCED`.
 
 ## Entry Points — Don't Always Start at the Top
 

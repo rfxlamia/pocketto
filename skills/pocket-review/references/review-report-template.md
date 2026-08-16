@@ -341,8 +341,8 @@ In batch mode (invoked by pocket-development's phase-level pass, post-phase), se
 | `cycle` | `1` on first cycle; incremented on re-review (see `skills/pocket-development/references/phase-level-pass.md` cycle bookkeeping) |
 | `reviewer_config` | `"batch-parallel"` |
 | `loop_info.current_cycle` | `1` on first cycle; prior cycle + 1 on re-review (mirrors `cycle`) |
-| `loop_info.max_cycles` | `1` |
-| `loop_info.cycles_remaining` | `0` |
+| `loop_info.max_cycles` | `2` for in-loop and phase-level audits; `1` only for the empty-diff skip stub defined by `two-stage-review.md` |
+| `loop_info.cycles_remaining` | Follow the round budget in `two-stage-review.md` or `phase-level-pass.md`; a clean first pass records `2` |
 | `overall` | `"REVIEW_PASS"` \| `"REVIEW_FAIL"` \| `"REVIEW_BLOCKED"` |
 | `reviewed_sha` | `done_sha` on first cycle; max-by-commit-time of `done_sha` and all owned correction SHAs on re-review |
 

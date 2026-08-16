@@ -1611,6 +1611,40 @@ test("log update refuses a marker-less log.json without writing a byte", () => {
 	assert.deepEqual(readFileSync(logPath), before);
 });
 
+test("log update refuses malformed and older pipeline markers without writing a byte", () => {
+	for (const pipeline of ["abc", "3", 3.5, 2]) {
+		const dir = tmp();
+		writePlan(dir, NINE_TASK_PLAN);
+		run(["structure", path.join(dir, "execution-plan.md")]);
+		run(["log", "init", dir]);
+
+		const logPath = path.join(dir, "log.json");
+		const log = JSON.parse(readFileSync(logPath, "utf8"));
+		log.header.pipeline = pipeline;
+		writeFileSync(logPath, JSON.stringify(log, null, 2) + "\n");
+		const before = readFileSync(logPath);
+
+		const res = run(
+			[
+				"log",
+				"update",
+				dir,
+				"execution-plan-phase-1.md",
+				"DONE",
+				"--task",
+				"T1",
+				"--json",
+			],
+			{ expectFail: true },
+		);
+		assert.notEqual(res.code, 0, `pipeline=${JSON.stringify(pipeline)}`);
+		assert.notEqual(res.stdout.trim(), "", `pipeline=${JSON.stringify(pipeline)} must return a JSON refusal`);
+		const env = JSON.parse(res.stdout.trim());
+		assert.equal(env.error.code, "PIPELINE_TOO_OLD", `pipeline=${JSON.stringify(pipeline)}`);
+		assert.deepEqual(readFileSync(logPath), before, `pipeline=${JSON.stringify(pipeline)}`);
+	}
+});
+
 test("log init refuses an existing marker-less log.json and stamps nothing", () => {
 	const dir = tmp();
 	const logPath = initMarkerlessPlan(dir);

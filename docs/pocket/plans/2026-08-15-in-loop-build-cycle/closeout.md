@@ -6,6 +6,8 @@
 - **Baseline SHA:** 92c52f0670d94b4004db701df65641a4e480e1a0  ·  **Final SHA:** c4dee283e02c504bf00c4fb2e5dbc3538130a355
 - **Result:** CLOSED — all phases DONE, all reviewable tasks REVIEW_PASS
 
+> Audit note: Phase 1–2 verdict and phase-pass artifacts remain local-only under the gitignored `docs/pocket/` tree; their committed evidence is limited to `log.json`, phase summary comments, and this closeout. Phase 3–4 artifacts were force-added and are auditable from the repository.
+
 ## Phases
 
 ### Phase 1 — execution-plan-phase-1.md  (DONE)

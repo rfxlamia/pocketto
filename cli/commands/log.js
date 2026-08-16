@@ -162,7 +162,7 @@ function warnDuplicateDoneShas(human, duplicateDoneShas) {
   if (!duplicateDoneShas) return;
   for (const [file, groups] of Object.entries(duplicateDoneShas)) {
     for (const [sha, ids] of Object.entries(groups)) {
-      human.push(`⚠ ${file}: done_sha ${sha} is shared by ${ids.join(', ')} — pocket-review will skip the 2nd+ task.`);
+      human.push(`⚠ ${file}: done_sha ${sha} is shared by ${ids.join(', ')} — the phase-level pass will skip the 2nd+ task.`);
     }
   }
   human.push(
@@ -314,7 +314,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
                 `Nothing was written to log.json.`,
                 ``,
                 `Cause: a parallel group was merged in a batch and logged afterwards, so this update`,
-                `captured the same HEAD (the final merge commit) as a sibling task. pocket-review diffs`,
+                `captured the same HEAD (the final merge commit) as a sibling task. The phase-level pass diffs`,
                 `each task as <prev_sha>..<done_sha>, so a duplicate done_sha silently empties the 2nd+`,
                 `task's review range and the task goes unreviewed.`,
                 ``,
@@ -323,7 +323,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
                 `  2. pocketto-pi log update ${planDir} ${phaseFile} DONE --task ${task.id} --sha <merge_sha>`,
                 ``,
                 `If ${task.id} legitimately produced no new commit (no-change task), re-run with`,
-                `--allow-duplicate-sha — pocket-review will emit a skip stub for it.`,
+                `--allow-duplicate-sha — pocket-development will preserve its empty-diff skip stub.`,
               ].join('\n'),
             },
           );
@@ -338,8 +338,8 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     if (shaCollision) {
       human.push(
         `⚠ done_sha ${task.done_sha} is already recorded for ${shaCollision.join(', ')} in this phase.`,
-        `  Recorded anyway because --allow-duplicate-sha was passed — pocket-review will emit`,
-        `  a skip stub for ${task.id}'s empty diff range instead of reviewing it.`,
+        `  Recorded anyway because --allow-duplicate-sha was passed — pocket-development will preserve`,
+        `  the skip stub for ${task.id}'s empty diff range instead of dispatching an auditor.`,
       );
     }
     data = {
@@ -503,7 +503,7 @@ function recordCorrection(positionals, sha, forTask) {
   if (bleedTasks.length) {
     human.push(
       `⚠ this correction also touches files owned by ${bleedTasks.join(', ')} (cross-task bleed).`,
-      `  Those tasks will be re-reviewed by pocket-review. See design: full attribution.`,
+      `  The phase-level pass will refresh verdicts for those tasks. See design: full attribution.`,
     );
   }
   return {

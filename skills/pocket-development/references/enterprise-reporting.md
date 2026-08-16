@@ -141,7 +141,7 @@ If that returns a non-null `data.value`, use it as the prior fingerprints (a pla
 
 ### E5b. Compute new fingerprints
 
-For each REVIEW_FAIL or REVIEW_BLOCKED task, read `reviews/<task_id>-review.json`. Extract findings (issues, concerns). Compute a fingerprint for each finding using the **shared identity algorithm**:
+For each REVIEW_FAIL or REVIEW_BLOCKED task, read `reviews/<task_id>-review.json`. Extract `stage_1.issues[]` and `stage_2.issues[]`; `concerns_addressed[]` is context, not a finding. Derive the fingerprint inputs deterministically from the existing artifact fields, then compute each fingerprint using the **shared identity algorithm**:
 
 ```bash
 printf '%s\0%s\0%s\0%s' "<file>" "<ruleId>" "<normalized_message>" "<occurrence>" \
@@ -149,10 +149,12 @@ printf '%s\0%s\0%s\0%s' "<file>" "<ruleId>" "<normalized_message>" "<occurrence>
 ```
 
 Where:
-- `file` — source file path relative to repo root.
-- `ruleId` — rule or check identifier (e.g. `"spec-compliance"`, `"missing-error-handling"`).
-- `message` — finding message, normalized: split on `\r?\n`, join with `\n`, trim whitespace.
-- `occurrence` — disambiguator for multiple findings on the same file/rule (line number or index).
+- `file` — the repo-relative file portion of `location` (remove its trailing `:<line>` or `:<start>-<end>`); use `""` when `location` is absent.
+- `ruleId` — `stage-1:<type>` for `stage_1.issues[]` (use `issue` when `type` is absent), or `stage-2:<lowercase-severity>` for `stage_2.issues[]`.
+- `message` — the issue's `description`, normalized: split on `\r?\n`, join with `\n`, trim whitespace.
+- `occurrence` — the issue's zero-based index within its source `stage_1.issues[]` or `stage_2.issues[]` array.
+
+These derivations are mandatory; do not invent a rule identifier or choose a line/index ad hoc at posting time. The same verdict artifact therefore produces the same fingerprints after a resume or re-run.
 
 This matches the CLI's `cli/lib/identity.js` `fingerprint()` exactly — same fields, same `\x00` separator, same sha256 → first 16 hex chars.
 
