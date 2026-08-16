@@ -1,5 +1,7 @@
 # Subagent Dispatch Template — Reviewer
 
+> **Superseded:** pocket-review is deprecated as of 3.0.0. This dispatch template is superseded by the auditor dispatch defined in `skills/pocket-development/references/two-stage-review.md`. This file is retained but no longer cited by the active pipeline.
+
 Exact prompt structure for each reviewer subagent dispatched by pocket-review.
 Replace ALL `<PLACEHOLDER>` values before dispatching.
 
