@@ -19,6 +19,11 @@
       "review": {
         "fingerprints": []
       }
+    },
+    "phase-3": {
+      "review": {
+        "fingerprints": []
+      }
     }
   },
   "external_tracker": null
