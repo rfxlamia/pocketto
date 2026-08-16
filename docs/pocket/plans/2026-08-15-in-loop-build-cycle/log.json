@@ -89,7 +89,7 @@
     {
       "order": 3,
       "file": "execution-plan-phase-3.md",
-      "status": "WAITING",
+      "status": "REVIEW",
       "tasks": [
         {
           "id": "T9",
@@ -108,8 +108,9 @@
         {
           "id": "T11",
           "name": "Deprecate the pocket-review and pocket-correction skills",
-          "status": "WAITING",
-          "depends": "T9"
+          "status": "DONE",
+          "depends": "T9",
+          "done_sha": "cbf4802670feaad52285326a88b1d04a5083cb00"
         },
         {
           "id": "T15",
