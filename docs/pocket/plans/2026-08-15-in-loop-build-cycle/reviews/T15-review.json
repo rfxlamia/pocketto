@@ -2,28 +2,49 @@
   "task_id": "T15",
   "task_name": "pocket-structuring SKILL.md — wait for pocket-closing before advancing phases",
   "cycle": 1,
-  "timestamp": "2026-08-16T13:35:00Z",
+  "timestamp": "2026-08-16T13:46:29Z",
   "reviewer_mode": "read-only",
-  "reviewer_config": "main-agent-direct",
+  "reviewer_config": "batch-parallel",
   "stage_1": {
     "status": "PASS",
     "issues": [],
-    "concerns_addressed": []
+    "concerns_addressed": [
+      "DELIVERABLE 1 verified: Step 3 items 2-4 make the orchestrator wait for phase status REVIEW, halt, and tell the user to run pocket-closing themselves (skills/pocket-structuring/SKILL.md:111-114)",
+      "DELIVERABLE 2 verified: Phase Completion Gate gained an explicit 'Phase status is DONE (set only by user-triggered pocket-closing — a status of REVIEW does not satisfy this)' condition (skills/pocket-structuring/SKILL.md:127)",
+      "DELIVERABLE 3 verified: full-file grep for 'pocket-closing' returns only lines 112, 118, 127 (wait/gate semantics) and the prohibition at line 122 — nowhere is pocket-structuring instructed to invoke it",
+      "DELIVERABLE 4 (must-not) verified: git diff --stat over 8a50938..0fcbe75 shows exactly 1 file changed (skills/pocket-structuring/SKILL.md), 12 insertions / 6 deletions",
+      "Commit message matches the required prefix: 'fix(pocket-structuring): wait for pocket-closing before advancing phases'",
+      "Packet Step 4 grep check reproduced: REVIEW / pocket-closing matches land inside both Step 3 and the Phase Completion Gate section, not incidental mentions elsewhere",
+      "Cross-skill consistency verified against T9's wording: skills/pocket-development/SKILL.md:624 ('never advances a phase beyond REVIEW') and :665 (emits '/pocketto:pocket-closing <plan_dir>/<phase_file>' as user-triggered next step) — the new text mirrors that handoff form and the architecture rule that pocket-closing solely owns REVIEW → DONE",
+      "No extra work: the change is confined to the two named sections plus the one mandated [CRITICAL] line; no new mechanisms, statuses, or CLI calls invented"
+    ]
   },
   "stage_2": {
     "status": "PASS",
     "strengths": [
-      "Step 3 rewritten to wait for REVIEW, halt, and instruct the user to run pocket-closing rather than advancing automatically",
-      "Phase Completion Gate extended additively (existing task/test/commit/BLOCKED conditions preserved)",
-      "Explicit [CRITICAL] line stating pocket-structuring must never invoke pocket-closing itself",
-      "Diff scoped to exactly skills/pocket-structuring/SKILL.md, no other file touched"
+      "Must-have 'Step 3 and Phase Completion Gate both updated consistently' satisfied — both sections now express the same rule in the same vocabulary (REVIEW is a checkpoint, DONE is the only advance signal, set by user-triggered pocket-closing)",
+      "Must-have 'explicit statement that pocket-structuring never calls pocket-closing itself' satisfied verbatim at skills/pocket-structuring/SKILL.md:122, using the file's existing [CRITICAL] marker convention rather than inventing a new emphasis style",
+      "Change is strictly additive to the gate: all four pre-existing conditions (every task DONE, all tests pass, commits with correct format, no BLOCKED/NEEDS_CONTEXT) are preserved untouched at lines 128-131, and 'NEVER hand all phase files simultaneously' survives at line 120 — no weakening",
+      "The original 'NEVER start Phase N+1 until Phase N gate is confirmed DONE' line was strengthened rather than replaced (line 118 adds 'set by user-triggered pocket-closing, not merely all tasks DONE'), plus a new NEVER line closing the exact REVIEW-is-good-enough misread T10 found",
+      "Terminology and command form match the upstream skill exactly ('/pocketto:pocket-closing <plan_dir>/...'), so an orchestrator reading pocket-development's PHASE_COMPLETE report and pocket-structuring's loop sees one coherent instruction",
+      "[no-tdd — structural task] correctly applies: documentation-only change with no runtime surface, verified by grep per the packet instead of tests; no test scaffolding was invented"
     ],
-    "issues": [],
+    "issues": [
+      {
+        "severity": "Minor",
+        "description": "Step 3 never states HOW the orchestrator observes phase status (read pocket-development's PHASE_COMPLETE report vs. read log.json vs. run `pocketto-pi log`). The prior text at least named an observable event ('wait for explicit DONE confirmation'); the new text is status-based but leaves the observation channel implicit. Non-blocking — pocket-development's report prints 'Phase status: REVIEW' and pocket-closing reports the close, so the signal exists — but naming it would remove the last bit of ambiguity.",
+        "location": "skills/pocket-structuring/SKILL.md:111-114"
+      },
+      {
+        "severity": "Minor",
+        "description": "The wait condition is expressed only as 'wait for the phase status to reach REVIEW', with no stated exit for the PHASE_BLOCKED branch (pocket-development sets the phase to BLOCKED and explicitly must NOT reach REVIEW when the phase-level pass exceeds its round cap). Not a correctness defect: the Phase Completion Gate still requires status DONE, so a blocked phase can never advance. Outside this task's DELIVERABLE, so noted as an observation only.",
+        "location": "skills/pocket-structuring/SKILL.md:111"
+      }
+    ],
     "assessment": "Approved"
   },
   "overall": "REVIEW_PASS",
   "fix_instructions": "",
-  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 1 },
-  "reviewed_sha": "0fcbe755ab04695c9dfd5d2863cf0b4e983ad711",
-  "audit_note": "Task added mid-execution (not in the original plan numbering) after T10's comprehension review surfaced the gap it fixes. Verified by main agent directly (commit exists, grep confirms REVIEW/pocket-closing language in both the rewritten Step 3 and Phase Completion Gate, diff scoped to one file). Written retroactively as part of Phase 3's phase-level pass / enterprise-reporting prerequisites."
+  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 2 },
+  "reviewed_sha": "0fcbe755ab04695c9dfd5d2863cf0b4e983ad711"
 }

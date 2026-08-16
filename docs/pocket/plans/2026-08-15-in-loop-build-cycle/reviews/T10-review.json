@@ -2,28 +2,60 @@
   "task_id": "T10",
   "task_name": "Comprehension review — Phase B",
   "cycle": 1,
-  "timestamp": "2026-08-16T13:35:00Z",
+  "timestamp": "2026-08-16T13:46:46Z",
   "reviewer_mode": "read-only",
-  "reviewer_config": "main-agent-direct",
+  "reviewer_config": "batch-parallel",
   "stage_1": {
     "status": "PASS",
     "issues": [],
-    "concerns_addressed": []
+    "concerns_addressed": [
+      "Packet step 1 (zero-context dispatch): the prompt recorded at comprehension-phase-b.md:8 is byte-identical to the prompt prescribed in execution-plan-phase-3.md:139 — no spec path, no plan path, no design intent, no leading hints appended. Red flag 'Reviewer given the spec or this plan' does not trigger.",
+      "Packet step 2 (answer verbatim + verdict): lines 14-63 carry the reader's raw answer under an explicit 'verbatim, unedited' header, separated by a horizontal rule from the T10-authored verdict at lines 67-90. Session-specific vocabulary (T7-T9, 'this plan's new design') appears only in the verdict half, never inside the answer half — corroborating that the reader was not fed session context.",
+      "Packet step 3 (classify each inconsistency): all three reported inconsistencies are individually classified (1 non-blocking, 2 blocking-CONFIRMED, 3 non-blocking) at lines 73-78.",
+      "Packet step 4 (report BLOCKED, do not fix): reported at lines 82-90. Verified the fix was NOT made in this task — `git diff 79f383e..8a50938` touches exactly one file (the review record); `git show 8a50938:skills/pocket-structuring/SKILL.md` still contains the unfixed gate.",
+      "DELIVERABLE 'correctly describes the post-task phase pass, correction recording, and the no-PR enterprise path': independently spot-checked the answer against source. SKILL.md:736 confirms the fixed ordering (pass → record → REVIEW → enterprise reporting); SKILL.md:665 confirms the handoff naming pocket-closing; the correction/fan-out and E1 offer-don't-auto-create descriptions match phase-level-pass.md and enterprise-reporting.md. No fabrication found.",
+      "DELIVERABLE 'none are blocking' is the one criterion not met — by design, since packet step 4 prescribes BLOCKED as the correct outcome when a blocking inconsistency exists. T10 took the prescribed branch rather than suppressing the finding to force a green DELIVERABLE.",
+      "Commit message `chore(pocket): record Phase B comprehension review` matches the packet's required literal and the `chore(pocket): ...` format check."
+    ]
   },
   "stage_2": {
     "status": "PASS",
     "strengths": [
-      "Reader subagent dispatched with zero session context, per SANDWICH CONTEXT constraint",
-      "Correctly reconstructed phase-completion ordering, correction fan-out, and enterprise no-PR offer/decline path from the cited artifacts alone",
-      "On its own initiative, cross-checked a claim in phase-level-pass.md against pocket-structuring/SKILL.md and surfaced a real, verified cross-skill contradiction (pocket-structuring's gate had no awareness of REVIEW status) — exactly what a comprehension review is for",
-      "Correctly reported BLOCKED rather than silently fixing the contradiction itself"
+      "The blocking finding is independently verifiable and true at the reviewed SHA: `git show 8a50938:skills/pocket-structuring/SKILL.md` lines 108-125 read 'wait for explicit DONE confirmation' with a Phase Completion Gate listing only task-DONE/tests/commits/no-BLOCKED — zero mention of REVIEW, the phase-level pass, or pocket-closing. The cited line range 108-125 is exact.",
+      "The finding was materially load-bearing: a later out-of-range commit 0fcbe75 'fix(pocket-structuring): wait for pocket-closing before advancing phases' rewrote precisely those lines. T10's escalation caught a real cross-skill contradiction that no other task in the plan would have caught.",
+      "Ownership claim at line 76 is verified, not asserted: the execution plan at 8a50938 contains exactly 14 `### Task` headings and zero references to `skills/pocket-structuring/SKILL.md`; the spec's only hit is the CLI-pinning footnote at in-loop-build-cycle.md:583, exactly as described.",
+      "Strict separation of evidence from interpretation — reader answer and T10 verdict are in distinct, labelled sections divided by a rule, so the zero-context test remains auditable after the fact.",
+      "Severity discipline: two findings were downgraded to non-blocking with stated reasons rather than inflated, and finding 3 (DONE_WITH_CONCERNS) was cross-checked against SKILL.md:700 ('Task status: WAITING → DONE | BLOCKED') before being called wording-only — a correct call.",
+      "Genuine zero-context signal: the reader volunteered a cross-file check of pocket-structuring that the prompt never asked for, which is exactly the behavior a coached prompt would have short-circuited.",
+      "Structure mirrors the T6 precedent at reviews/comprehension-phase-a.md heading-for-heading, so the two comprehension records are directly comparable.",
+      "The BLOCKED report is actionable: it names what is blocked, why, and a concrete unblock path scoped as a plan-scope decision for the user rather than a unilateral edit."
     ],
-    "issues": [],
+    "issues": [
+      {
+        "severity": "Minor",
+        "description": "Mis-cited criterion section: the BLOCKED rationale attributes `this task must NOT fix it` to the packet's QUALITY BAR Must-not-have, but that clause is a `[must-not]` line in the DELIVERABLE section (execution-plan-phase-3.md:182). The constraint is real and correctly obeyed; only the section label is wrong.",
+        "location": "docs/pocket/plans/2026-08-15-in-loop-build-cycle/reviews/comprehension-phase-b.md:88"
+      },
+      {
+        "severity": "Minor",
+        "description": "Packet step 4 asks the BLOCKED report to name 'the contradiction and the owning task'. The record names the contradiction and then correctly establishes that no owning task exists, which is a defensible superset of the requirement, but it never states that the 'owning task' field is deliberately unfillable — a reader reconciling the record against the packet has to infer it.",
+        "location": "docs/pocket/plans/2026-08-15-in-loop-build-cycle/reviews/comprehension-phase-b.md:76"
+      },
+      {
+        "severity": "Minor",
+        "description": "The verbatim answer is pasted with `##` headings at the same level as the record's own `##` sections, so 'What I read', 'Inconsistencies that would confuse me' and 'Verdict' render as siblings and the end of the quoted block is signalled only by a horizontal rule. Blockquoting or demoting to `###` would make provenance unambiguous. Non-actionable as a defect since it reproduces the existing T6 convention.",
+        "location": "docs/pocket/plans/2026-08-15-in-loop-build-cycle/reviews/comprehension-phase-b.md:14-63"
+      },
+      {
+        "severity": "Minor",
+        "description": "QUALITY BAR must-have `[no-tdd — verification task]` is satisfied by the packet itself (execution-plan-phase-3.md:149) but the literal marker is not restated anywhere in the produced artifact, so the record alone does not evidence that must-have.",
+        "location": "docs/pocket/plans/2026-08-15-in-loop-build-cycle/reviews/comprehension-phase-b.md:1-10"
+      }
+    ],
     "assessment": "Approved"
   },
   "overall": "REVIEW_PASS",
   "fix_instructions": "",
-  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 1 },
-  "reviewed_sha": "8a50938ca67653ba320b12507cb72e602f1b8c5e",
-  "audit_note": "Verified by main agent directly. Task's own DELIVERABLE required 'none blocking' but the reviewer correctly found one real blocking inconsistency and reported BLOCKED as designed — the task performed exactly as specified. The root cause was resolved by a newly added task, T15, and the task's log status was subsequently overridden from BLOCKED to DONE once T15 closed the gap. This verdict is REVIEW_PASS because it evaluates whether T10 did its job correctly (it did), not whether zero inconsistencies existed. Written retroactively as part of Phase 3's phase-level pass / enterprise-reporting prerequisites."
+  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 2 },
+  "reviewed_sha": "8a50938ca67653ba320b12507cb72e602f1b8c5e"
 }

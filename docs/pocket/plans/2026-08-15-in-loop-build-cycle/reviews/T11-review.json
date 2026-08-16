@@ -2,28 +2,58 @@
   "task_id": "T11",
   "task_name": "Deprecate the pocket-review and pocket-correction skills",
   "cycle": 1,
-  "timestamp": "2026-08-16T13:35:00Z",
+  "timestamp": "2026-08-16T13:47:43Z",
   "reviewer_mode": "read-only",
-  "reviewer_config": "main-agent-direct",
+  "reviewer_config": "batch-parallel",
   "stage_1": {
     "status": "PASS",
     "issues": [],
-    "concerns_addressed": []
+    "concerns_addressed": [
+      "Verified DELIVERABLE 1: frontmatter `description` in both skills states deprecation as of 3.0.0 and names the replacement (skills/pocket-review/SKILL.md:3, skills/pocket-correction/SKILL.md:3); frontmatter carries exactly `name` + `description` per CLAUDE.md",
+      "Verified DELIVERABLE 2: both bodies name where behavior now lives — pocket-review cites two-stage-review.md, phase-level-pass.md and enterprise-reporting.md (skills/pocket-review/SKILL.md:11-13); pocket-correction cites two-stage-review.md and phase-level-pass.md (skills/pocket-correction/SKILL.md:11-12). Omission of enterprise-reporting.md in pocket-correction is accurate, not a gap — enterprise PR reporting was pocket-review's 'Enterprise mode', never pocket-correction's behavior",
+      "Verified DELIVERABLE 2 (retention): both bodies carry a 'What's retained, unchanged' section explicitly naming `log update --correction --for-task`, `phase.corrections`, and `for_task`/bleed attribution as untouched and now invoked from pocket-development (skills/pocket-review/SKILL.md:17-23, skills/pocket-correction/SKILL.md:16-22)",
+      "Verified DELIVERABLE 3: `git ls-tree -r cbf4802 skills/pocket-review/` lists all four reference files, byte-identical set to 0fcbe75 — no deletions",
+      "Verified DELIVERABLE 4a: review-report-template.md carries the deprecation/producer note at line 3; all remaining producer-naming prose was reassigned to pocket-development's in-loop auditor (lines 286, 310, 318, 337, 340, 349). A grep for `pocket-review` in the file now returns only the header note itself — no stale 'pocket-review is the live writer' prose remains",
+      "Verified DELIVERABLE 4b: subagent-dispatch-template.md:3 carries a one-line superseded-by note pointing at `skills/pocket-development/references/two-stage-review.md`; the file is retained. Confirmed by grep that no file under skills/pocket-development/ cites subagent-dispatch-template.md, so the 'no longer cited by the active pipeline' claim is factually true",
+      "Verified [must-not] no `cli/` path in the diff: `git show --name-only cbf4802` lists exactly the four in-scope files",
+      "Verified [must-not] no field name/type/nesting change in review-report-template.md: extracted and sorted every JSON key from both revisions (50 distinct keys) — diff is empty, schemas identical. The only table-row edit changed the value column of the `cycle` row (pointer retarget), not the field name",
+      "Verified Step 5 checks reproduce green: `grep -il deprecated` lists both SKILL.md files; the node field-presence probe for task_id/overall/reviewed_sha/fix_instructions/loop_info/severity/strengths exits 0",
+      "Verified commit exists matching `feat(skills)!: ...` — cbf4802 subject is `feat(skills)!: deprecate pocket-review and pocket-correction`",
+      "Cross-checked every forward reference the new bodies make actually resolves at cbf4802: two-stage-review.md, phase-level-pass.md and enterprise-reporting.md all exist under skills/pocket-development/references/, and their content matches the behavior each pointer claims",
+      "Verified the claim 'still cited by the new contracts': two-stage-review.md:59 and :61 cite spec-compliance-review.md and code-quality-review.md, and :175 makes review-report-template.md normative",
+      "No extra work: the diff is prose + frontmatter only, strictly within the four packet-declared files. The '3.0.0' version reference is forward-looking by design — the package bump to 3.0.0 is T13's job, so 2.4.4 in package.json at this SHA is expected, not a defect"
+    ]
   },
   "stage_2": {
     "status": "PASS",
     "strengths": [
-      "grep -il deprecated lists both SKILL.md files",
-      "All four reference files under skills/pocket-review/references/ still present, none deleted",
-      "node field-presence check on review-report-template.md exits 0 — no schema field renamed",
-      "Diff scoped to exactly the four listed files, nothing under cli/"
+      "Must-have satisfied: `[no-tdd — structural task]` honored — no test files touched, no speculative test scaffolding added",
+      "Must-have satisfied: the routing signal itself was changed, not just the body. Both descriptions lead with 'DEPRECATED as of 3.0.0', name the replacement, and contain an explicit negative directive — this is what actually stops host selection",
+      "Must-have satisfied: CLI retention is stated explicitly and concretely in both files, enumerating the three machinery surfaces by name",
+      "Must-have satisfied: conventional-commit `!` breaking marker present, and the commit body documents what replaced the skills, that the CLI machinery is retained, and that no reference file was deleted",
+      "Must-not-have all clean: zero deletions (four reference files present before and after), zero schema drift (50/50 JSON keys identical), zero cli/ paths, zero out-of-scope files",
+      "Red flags clear: no reference file deleted, no schema field renamed",
+      "Deprecation notices are deliberately minimal — 605 and 284 lines removed and replaced with short pointer documents. No orphaned half-live instructions left behind",
+      "The two reference-file notes are calibrated correctly to their different fates: review-report-template.md marked 'remains the normative schema, producer changed', subagent-dispatch-template.md marked 'superseded, retained but no longer cited'. Both independently verified true",
+      "Both SKILL.md bodies end with a concrete migration instruction, giving a reader an action rather than a dead end",
+      "Consistent structure across the two deprecation notices"
     ],
-    "issues": [],
+    "issues": [
+      {
+        "severity": "Minor",
+        "description": "The legacy packaged bundle skills/pocket-review/pocket-review.skill (a zip artifact tracked in git) still embeds the pre-deprecation SKILL.md. Explicitly NOT a T11 defect — the packet's must-not-have forbids modifications outside the listed scope, so leaving it untouched was correct. Belongs to T12 or T13. Non-blocking.",
+        "location": "skills/pocket-review/pocket-review.skill:1"
+      },
+      {
+        "severity": "Minor",
+        "description": "subagent-dispatch-template.md line 5 still reads 'dispatched by pocket-review' directly under the new superseded note, and lines 95/106 still describe a pocket-review skill_dir. Compliant as written (packet asked for exactly a one-line note plus retention); flagged only as a readability nit. Non-blocking.",
+        "location": "skills/pocket-review/references/subagent-dispatch-template.md:5"
+      }
+    ],
     "assessment": "Approved"
   },
   "overall": "REVIEW_PASS",
   "fix_instructions": "",
-  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 1 },
-  "reviewed_sha": "cbf4802670feaad52285326a88b1d04a5083cb00",
-  "audit_note": "Verified by main agent directly (git show --stat, grep, ls, node field check all re-run and confirmed). The phase-level pass separately found that three OTHER live files (pocket-closing/SKILL.md, pocket-closing/references/verdict-reconciliation.md, pocket-help/SKILL.md + references, create-pr/SKILL.md) still reference pocket-review/pocket-correction as live stages — those are explicitly out of T11's own file scope and are deferred to T12 (see reviews/phase-pass-phase-3.json), not a defect in T11 itself. Written retroactively as part of Phase 3's phase-level pass / enterprise-reporting prerequisites."
+  "loop_info": { "current_cycle": 1, "max_cycles": 2, "cycles_remaining": 2 },
+  "reviewed_sha": "cbf4802670feaad52285326a88b1d04a5083cb00"
 }
