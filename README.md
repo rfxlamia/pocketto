@@ -213,6 +213,19 @@ Status flow: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
 
 Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contract, data, error }` — that skills parse instead of scraping text. Add `--contract <N>` for a version handshake that fails loudly on mismatch rather than emitting output an older skill can't read.
 
+## Migrating to 3.0.0
+
+Pocketto 3.0.0 introduces the in-loop build cycle: `pocket-development` now runs an audit per task and a phase-level pass before handoff, and — as part of that — **plans started under an older pipeline are refused, not repaired**. `log.json` gains a pipeline-version marker; a log without one (or with a lower one) makes any state-changing CLI command exit non-zero rather than silently continuing on stale assumptions.
+
+**Before updating, close any in-flight plan.** A plan that has an open `log.json` from before 3.0.0 will be refused by the new CLI the next time a state-changing command runs against it — the refusal writes nothing, so nothing is lost, but the plan is stuck until you act.
+
+If you're already updated and stuck mid-plan, recover by pinning:
+
+- **CLI:** run the plan out with `npx -y pocketto-pi@2.4.4 …` instead of an unpinned `npx -y pocketto-pi …` until the plan closes.
+- **Plugin (Claude Code):** the marketplace entry installs via `source: url` with no version field, so it always tracks the latest commit — there is no version to roll back to. Do not run `/plugin update` (or reinstall) until the in-flight plan closes; simply leave the currently installed plugin in place.
+
+Once the plan is closed under the pinned CLI, drop the pin and update normally — new plans initialize with the current pipeline marker and are unaffected.
+
 ## License
 
 [MIT](LICENSE) © [rfxlamia](https://github.com/rfxlamia)
