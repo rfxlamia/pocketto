@@ -68,16 +68,16 @@ pocket-development receives two distinct input formats. Identify which type befo
 
 ## Main Agent Role (HARDENED)
 
-Main agent = **Delegator + Auditor only**. This is non-negotiable.
+Main agent = **Delegator + Auditor only**. This is non-negotiable. Auditor here means: run the mechanical gate and dispatch the read-only auditor subagent — never judge code. Cite `references/two-stage-review.md`.
 
 | Main agent MUST | Main agent MUST NOT |
 |-----------------|---------------------|
 | Initialize and update pocket log | Write, edit, or create implementation code |
-| Construct Pocket Packets and dispatch subagents | Invoke `pocket-review` during execution (it's user-triggered post-phase) |
-| Run quick audit after each implementer DONE | Do full two-stage review during development |
-| Emit PHASE_COMPLETE handoff with pocket-review command | Take over a task because "it's faster to do it myself" |
+| Construct Pocket Packets and dispatch subagents | Invoke `pocket-review` as the per-task reviewer — dispatch the in-loop auditor instead |
+| Run the mechanical gate, then dispatch the read-only auditor | Judge code quality or spec compliance itself |
+| Emit PHASE_COMPLETE handoff | Take over a task because "it's faster to do it myself" |
 
-**Full two-stage review (`pocket-review`) is user-triggered after ALL tasks are DONE — pocket-development does NOT invoke it. Per-task review during execution is a quick audit only (see [Review](#review) section).**
+**Per-task review is the in-loop cycle (see [Review](#review)): mechanical gate, then a read-only auditor subagent. The main agent never judges code — every criterion is executed by that auditor. Cite `references/two-stage-review.md`.**
 
 ---
 
@@ -178,6 +178,9 @@ Before constructing any Pocket Packet, you MUST load the relevant reference file
 | Entry gate fails | `references/entry-gate.md`, `references/iron-laws.md` |
 | Plan has `[parallel: TX]` annotations | `references/entry-gate.md` (classification rules) |
 | Status is BLOCKED/NEEDS_CONTEXT | `references/status-handling.md` |
+| Per-task in-loop audit (after implementer DONE) | `references/two-stage-review.md` |
+| Phase completion — all tasks in phase DONE | `references/phase-level-pass.md` |
+| Enterprise reporting at phase completion (after the phase is `REVIEW`) | `references/enterprise-reporting.md` |
 
 ### Citation Requirement
 
@@ -293,7 +296,7 @@ Escalate when: Auth logic intertwined with user data access
 | Task | Workflow | Access |
 |------|----------|--------|
 | **Implementation** | Delegate to implementer | Read + Write |
-| **Review** | `pocket-review` skill | Read-only |
+| **Review** | In-loop auditor subagent (`references/two-stage-review.md`) | Read-only |
 
 ### Complexity Assessment
 
@@ -331,19 +334,28 @@ digraph pocket_process {
 
     "Wait for status" -> { "DONE" "NEEDS_CONTEXT" "BLOCKED" "DONE_WITH_CONCERNS" };
 
-    "DONE" -> "Quick audit (git log + tests + DELIVERABLE check)";
-    "Quick audit (git log + tests + DELIVERABLE check)" -> { "Audit pass" "Audit fail" };
-    "Audit pass" -> "Mark task DONE in log";
-    "Audit fail" -> "Re-dispatch implementer with failure reason";
+    "DONE" -> "Mechanical gate";
+    "Mechanical gate" -> { "Gate pass" "Gate fail" };
+    "Gate fail" -> "Re-dispatch implementer with failure reason";
     "Re-dispatch implementer with failure reason" -> "Wait for status";
+    "Gate pass" -> "Dispatch read-only auditor";
+    "Dispatch read-only auditor" -> { "Audit pass" "Fix/refactor round" "audit-failed" "auditor-unavailable" };
+    "Fix/refactor round" -> "Re-dispatch implementer with failure reason";
+    "Audit pass" -> "Mark task DONE in log (--sha audited_head)";
+    "audit-failed" -> "Mark task BLOCKED";
+    "auditor-unavailable" -> "Mark task BLOCKED";
 
     "NEEDS_CONTEXT" -> "Provide context -> Re-dispatch (no work)";
     "BLOCKED" -> "Categorize blocker -> Fix -> Re-dispatch";
-    "DONE_WITH_CONCERNS" -> "Assess concerns -> Correctness risk? -> Address first or proceed to quick audit";
+    "DONE_WITH_CONCERNS" -> "Assess concerns -> Correctness risk? -> Address first or proceed to mechanical gate";
 
-    "Mark task DONE in log" -> "More tasks?";
+    "Mark task DONE in log (--sha audited_head)" -> "More tasks?";
     "More tasks?" -> "Extract task N+1" [label="yes"];
-    "More tasks?" -> "Emit PHASE_COMPLETE handoff" [label="no"];
+    "More tasks?" -> "Dispatch phase-level pass" [label="no"];
+    "Dispatch phase-level pass" -> "Record pass result";
+    "Record pass result" -> { "Pass clean or resolved" "Round cap exceeded" };
+    "Pass clean or resolved" -> "Emit PHASE_COMPLETE handoff";
+    "Round cap exceeded" -> "PHASE_BLOCKED report";
     "Emit PHASE_COMPLETE handoff" -> "Phase file?";
     "Phase file?" -> "Evaluate Phase Completion Gate" [label="yes (Type B)"];
     "Phase file?" -> "Done" [label="no (Type A)"];
@@ -404,7 +416,9 @@ Dispatch ALL tasks in the group in ONE batch — single message containing N par
 
 ### Per-Worktree Quick Audit (main agent)
 
-When a subagent reports DONE, audit runs against ITS worktree:
+When a subagent reports DONE, run the in-loop cycle against ITS worktree. Cite `references/two-stage-review.md` for every rule — do not restate them here. The main agent never judges code; every criterion is executed by a read-only auditor subagent.
+
+1. **Mechanical gate** (main agent) — command-and-commit evidence only, inside the worktree:
 
 ```bash
 WT=.worktree/<task_id>
@@ -417,11 +431,17 @@ WT=.worktree/<task_id>
 
 # 3. Tests (if plan specifies a test command) — inside worktree
 git -C $WT <test_command>
-
-# 4. DELIVERABLE checklist verified against worktree state
 ```
 
-Audit fail → re-dispatch implementer with same WORKTREE field. Worktree RETAINED until audit passes.
+Mechanical fail → re-dispatch implementer with same WORKTREE field. Do not dispatch the auditor. Worktree RETAINED.
+
+2. **Deep audit** — dispatch a read-only auditor subagent against the worktree tip (see `references/two-stage-review.md`). The auditor writes the verdict artifact. The main agent reads labels from that artifact; it does not assess code.
+3. **Fix/refactor round** — when the artifact requires a round, re-dispatch the implementer with the same WORKTREE field, then re-run the mechanical gate, then re-dispatch the auditor.
+4. **Re-audit** — same auditor path as step 2, against the new worktree tip.
+
+On `audit-failed` or `auditor-unavailable`, halt the group — no merge (see `references/two-stage-review.md`). Worktrees RETAINED.
+
+Passing in-worktree audits proceed to Group Merge below. Do not pass `--sha` of the worktree tip.
 
 ### Group Merge (main agent, after ALL group tasks audit-pass)
 
@@ -497,7 +517,7 @@ Plan: T5, T6, T7 — parallel group after T4
 
 4. Dispatch [T5, T6, T7] in ONE message — each packet has its WORKTREE field
 
-5. All return DONE → audit each in its worktree → all pass
+5. All return DONE → mechanical gate then read-only auditor against each worktree tip → all pass
 
 6. Main agent merges sequentially, logging each task BEFORE the next merge
    (one merge + one log update per iteration — never merge all three then log):
@@ -563,56 +583,47 @@ Match prompting complexity to task complexity:
 
 Two distinct review phases. Do NOT conflate them.
 
-### Per-Task Quick Audit (during execution)
+### Per-Task In-Loop Audit (during execution)
 
-When implementer reports DONE, main agent runs a quick audit inline — no subagent, no pocket-review:
+When the implementer reports DONE, run the in-loop cycle. Cite `references/two-stage-review.md` for every rule — do not restate them here. The main agent never judges code; every criterion is executed by a read-only auditor subagent.
 
-1. Run `git log --oneline -5` — confirm a commit exists for this task
-2. Run tests if the plan specifies a test command — confirm green
-3. Check the packet's DELIVERABLE checklist — all items must be met
+1. **Mechanical gate** (main agent) — command-and-commit evidence only. On failure, re-dispatch the implementer; do not dispatch the auditor.
+2. **Deep audit** — dispatch a read-only auditor subagent. The auditor writes the verdict artifact. The main agent reads labels from that artifact; it does not assess code.
+3. **Fix/refactor round** — when the artifact requires a round, re-dispatch the implementer, then re-run the mechanical gate, then re-dispatch the auditor.
+4. **Re-audit** — same auditor path as step 2, against the new HEAD.
+5. **DONE** — after a passing audit, `log update --task TN DONE --sha <audited_head>`.
 
-**Audit pass** → mark task DONE in log, proceed to next task.
+On `audit-failed` or `auditor-unavailable`, mark the task BLOCKED (see `references/two-stage-review.md`). Do not start the next task.
 
-**Audit fail** → re-dispatch implementer with specific failure reason:
-```
-AUDIT FAILED: [what failed — missing commit / failing tests / DELIVERABLE item N not met]
-Fix this specific issue. Do not scope-creep.
-```
-Do NOT mark task DONE until audit passes.
-
-**DONE_WITH_CONCERNS:** Assess concerns first. If correctness risk → address before running quick audit. If observation only → proceed with quick audit normally (concerns go into the final pocket-review phase).
+**DONE_WITH_CONCERNS:** Assess concerns first. If correctness risk → address before the mechanical gate. If observation only → proceed with the in-loop cycle.
 
 ### End-of-Execution Handoff (after all tasks done)
 
-After ALL tasks are marked DONE in the log, emit a PHASE_COMPLETE handoff message. Do NOT invoke pocket-review directly.
+After ALL tasks are marked DONE in the log, finish the phase in this exact order — **pass → record → `REVIEW` → report**:
+
+1. **Dispatch the phase-level pass.** A read-only subagent over the whole phase: every task's `prev_sha..done_sha` diff range and packet, in plan order. The main agent computes and passes the ranges; it does not judge code. Contract: `references/phase-level-pass.md` — cite it; do not restate its rules here.
+2. **Record the pass result.** The result lands at `<plan_dir>/reviews/phase-pass-<phase_key>.json` — `PHASE_PASS_CLEAN`, or `PHASE_PASS_RESOLVED` after its fix rounds, corrections, and verdict fan-out complete, all per `references/phase-level-pass.md`. Phase status is not `REVIEW` yet.
+3. **Set phase status `REVIEW`.** Only now, and only for a pass that recorded a terminal clean/resolved result:
+   ```bash
+   npx -y pocketto-pi log update <plan_dir> <phase_file> REVIEW --json --contract 2
+   ```
+   If the pass exceeded its round cap, this command is forbidden — the phase is `PHASE_BLOCKED` instead (see [Phase Completion Protocol](#phase-completion-protocol)).
+4. **Emit the handoff message, then run enterprise reporting.** Emit the message below, then execute the E1–E6 steps exactly as specified in `references/enterprise-reporting.md` (fail-closed preflight, PR discovery including its `create-pr` offer, summary upsert, inline-findings reconcile). Cite the reference; do not restate or duplicate its steps — including its offer semantics.
 
 ```
 PHASE_COMPLETE: All tasks marked DONE.
 
-Full spec compliance + code quality review is a separate user-triggered step.
+Phase-level pass: <PHASE_PASS_CLEAN | PHASE_PASS_RESOLVED> — recorded at
+<plan_dir>/reviews/phase-pass-<phase_key>.json
+Phase status: REVIEW
 
-Run: /pocketto:pocket-review <plan_dir>/<phase_file>
-
-pocket-review dispatches parallel reviewer subagents (one per task) and writes results to:
-<plan_dir>/reviews/
+Next step (user-triggered):
+Run: /pocketto:pocket-closing <plan_dir>/<phase_file>
 ```
 
-**Pocket Enterprise — create-pr offer (Story 2, user-triggered).** Immediately after the handoff above, run:
+`pocket-closing` owns everything after `REVIEW`; this skill never advances a phase beyond `REVIEW`.
 
-```bash
-npx -y pocketto-pi mode --json --contract 2
-```
-
-- If `ok` is `false` **or** `data.enterprise` is not strictly `true` → **do nothing.** No GitHub mention, no prompt. Non-enterprise handoff stays byte-identical to today (fail-closed).
-- If `ok` is `true` and `data.enterprise` is `true` → append **one line** only:
-
-```
-Run: /pocketto:create-pr <plan_dir> [<phase_file>]
-```
-
-Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the command, user runs it when ready.
-
-**Pocket Enterprise — task checklist sync (same guard).** Still inside the `enterprise=true` branch above, after the create-pr offer, sync the live task checklist to the linked GitHub issue:
+**Pocket Enterprise — task checklist sync (same fail-closed guard).** Only when the enterprise preflight passed (step 4, `references/enterprise-reporting.md`), after enterprise reporting, sync the live task checklist to the linked GitHub issue:
 
 1. Resolve `spec_dir` = `docs/pocket/spec/<slug>/` where `<slug>` matches the plan directory basename, then read the linked issue:
    ```bash
@@ -625,7 +636,7 @@ Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the comma
    npx -y pocketto-pi format tasklist <plan_dir> --json --contract 2
    ```
    Parse `data.bodyFile` and `data.marker` (`<!-- pocket-tasklist -->`).
-4. Upsert exactly **one** marker-tagged comment on the issue (same pattern as pocket-review's summary upsert). Resolve `<owner>/<repo>` via `gh repo view --json owner,name`, then:
+4. Upsert exactly **one** marker-tagged comment on the issue (same marker-upsert pattern as E4 in `references/enterprise-reporting.md`). Resolve `<owner>/<repo>` via `gh repo view --json owner,name`, then:
    ```bash
    gh api repos/<owner>/<repo>/issues/<issue_number>/comments --paginate
    ```
@@ -643,15 +654,15 @@ Do **NOT** invoke `create-pr` — same pattern as pocket-review: offer the comma
 
 | Status | Controller Action |
 |--------|-------------------|
-| **DONE** | Quick audit (git log + tests + DELIVERABLE check) → mark task DONE if pass; re-dispatch with failure reason if fail |
-| **DONE_WITH_CONCERNS** | Assess concerns → correctness risk: address first; observation only: proceed to quick audit |
+| **DONE** | Mechanical gate, then dispatch the read-only auditor (`references/two-stage-review.md`). On pass: `log update --task TN DONE --sha <audited_head>`. On gate fail: re-dispatch implementer. |
+| **DONE_WITH_CONCERNS** | Assess concerns → correctness risk: address first; observation only: proceed to mechanical gate then auditor |
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
-| **BLOCKED** | Categorize blocker type → Fix → Re-dispatch |
-| **REVIEW_FAIL** (from pocket-review) | The phase already terminated at PHASE_COMPLETE — you are NOT mid-phase. Re-enter via `/pocketto:pocket-correction <plan_dir>/<phase_file>`: it delegates each fix to an implementer subagent (you stay Delegator + Auditor), records an append-only correction, then hands back for user-triggered re-review. Do NOT write the fix yourself; do NOT refresh done_sha. |
+| **BLOCKED** | Categorize blocker type. In-loop categories `audit-failed` and `auditor-unavailable`: persist and halt (see `references/two-stage-review.md`). Other categories: Fix → Re-dispatch |
+| **REVIEW_FAIL** (task verdict artifact) | Not a subagent return status — a verdict inside `reviews/<task_id>-review.json`. Fix it through the correction path in `references/phase-level-pass.md`: dispatch an implementer subagent for the fix (you stay Delegator + Auditor — never write the fix yourself), record it as an append-only correction, and refresh the affected tasks' verdict artifacts per its fan-out. `done_sha` NEVER moves. |
 
-`REVIEW_FAIL` is a post-phase verdict (not a subagent return status); it is handled by the standalone `pocket-correction` skill, keeping `pocket-development` one-shot.
+`REVIEW_FAIL` corrections are append-only and never touch `done_sha` (`references/phase-level-pass.md`). A fix made before a task's `done_sha` is pinned is an in-loop fix round (`references/two-stage-review.md`), not a correction.
 
-**After ALL tasks DONE:** emit PHASE_COMPLETE handoff with the `/pocketto:pocket-review <plan_dir>` command. Do NOT invoke pocket-review directly — it is user-triggered. If `pocketto-pi mode` returns `enterprise=true`, append the one-line `/pocketto:create-pr` offer (do not invoke create-pr) and sync the task checklist comment to the linked issue (`format tasklist` + marker upsert).
+**After ALL tasks DONE:** dispatch the phase-level pass, record its result, set the phase to `REVIEW`, then emit the PHASE_COMPLETE handoff naming `/pocketto:pocket-closing <plan_dir>/<phase_file>` as the user-triggered next step (see [End-of-Execution Handoff](#end-of-execution-handoff-after-all-tasks-done)). In enterprise mode, enterprise reporting (`references/enterprise-reporting.md`) and the task checklist sync run at that same point, after `REVIEW` is set.
 
 ### BLOCKED Categorization
 
@@ -703,14 +714,16 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns 
 |--------|---------|
 | Session start (no `log.json`) | `log init` — see **Startup** section above |
 | Session start (log.json exists, tasks missing) | `log init` — auto-migrates tasks into existing phases |
-| Quick audit passes for a task | `log update --task TN` → `DONE` |
+| In-loop audit passes for a task | `log update --task TN DONE --sha <audited_head>` |
 | Unresolvable BLOCKED (task) | `log update --task TN` → `BLOCKED` |
-| All tasks in phase DONE → emit PHASE_COMPLETE handoff | `log update` (phase) → `REVIEW` |
-| pocket-review passes (user runs it separately) | `log update` (phase) → `DONE` |
+| After the phase-level pass records its result (all tasks already DONE) | `log update` (phase) → `REVIEW` |
+| Phase-level pass exceeds its round cap (findings still outstanding — `references/phase-level-pass.md`) | `log update` (phase) → `BLOCKED` (PHASE_BLOCKED — must NOT reach `REVIEW`) |
 | Unresolvable BLOCKED (phase) | `log update` (phase) → `BLOCKED` |
 | All phases complete (Type B only) | `log close` |
 
-**IMPORTANT:** NEVER set task status to `DONE` before quick audit (git log + tests + DELIVERABLE check) completes. NEVER set task status to `REVIEW` — that status is for phases only.
+**Phase-completion ordering:** dispatch the phase-level pass → record its result → set the phase to `REVIEW` → run enterprise reporting (`references/enterprise-reporting.md`). The `REVIEW` row above fires only after `reviews/phase-pass-<phase_key>.json` carries a terminal pass result — never before, and never for a pass that exceeded its round cap (`references/phase-level-pass.md`).
+
+**IMPORTANT:** NEVER set task status to `DONE` before the in-loop audit completes and `--sha <audited_head>` is passed. NEVER set task status to `REVIEW` — that status is for phases only.
 
 `log.json` lives in `docs/pocket/plans/{slug}/log.json` — this is pocket-closing's primary input.
 
@@ -718,26 +731,35 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns 
 
 ## Phase Completion Protocol
 
-Activates **only for Type B input** (execution-plan-phase-N.md). Runs after all tasks reach DONE/DONE_WITH_CONCERNS and both review stages pass.
+Activates **only for Type B input** (execution-plan-phase-N.md). Runs after all tasks reach DONE/DONE_WITH_CONCERNS and their per-task in-loop audits pass.
 
-**Step 1 — Evaluate Phase Completion Gate** (copy conditions verbatim from phase file `## Phase Completion Gate`):
+**Ordering is fixed: dispatch the phase-level pass → record its result → set phase status `REVIEW` → run enterprise reporting (`references/enterprise-reporting.md`).** `PHASE_COMPLETE` may be emitted only after the phase-level pass has recorded its result.
+
+**Step 1 — Run the phase-level pass, then evaluate the Phase Completion Gate.** Once every task is `DONE`, dispatch the phase-level pass and let it record its result at `<plan_dir>/reviews/phase-pass-<phase_key>.json` (contract: `references/phase-level-pass.md`). Then evaluate the gate — copy the phase file's `## Phase Completion Gate` conditions verbatim, plus the pass condition:
 ```
 [ ] Every task in this phase: status DONE
 [ ] All tests pass
 [ ] All commits created with correct format
 [ ] No task has status BLOCKED or NEEDS_CONTEXT
+[ ] Phase-level pass recorded a terminal result at
+    <plan_dir>/reviews/phase-pass-<phase_key>.json
+    (PHASE_PASS_CLEAN or PHASE_PASS_RESOLVED — references/phase-level-pass.md)
 ```
 
-**Step 2 — Emit structured report:**
+**Step 2 — Set `REVIEW`, then emit the structured report:**
 
-If all conditions pass:
+If all conditions pass — set the phase to `REVIEW` (`log update` (phase) → `REVIEW`, only now that the pass result is recorded), then report:
 ```
 PHASE_COMPLETE: Phase N of M
 Tasks: [T1, T2, T4] — all DONE
 Commits: [commit message list]
 Tests: green
+Phase-level pass: <PHASE_PASS_CLEAN | PHASE_PASS_RESOLVED> at
+  <plan_dir>/reviews/phase-pass-<phase_key>.json
+Phase status: REVIEW
 Gate: PASS
-→ pocket-structuring may proceed to Phase N+1
+Next: user runs `/pocketto:pocket-closing <plan_dir>/<phase_file>`.
+→ Phase N+1 may start only after pocket-closing reports this phase DONE
 ```
 
 If any condition fails:
@@ -749,7 +771,17 @@ Unblocking action: [specific required action]
 → Do NOT proceed to Phase N+1
 ```
 
-This report is the signal pocket-structuring polls for in its Handoff Protocol ("wait for explicit DONE confirmation").
+**Phase-level pass round cap exceeded:** if the pass ends with findings still outstanding, the phase is `PHASE_BLOCKED` — it MUST NOT reach `REVIEW`, and the pass record carries `status: "PHASE_BLOCKED"` with the outstanding findings (`references/phase-level-pass.md`). Report:
+```
+PHASE_BLOCKED: Phase N of M
+Failed gate condition: Phase-level pass exceeded its round cap with findings outstanding
+Pass record: <plan_dir>/reviews/phase-pass-<phase_key>.json (status PHASE_BLOCKED)
+Outstanding findings: [from the pass record]
+Unblocking action: human resolves the outstanding findings
+→ Do NOT proceed to Phase N+1; phase status MUST NOT become REVIEW
+```
+
+This report tells pocket-structuring that the phase reached `REVIEW`; pocket-structuring then halts and directs the user to run `/pocketto:pocket-closing <plan_dir>/<phase_file>`, and proceeds to Phase N+1 only after pocket-closing reports the phase `DONE`.
 
 ---
 
@@ -768,13 +800,14 @@ When delegation pressure threatens to bypass structure:
 
 **Main agent role violations (HARDENED — see [Main Agent Role](#main-agent-role-hardened) section):**
 - Implement code yourself instead of delegating to a subagent
-- Invoke `pocket-review` directly — it is user-triggered post-phase, not called by pocket-development
-- Mark task DONE in the log without running the quick audit first
+- Invoke `pocket-review` as the per-task reviewer — per-task review is the in-loop auditor (see `references/two-stage-review.md`)
+- Mark task DONE in the log without a passing in-loop audit (mechanical gate + read-only auditor)
+- Mark a task DONE without passing `--sha <audited_head>`
 
 **Delegation violations:**
 - Delegate without a Pocket Packet
 - Skip the Entry Gate Checklist
-- Trust a subagent's report without verification (quick audit: git log + tests + DELIVERABLE)
+- Trust a subagent's report without verification (mechanical gate, then dispatch the read-only auditor — the main agent never judges code)
 - Give ambiguous prompts ("handle X", "fix Y")
 - Proceed with BLOCKED status without categorizing
 - Accept vague escalation ("I'm stuck" without reason)
@@ -802,6 +835,7 @@ Load these reference files when SKILL.md says "see reference for details" or whe
 | `references/entry-gate.md` | Gate checklist fails, need decision matrix or KEEP LOCAL examples, OR plan has `[parallel: TX]` annotations | Decision tree for gate pass/fail; Foundation/Parallel-Group/Solo classification rules |
 | `references/pocket-packet.md` | Packet construction unclear, need field-by-field guide | Complete field definitions with examples |
 | `references/sandwich-prompt.md` | Need attention mechanic details or method selection | Sandwich structure variations |
-
+| `references/two-stage-review.md` | After implementer reports DONE; mechanical gate, auditor dispatch, fix/refactor, SHA pinning | Normative in-loop audit contract. Cite it; do not restate it. |
+| `references/phase-level-pass.md` | All tasks in the phase are DONE — before the phase may become `REVIEW`, or a `REVIEW_FAIL` needs its correction path | Phase-level pass contract: dispatch, result record, round cap and PHASE_BLOCKED, append-only corrections, verdict fan-out. Cite it; do not restate it. |
+| `references/enterprise-reporting.md` | Enterprise-mode phase completion, after the phase is `REVIEW` | E1–E6 verdict-posting steps behind the fail-closed mode preflight. Cite it; do not restate it. |
 | `references/status-handling.md` | BLOCKED/NEEDS_CONTEXT unclear, need categorization details | Blocker types and actions |
-

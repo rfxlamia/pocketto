@@ -1,0 +1,165 @@
+{
+  "header": {
+    "plan_dir": "/Users/rfxlamia/project/pocketto/docs/pocket/plans/2026-08-15-in-loop-build-cycle",
+    "plan_type": "phased",
+    "status": "DONE",
+    "date_started": "2026-08-15",
+    "date_completed": "2026-08-16",
+    "baseline_sha": "92c52f0670d94b4004db701df65641a4e480e1a0",
+    "pipeline": 3
+  },
+  "phases": [
+    {
+      "order": 1,
+      "file": "execution-plan-phase-1.md",
+      "status": "DONE",
+      "tasks": [
+        {
+          "id": "T1",
+          "name": "CLI — PIPELINE marker constant and stamping at log init",
+          "status": "DONE",
+          "done_sha": "2be3cde862acb995ab0d6e94f0f5fb054f09afc3"
+        },
+        {
+          "id": "T3",
+          "name": "Rewrite two-stage-review.md as the audit-loop contract",
+          "status": "DONE",
+          "done_sha": "9d747160c137a8cec9ad72388e3e80b1201463f5"
+        },
+        {
+          "id": "T2",
+          "name": "CLI — pipeline-marker refusal gate at the readLog choke point",
+          "status": "DONE",
+          "depends": "T1",
+          "done_sha": "a0a6ab4df2732920016088b86bec9e2579113ce6"
+        },
+        {
+          "id": "T4",
+          "name": "pocket-development SKILL.md — the per-task in-loop build cycle",
+          "status": "DONE",
+          "depends": "T3",
+          "done_sha": "93e0f4875ac3c02d5aca5fcaf0d0c97f79159920"
+        },
+        {
+          "id": "T5",
+          "name": "pocket-planning — refactor becomes auditor-judged, not self-reported",
+          "status": "DONE",
+          "depends": "T3",
+          "done_sha": "96099fb047c04f6422dd601b0bbfa6f980eb9bf3"
+        }
+      ],
+      "corrections": [
+        {
+          "sha": "42427117b665249b7a3b3e8f22b028347a748ede",
+          "files": [
+            "skills/pocket-development/SKILL.md"
+          ],
+          "for_task": "T4"
+        }
+      ]
+    },
+    {
+      "order": 2,
+      "file": "execution-plan-phase-2.md",
+      "status": "DONE",
+      "tasks": [
+        {
+          "id": "T6",
+          "name": "Comprehension review — Phase A",
+          "status": "DONE",
+          "depends": "T2, T4, T5",
+          "done_sha": "191097f6f09168218321a252ae8d69a3f5815a26"
+        },
+        {
+          "id": "T7",
+          "name": "references/phase-level-pass.md — the phase pass and its corrections",
+          "status": "DONE",
+          "depends": "T6",
+          "done_sha": "c406a5d4910d4e83a65e846134b9780d08d6f867"
+        },
+        {
+          "id": "T8",
+          "name": "references/enterprise-reporting.md — E1–E6 relocated",
+          "status": "DONE",
+          "depends": "T6",
+          "done_sha": "abe9c836039343658559178c46338edbee2bcd4b"
+        }
+      ]
+    },
+    {
+      "order": 3,
+      "file": "execution-plan-phase-3.md",
+      "status": "DONE",
+      "tasks": [
+        {
+          "id": "T9",
+          "name": "pocket-development SKILL.md — phase-completion wiring",
+          "status": "DONE",
+          "depends": "T7, T8",
+          "done_sha": "79f383eda14c9c15b817360091dca93fe9699aca"
+        },
+        {
+          "id": "T10",
+          "name": "Comprehension review — Phase B",
+          "status": "DONE",
+          "depends": "T9",
+          "done_sha": "8a50938ca67653ba320b12507cb72e602f1b8c5e"
+        },
+        {
+          "id": "T11",
+          "name": "Deprecate the pocket-review and pocket-correction skills",
+          "status": "DONE",
+          "depends": "T9",
+          "done_sha": "cbf4802670feaad52285326a88b1d04a5083cb00"
+        },
+        {
+          "id": "T15",
+          "name": "pocket-structuring SKILL.md — wait for pocket-closing before advancing phases",
+          "status": "DONE",
+          "depends": "T9",
+          "done_sha": "0fcbe755ab04695c9dfd5d2863cf0b4e983ad711"
+        }
+      ]
+    },
+    {
+      "order": 4,
+      "file": "execution-plan-phase-4.md",
+      "status": "DONE",
+      "tasks": [
+        {
+          "id": "T12",
+          "name": "Documentation sync for the deprecated skills",
+          "status": "DONE",
+          "depends": "T11",
+          "done_sha": "fe3d55d2f783869f797dd9bcbaf4719000420d6e"
+        },
+        {
+          "id": "T13",
+          "name": "Version 3.0.0, manifest sync, and migration release notes",
+          "status": "DONE",
+          "depends": "T12",
+          "done_sha": "0bd9670daec0738b924cdf45813e46bc36184bba"
+        },
+        {
+          "id": "T14",
+          "name": "Final comprehension review and end-to-end verification",
+          "status": "DONE",
+          "depends": "T13",
+          "done_sha": "c4dee283e02c504bf00c4fb2e5dbc3538130a355"
+        }
+      ],
+      "corrections": [
+        {
+          "sha": "ba5d8b047211d8764c04f1b259ad5a38dd7846dc",
+          "files": [
+            "skills/pocket-closing/SKILL.md",
+            "skills/pocket-help/SKILL.md",
+            "skills/pocket-help/references/end-to-end-flow.md",
+            "skills/pocket-help/references/skill-map.md"
+          ],
+          "for_task": "T12"
+        }
+      ]
+    }
+  ]
+}

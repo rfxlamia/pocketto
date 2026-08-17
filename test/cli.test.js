@@ -24,6 +24,7 @@ const identity = require("../cli/lib/identity");
 const extensions = require("../cli/lib/extensions");
 const setupExtensions = require("../cli/commands/setup-extensions");
 const gitlib = require("../cli/lib/git");
+const version = require("../cli/lib/version");
 
 function run(args, { expectFail = false, env } = {}) {
 	// Merge env overrides onto process.env so PATH (needed to spawn `node`) survives.
@@ -973,12 +974,38 @@ test("log init creates a phased log.json with tasks + SHA tracking field", () =>
 	assert.equal(log.phases[0].tasks[0].status, "WAITING");
 });
 
-test("log init migrates tasks into an existing task-less log.json, preserving status", () => {
+test("log init stamps the pipeline marker into a fresh log.json header", () => {
 	const dir = tmp();
 	writePlan(dir, NINE_TASK_PLAN);
 	run(["structure", path.join(dir, "execution-plan.md")]);
 
-	// Hand-craft an old-style log.json: phases without tasks, phase 1 already DONE.
+	const env = json(["log", "init", dir, "--json"]);
+	assert.equal(env.ok, true);
+	assert.equal(env.command, "log init");
+	assert.equal(env.contract, 2); // CONTRACT is NOT bumped by the pipeline marker
+	assert.equal(env.data.migrated, false);
+	// `init`'s data never echoed the header — the envelope shape stays unchanged.
+	assert.equal("header" in env.data, false);
+
+	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.equal(Number.isInteger(version.PIPELINE), true);
+	assert.equal(Number.isInteger(log.header.pipeline), true);
+	assert.equal(log.header.pipeline, version.PIPELINE);
+
+	// Every other header field is untouched.
+	assert.equal(log.header.plan_type, "phased");
+	assert.equal(log.header.status, "IN_PROGRESS");
+	assert.equal(log.header.date_completed, null);
+	assert.ok("baseline_sha" in log.header);
+});
+
+test("log init refuses a marker-less task-less legacy log.json without writing a byte", () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+
+	// Hand-craft an old-style log.json: no pipeline marker, phases without tasks.
+	// Rule C1.2: plans from an older pipeline are refused, not repaired/laundered.
 	const legacy = {
 		header: {
 			plan_dir: dir,
@@ -993,9 +1020,43 @@ test("log init migrates tasks into an existing task-less log.json, preserving st
 			{ order: 3, file: "execution-plan-phase-3.md", status: "WAITING" },
 		],
 	};
+	const logPath = path.join(dir, "log.json");
+	writeFileSync(logPath, JSON.stringify(legacy, null, 2) + "\n");
+	const before = readFileSync(logPath);
+
+	const res = run(["log", "init", dir, "--json"], { expectFail: true });
+	assert.notEqual(res.code, 0);
+	const env = JSON.parse(res.stdout.trim());
+	assert.equal(env.ok, false);
+	assert.equal(env.error.code, "PIPELINE_TOO_OLD");
+	assert.deepEqual(readFileSync(logPath), before);
+	assert.equal("pipeline" in JSON.parse(readFileSync(logPath, "utf8")).header, false);
+});
+
+test("log init migrates tasks into an existing task-less log.json, preserving status", () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+
+	// Forward case: a marked log whose plan gained tasks after init.
+	const marked = {
+		header: {
+			plan_dir: dir,
+			plan_type: "phased",
+			status: "IN_PROGRESS",
+			date_started: "2026-01-01",
+			date_completed: null,
+			pipeline: version.PIPELINE,
+		},
+		phases: [
+			{ order: 1, file: "execution-plan-phase-1.md", status: "DONE" },
+			{ order: 2, file: "execution-plan-phase-2.md", status: "WAITING" },
+			{ order: 3, file: "execution-plan-phase-3.md", status: "WAITING" },
+		],
+	};
 	writeFileSync(
 		path.join(dir, "log.json"),
-		JSON.stringify(legacy, null, 2) + "\n",
+		JSON.stringify(marked, null, 2) + "\n",
 	);
 
 	run(["log", "init", dir]);
@@ -1010,6 +1071,7 @@ test("log init migrates tasks into an existing task-less log.json, preserving st
 		log.phases[1].tasks.every((t) => t.status === "WAITING"),
 		true,
 	);
+	assert.equal(log.header.pipeline, version.PIPELINE);
 });
 
 test("log update changes phase + task status and reports via --json", () => {
@@ -1064,6 +1126,23 @@ function git(dir, args) {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "ignore"],
 	});
+}
+
+// Strip the pipeline marker from a freshly-initialised log.json, rewriting it
+// in the exact shape writeLog produces (2-space indent + trailing newline).
+function stripPipelineMarker(dir) {
+	const logPath = path.join(dir, "log.json");
+	const log = JSON.parse(readFileSync(logPath, "utf8"));
+	delete log.header.pipeline;
+	writeFileSync(logPath, JSON.stringify(log, null, 2) + "\n");
+	return logPath;
+}
+
+function initMarkerlessPlan(dir) {
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	run(["log", "init", dir]);
+	return stripPipelineMarker(dir);
 }
 
 function gitInitRepo(dir) {
@@ -1500,6 +1579,140 @@ test("log update/close accept a plan file argument, not just the directory", () 
 		run(["log", "update", planFile, f, "DONE"]);
 	}
 	assert.equal(json(["log", "close", planFile, "--json"]).ok, true);
+});
+
+test("log update refuses a marker-less log.json without writing a byte", () => {
+	const dir = tmp();
+	const logPath = initMarkerlessPlan(dir);
+	const before = readFileSync(logPath);
+
+	const res = run(
+		[
+			"log",
+			"update",
+			dir,
+			"execution-plan-phase-1.md",
+			"DONE",
+			"--task",
+			"T1",
+			"--json",
+		],
+		{ expectFail: true },
+	);
+	assert.notEqual(res.code, 0);
+
+	const env = JSON.parse(res.stdout.trim());
+	assert.equal(env.ok, false);
+	assert.equal(env.error.code, "PIPELINE_TOO_OLD");
+	assert.match(env.error.message, /absent/i); // names the detected version
+	assert.match(env.error.message, /pocketto-pi@2\.4\.4/); // names the recovery step
+
+	// Zero bytes written on the refusal path.
+	assert.deepEqual(readFileSync(logPath), before);
+});
+
+test("log update refuses malformed and older pipeline markers without writing a byte", () => {
+	for (const pipeline of ["abc", "3", 3.5, 2]) {
+		const dir = tmp();
+		writePlan(dir, NINE_TASK_PLAN);
+		run(["structure", path.join(dir, "execution-plan.md")]);
+		run(["log", "init", dir]);
+
+		const logPath = path.join(dir, "log.json");
+		const log = JSON.parse(readFileSync(logPath, "utf8"));
+		log.header.pipeline = pipeline;
+		writeFileSync(logPath, JSON.stringify(log, null, 2) + "\n");
+		const before = readFileSync(logPath);
+
+		const res = run(
+			[
+				"log",
+				"update",
+				dir,
+				"execution-plan-phase-1.md",
+				"DONE",
+				"--task",
+				"T1",
+				"--json",
+			],
+			{ expectFail: true },
+		);
+		assert.notEqual(res.code, 0, `pipeline=${JSON.stringify(pipeline)}`);
+		assert.notEqual(res.stdout.trim(), "", `pipeline=${JSON.stringify(pipeline)} must return a JSON refusal`);
+		const env = JSON.parse(res.stdout.trim());
+		assert.equal(env.error.code, "PIPELINE_TOO_OLD", `pipeline=${JSON.stringify(pipeline)}`);
+		assert.deepEqual(readFileSync(logPath), before, `pipeline=${JSON.stringify(pipeline)}`);
+	}
+});
+
+test("log init refuses an existing marker-less log.json and stamps nothing", () => {
+	const dir = tmp();
+	const logPath = initMarkerlessPlan(dir);
+	const before = readFileSync(logPath);
+
+	const res = run(["log", "init", dir, "--json"], { expectFail: true });
+	assert.notEqual(res.code, 0);
+	const env = JSON.parse(res.stdout.trim());
+	assert.equal(env.ok, false);
+	assert.equal(env.error.code, "PIPELINE_TOO_OLD");
+
+	assert.deepEqual(readFileSync(logPath), before);
+	const log = JSON.parse(readFileSync(logPath, "utf8"));
+	assert.equal("pipeline" in log.header, false); // init laundered nothing
+});
+
+test("log close is refused on a marker-less log even when every phase is DONE", () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	run(["log", "init", dir]);
+	for (const f of [
+		"execution-plan-phase-1.md",
+		"execution-plan-phase-2.md",
+		"execution-plan-phase-3.md",
+	]) {
+		run(["log", "update", dir, f, "DONE"]);
+	}
+	const logPath = stripPipelineMarker(dir);
+	const before = readFileSync(logPath);
+
+	const res = run(["log", "close", dir, "--json"], { expectFail: true });
+	assert.equal(JSON.parse(res.stdout.trim()).error.code, "PIPELINE_TOO_OLD");
+	assert.deepEqual(readFileSync(logPath), before);
+});
+
+test("a log carrying the current pipeline marker is not refused", () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	run(["log", "init", dir]);
+
+	const env = json([
+		"log",
+		"update",
+		dir,
+		"execution-plan-phase-1.md",
+		"DONE",
+		"--task",
+		"T1",
+		"--json",
+	]);
+	assert.equal(env.ok, true);
+	assert.equal(env.data.newStatus, "DONE");
+
+	// The marker survives the writeLog round-trip — otherwise the gate would
+	// refuse the very next state-changing command on a log it just wrote.
+	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.equal(log.header.pipeline, version.PIPELINE);
+});
+
+test("format tasklist is never refused by the pipeline gate (read-only path)", () => {
+	const dir = tmp();
+	initMarkerlessPlan(dir);
+
+	// Rendering is covered by the existing tasklist tests; this asserts only that
+	// the read-only consumer survives the gate.
+	assert.equal(json(["format", "tasklist", dir, "--json"]).ok, true);
 });
 
 test("meta set creates .pocket-meta.json with stable direct-write serialization", () => {
@@ -2617,4 +2830,25 @@ test("log update --correction skips an empty-diff commit (nothing to attribute)"
 	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
 	const ph = log.phases.find((p) => p.file === phase);
 	assert.ok(!ph.corrections || ph.corrections.length === 0); // not recorded
+});
+
+test("log update --correction is refused on a marker-less log", {
+	skip: !hasGit(),
+}, () => {
+	const dir = tmp();
+	const phase = setupPhasedDone(dir);
+	writeFileSync(path.join(dir, "fix.txt"), "fix");
+	git(dir, ["add", "-A"]);
+	git(dir, ["commit", "-q", "-m", "fix T1"]);
+	const sha = git(dir, ["rev-parse", "HEAD"]).trim();
+
+	const logPath = stripPipelineMarker(dir);
+	const before = readFileSync(logPath);
+
+	const res = run(
+		["log", "update", dir, phase, "--correction", sha, "--for-task", "T1", "--json"],
+		{ expectFail: true },
+	);
+	assert.equal(JSON.parse(res.stdout.trim()).error.code, "PIPELINE_TOO_OLD");
+	assert.deepEqual(readFileSync(logPath), before);
 });

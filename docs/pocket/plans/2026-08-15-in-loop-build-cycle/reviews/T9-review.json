@@ -1,0 +1,58 @@
+{
+  "task_id": "T9",
+  "task_name": "pocket-development SKILL.md — phase-completion wiring",
+  "cycle": 1,
+  "timestamp": "2026-08-16T13:12:00Z",
+  "reviewer_mode": "read-only",
+  "reviewer_config": "batch-parallel",
+  "stage_1": {
+    "status": "PASS",
+    "issues": [],
+    "concerns_addressed": []
+  },
+  "stage_2": {
+    "status": "PASS",
+    "strengths": [
+      "Ordering 'pass -> record -> REVIEW -> report' is stated explicitly and identically in all three required places: End-of-Execution Handoff (skills/pocket-development/SKILL.md:602-611), the log timing table note (skills/pocket-development/SKILL.md:724), and Phase Completion Protocol (skills/pocket-development/SKILL.md:736)",
+      "REVIEW is provably gated behind the recorded pass: the log update REVIEW command at SKILL.md:606-610 is guarded ('only for a pass that recorded a terminal clean/resolved result'), the timing-table row was rewritten to 'After the phase-level pass records its result' (SKILL.md:719), and a new round-cap row forbids REVIEW (SKILL.md:720). No path sets REVIEW before the record",
+      "Never advances past REVIEW: the old '| pocket-review passes | log update (phase) -> DONE |' row was deleted, and SKILL.md:624 states 'pocket-closing owns everything after REVIEW; this skill never advances a phase beyond REVIEW'. No new DONE/log close instruction was introduced",
+      "T7/T8 are cited, not restated: the previously inline `pocketto-pi mode` fail-closed check and the inline /pocketto:create-pr offer were removed and replaced by a citation of references/enterprise-reporting.md's E1-E6 (SKILL.md:611), and every pass rule defers to references/phase-level-pass.md with explicit 'cite it; do not restate' language (SKILL.md:604, 838-839)",
+      "Terminology matches the T7/T8 contracts exactly — `reviews/phase-pass-<phase_key>.json`, PHASE_PASS_CLEAN / PHASE_PASS_RESOLVED / PHASE_BLOCKED, round cap, verdict fan-out, append-only corrections, done_sha never moves — verified against references/phase-level-pass.md:44,64,89,98,100 and references/enterprise-reporting.md:17-33",
+      "PHASE_BLOCKED branch added for the round cap (SKILL.md:773-781) plus the matching gate condition (SKILL.md:744-746) and graph edge (SKILL.md:356-358), satisfying the spec's 'Rule: Phase-level pass' third criterion",
+      "The stale REVIEW_FAIL row routing to /pocketto:pocket-correction and the follow-up sentence beneath it were both rewritten (SKILL.md:661-663) — the second one carried no /pocketto: form and would have survived an invocation-only grep",
+      "Scope respected: exactly one file changed; pocket-review is not deprecated here (its remaining mentions at SKILL.md:76, 413, 471, 477, 480, 500, 802 are comparative parallel-merge notes and DON'T rows, none presenting it as a live stage — T11's territory left untouched)",
+      "Commit follows conventional commits and carries the required `[no-tdd — structural task]` marker in the body"
+    ],
+    "issues": [
+      {
+        "severity": "Minor",
+        "description": "Ambiguous cross-reference: '(step 4, `references/enterprise-reporting.md`)' can be misread as the reference's E4 (summary upsert) rather than handoff step 4 / the file's Fail-closed contract preflight. Suggest 'the fail-closed preflight in references/enterprise-reporting.md'.",
+        "location": "skills/pocket-development/SKILL.md:626"
+      },
+      {
+        "severity": "Minor",
+        "description": "The flow graph was updated with the pass/record/round-cap nodes but has no 'Set phase REVIEW' node, and it still routes 'Emit PHASE_COMPLETE handoff' -> 'Evaluate Phase Completion Gate' (pre-existing edge), which reads as gate-after-handoff while the prose protocol evaluates the gate first. Adding a REVIEW node would make the diagram agree with the three prose sections.",
+        "location": "skills/pocket-development/SKILL.md:354-362"
+      },
+      {
+        "severity": "Minor",
+        "description": "Residual tension with pre-existing content left in place (outside T9's enumerated steps): the `### log close` section and the 'All phases complete (Type B only) | log close' row still present log close as a pocket-development action, which sits awkwardly beside the new claim that pocket-closing owns everything after REVIEW. Worth confirming a later task (T11/T14) owns this cleanup.",
+        "location": "skills/pocket-development/SKILL.md:703-709,722"
+      },
+      {
+        "severity": "Minor",
+        "description": "SKILL.md is now 841 lines (net +22 here), by far the largest skill file in the repo and well past the ~300-line refactor heuristic. This change moves in the right direction (inline enterprise procedure replaced by a citation), but the ~26-line inline `gh` task-checklist-sync procedure remains in SKILL.md while its sibling E1-E6 moved to a reference — a future candidate for relocation.",
+        "location": "skills/pocket-development/SKILL.md:626-651"
+      }
+    ],
+    "assessment": "Approved"
+  },
+  "overall": "REVIEW_PASS",
+  "fix_instructions": "",
+  "loop_info": {
+    "current_cycle": 1,
+    "max_cycles": 2,
+    "cycles_remaining": 2
+  },
+  "reviewed_sha": "79f383eda14c9c15b817360091dca93fe9699aca"
+}

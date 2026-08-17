@@ -1,5 +1,7 @@
 # Review Report Template
 
+> **Note:** `pocket-review` is deprecated as of 3.0.0. This file remains the normative review-report JSON schema; it is now produced by pocket-development's in-loop auditor (see `skills/pocket-development/references/two-stage-review.md` and `references/phase-level-pass.md`), not by pocket-review.
+
 ## Contents
 - [Schema](#schema)
 - [Example: REVIEW_FAIL (Stage 1)](#example-review_fail-stage-1)
@@ -281,7 +283,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
 
 ## Example: REVIEW_PASS (skip stub — no file changes)
 
-Written by the main agent in preflight (Step 5) for any `DONE + done_sha` task whose SHA range contains no file changes. No subagent is dispatched for these tasks.
+Written by pocket-development's in-loop auditor during its phase-level pass preflight for any `DONE + done_sha` task whose SHA range contains no file changes. No subagent is dispatched for these tasks.
 
 ```json
 {
@@ -305,7 +307,7 @@ Written by the main agent in preflight (Step 5) for any `DONE + done_sha` task w
 
 ## File Naming
 
-**Batch mode (pocket-review, post-phase):**
+**Batch mode (pocket-development's phase-level pass, post-phase):**
 ```
 reviews/<task_id>-review.json
 ```
@@ -313,7 +315,7 @@ Examples:
 - `reviews/T1-review.json`
 - `reviews/T3-review.json`
 
-Re-running pocket-review overwrites these files. No audit history is preserved automatically.
+Re-running the phase-level pass overwrites these files. No audit history is preserved automatically.
 
 **Legacy per-task mode (deprecated):**
 ```
@@ -332,16 +334,16 @@ The `reviews/` subdirectory must be created by the main agent before dispatching
 
 ## Batch Mode Field Notes
 
-In batch mode (invoked by pocket-review post-phase), set these fields as follows:
+In batch mode (invoked by pocket-development's phase-level pass, post-phase), set these fields as follows:
 
 | Field | Batch mode value |
 |-------|-----------------|
-| `cycle` | `1` on first cycle; incremented on re-review (see SKILL.md Step 3 cycle bookkeeping) |
+| `cycle` | `1` on first cycle; incremented on re-review (see `skills/pocket-development/references/phase-level-pass.md` cycle bookkeeping) |
 | `reviewer_config` | `"batch-parallel"` |
 | `loop_info.current_cycle` | `1` on first cycle; prior cycle + 1 on re-review (mirrors `cycle`) |
-| `loop_info.max_cycles` | `1` |
-| `loop_info.cycles_remaining` | `0` |
+| `loop_info.max_cycles` | `2` for in-loop and phase-level audits; `1` only for the empty-diff skip stub defined by `two-stage-review.md` |
+| `loop_info.cycles_remaining` | Follow the round budget in `two-stage-review.md` or `phase-level-pass.md`; a clean first pass records `2` |
 | `overall` | `"REVIEW_PASS"` \| `"REVIEW_FAIL"` \| `"REVIEW_BLOCKED"` |
 | `reviewed_sha` | `done_sha` on first cycle; max-by-commit-time of `done_sha` and all owned correction SHAs on re-review |
 
-`REVIEW_FAIL` in batch mode means: issues found, no re-dispatch. Fix code via pocket-correction and re-run pocket-review.
+`REVIEW_FAIL` in batch mode means: issues found, no re-dispatch. Fix is delegated and recorded via the CLI correction machinery (`log update --correction --for-task`) as part of pocket-development's in-loop flow, then re-audited.

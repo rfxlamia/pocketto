@@ -53,5 +53,5 @@ Not sure which?                    → pocket-help (you're already here)
 
 - **"Pocket is heavier, so it's slower."** For a one-liner, yes — use hotfix. For a real feature, the gates are *faster* than discovering a wrong assumption after implementation and redoing files.
 - **"I'll just use the pipeline for everything to be safe."** Over-applying the pipeline to trivial work burns context and time. The standalone skills exist precisely so you don't.
-- **"pocket-development reviews its own work."** It runs a per-task *quick audit* only. Full review is a separate, **user-triggered** `pocket-review` step after the phase is DONE.
+- **"pocket-development reviews its own work."** The main agent never judges code itself: after each task it runs a mechanical gate, then dispatches a read-only auditor subagent for spec compliance and code quality (the in-loop audit); once every task is DONE it dispatches a phase-level pass over the whole phase, the same way an independent reviewer would.
 - **"Pocket replaces my judgment."** It structures it. You still confirm scope, approve specs and plans, and trigger review.

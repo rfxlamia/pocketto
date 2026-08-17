@@ -7,8 +7,9 @@
 const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
-const { readLog, writeLog, todayISO } = require('../lib/logjson');
+const { writeLog, todayISO, readLogChecked } = require('../lib/logjson');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
+const { PIPELINE } = require('../lib/version');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
 const VALID_SET = new Set(VALID_STATUSES);
@@ -114,6 +115,7 @@ function init(positionals) {
       date_started: todayISO(),
       date_completed: null,
       baseline_sha: getGitSha(planDir),
+      pipeline: PIPELINE, // execution-pipeline generation; independent of CONTRACT
     },
     phases,
   };
@@ -160,7 +162,7 @@ function warnDuplicateDoneShas(human, duplicateDoneShas) {
   if (!duplicateDoneShas) return;
   for (const [file, groups] of Object.entries(duplicateDoneShas)) {
     for (const [sha, ids] of Object.entries(groups)) {
-      human.push(`⚠ ${file}: done_sha ${sha} is shared by ${ids.join(', ')} — pocket-review will skip the 2nd+ task.`);
+      human.push(`⚠ ${file}: done_sha ${sha} is shared by ${ids.join(', ')} — the phase-level pass will skip the 2nd+ task.`);
     }
   }
   human.push(
@@ -169,7 +171,7 @@ function warnDuplicateDoneShas(human, duplicateDoneShas) {
 }
 
 function migrateExisting(planDir, logPath) {
-  const log = readLog(logPath);
+  const log = readLogChecked(logPath);
   let migrated = 0;
   for (const phase of log.phases) {
     if ('tasks' in phase) continue;
@@ -237,7 +239,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
   }
 
-  const log = readLog(logPath);
+  const log = readLogChecked(logPath);
   const phase = log.phases.find((p) => p.file === phaseFile);
   if (!phase) {
     const available = log.phases.map((p) => p.file);
@@ -312,7 +314,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
                 `Nothing was written to log.json.`,
                 ``,
                 `Cause: a parallel group was merged in a batch and logged afterwards, so this update`,
-                `captured the same HEAD (the final merge commit) as a sibling task. pocket-review diffs`,
+                `captured the same HEAD (the final merge commit) as a sibling task. The phase-level pass diffs`,
                 `each task as <prev_sha>..<done_sha>, so a duplicate done_sha silently empties the 2nd+`,
                 `task's review range and the task goes unreviewed.`,
                 ``,
@@ -321,7 +323,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
                 `  2. pocketto-pi log update ${planDir} ${phaseFile} DONE --task ${task.id} --sha <merge_sha>`,
                 ``,
                 `If ${task.id} legitimately produced no new commit (no-change task), re-run with`,
-                `--allow-duplicate-sha — pocket-review will emit a skip stub for it.`,
+                `--allow-duplicate-sha — pocket-development will preserve its empty-diff skip stub.`,
               ].join('\n'),
             },
           );
@@ -336,8 +338,8 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     if (shaCollision) {
       human.push(
         `⚠ done_sha ${task.done_sha} is already recorded for ${shaCollision.join(', ')} in this phase.`,
-        `  Recorded anyway because --allow-duplicate-sha was passed — pocket-review will emit`,
-        `  a skip stub for ${task.id}'s empty diff range instead of reviewing it.`,
+        `  Recorded anyway because --allow-duplicate-sha was passed — pocket-development will preserve`,
+        `  the skip stub for ${task.id}'s empty diff range instead of dispatching an auditor.`,
       );
     }
     data = {
@@ -388,7 +390,7 @@ function recordCorrection(positionals, sha, forTask) {
   if (!existsSync(logPath)) {
     throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
   }
-  const log = readLog(logPath);
+  const log = readLogChecked(logPath);
   const phase = log.phases.find((p) => p.file === phaseFile);
   if (!phase) {
     const available = log.phases.map((p) => p.file);
@@ -501,7 +503,7 @@ function recordCorrection(positionals, sha, forTask) {
   if (bleedTasks.length) {
     human.push(
       `⚠ this correction also touches files owned by ${bleedTasks.join(', ')} (cross-task bleed).`,
-      `  Those tasks will be re-reviewed by pocket-review. See design: full attribution.`,
+      `  The phase-level pass will refresh verdicts for those tasks. See design: full attribution.`,
     );
   }
   return {
@@ -529,7 +531,7 @@ function close(positionals) {
     throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
   }
 
-  const log = readLog(logPath);
+  const log = readLogChecked(logPath);
   const notDone = log.phases.filter((p) => p.status !== 'DONE');
   if (notDone.length) {
     const lines = ['Cannot close — phases not DONE:'];
