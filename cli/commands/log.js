@@ -78,8 +78,9 @@ function collectPlanFiles(planDir) {
 
 // file → owning task id, by chaining each DONE task's original range
 // (prev..done_sha) in plan order. Last writer within original ranges wins.
-// Mirrors pocket-review's linear range model. Correction commits are NOT
-// part of any task's original range, so they never appear here.
+// Mirrors the linear range model the phase-level pass and pocket-closing's
+// owner-map attribution depend on. Correction commits are NOT part of any
+// task's original range, so they never appear here.
 function buildOwnerMap(planDir, phase, baselineSha) {
   const owner = {};
   let prev = baselineSha;
@@ -276,8 +277,8 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
         if (!doneSha) {
           throw new CliError('UNKNOWN_SHA', `--sha '${shaOverride}' is not a commit in '${planDir}'.`);
         }
-        // done_sha must sit on the current branch history — pocket-review's
-        // <prev_sha>..<done_sha> ranges assume a linear first-parent chain.
+        // done_sha must sit on the current branch history — the phase-level
+        // pass's <prev_sha>..<done_sha> ranges assume a linear first-parent chain.
         if (!isAncestorOfHead(planDir, doneSha)) {
           throw new CliError(
             'SHA_NOT_ANCESTOR',
@@ -293,8 +294,8 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
         // signature of a collapsed parallel-group merge. When parallel tasks
         // are merged in a batch and only logged afterwards, every `log update`
         // captures the same final HEAD (one merge commit) instead of each
-        // task's own merge commit, which silently empties pocket-review's
-        // per-task diff range (<prev_sha>..<done_sha>) for the 2nd+ task.
+        // task's own merge commit, which silently empties the phase-level
+        // pass's per-task diff range (<prev_sha>..<done_sha>) for the 2nd+ task.
         // Refuse before anything is written, unless --allow-duplicate-sha
         // deliberately accepts it (a task that produced no new commit).
         const dupes = (phase.tasks || [])
