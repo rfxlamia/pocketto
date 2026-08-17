@@ -307,7 +307,7 @@ Written by pocket-development's in-loop auditor during its phase-level pass pref
 
 ## File Naming
 
-**Batch mode (pocket-development's phase-level pass, post-phase):**
+**Written per task** (in-loop audit, empty-diff skip stub, or BLOCKED write — see `references/two-stage-review.md`; also rewritten during a phase-level correction's verdict fan-out — see `references/phase-level-pass.md`):
 ```
 reviews/<task_id>-review.json
 ```
@@ -315,7 +315,7 @@ Examples:
 - `reviews/T1-review.json`
 - `reviews/T3-review.json`
 
-Re-running the phase-level pass overwrites these files. No audit history is preserved automatically.
+Overwritten on every re-audit (fix/refactor round) or when a correction's verdict fans out to this task. No audit history is preserved automatically.
 
 **Legacy per-task mode (deprecated):**
 ```
@@ -332,11 +332,11 @@ Where `<plan_dir>` is the pocket plan directory (e.g., `docs/pocket/plans/2026-0
 
 The `reviews/` subdirectory must be created by the main agent before dispatching subagents.
 
-## Batch Mode Field Notes
+## Field Notes
 
-In batch mode (invoked by pocket-development's phase-level pass, post-phase), set these fields as follows:
+Whenever pocket-development writes or rewrites this artifact — the per-task in-loop audit, the empty-diff skip stub, or a phase-level correction's verdict fan-out — set these fields as follows:
 
-| Field | Batch mode value |
+| Field | Value |
 |-------|-----------------|
 | `cycle` | `1` on first cycle; incremented on re-review (see `skills/pocket-development/references/phase-level-pass.md` cycle bookkeeping) |
 | `reviewer_config` | `"batch-parallel"` |
@@ -346,4 +346,4 @@ In batch mode (invoked by pocket-development's phase-level pass, post-phase), se
 | `overall` | `"REVIEW_PASS"` \| `"REVIEW_FAIL"` \| `"REVIEW_BLOCKED"` |
 | `reviewed_sha` | `done_sha` on first cycle; max-by-commit-time of `done_sha` and all owned correction SHAs on re-review |
 
-`REVIEW_FAIL` in batch mode means: issues found, no re-dispatch. Fix is delegated and recorded via the CLI correction machinery (`log update --correction --for-task`) as part of pocket-development's in-loop flow, then re-audited.
+`REVIEW_FAIL` in a phase-level correction means: issues found, no re-dispatch of the original task. The fix is delegated and recorded via the CLI correction machinery (`log update --correction --for-task`) as part of pocket-development's phase-level pass — never used for an in-loop fix round, which re-dispatches the implementer directly instead (see `references/two-stage-review.md`).

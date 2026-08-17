@@ -49,9 +49,9 @@ Subagents may:
 - Be optimistic about completeness
 
 **Enforcement:**
-- Always use explore reviewer for verification
-- Reviewer must read actual code, not trust report
-- Two-stage: spec compliance THEN quality
+- Mechanical gate first (command/commit evidence only), then dispatch the read-only auditor — never trust the implementer's self-report
+- The auditor reads the diff directly, not the implementer's summary
+- One auditor emits both spec-compliance and code-quality findings into a single verdict artifact — see `references/two-stage-review.md`
 
 ### Law 4: NO AMBIGUOUS PROMPT
 
