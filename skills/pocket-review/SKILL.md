@@ -23,13 +23,16 @@ The CLI correction machinery this skill depended on is untouched and still fully
 - `phase.corrections` in `log.json` — the correction log entries.
 - `for_task` / bleed attribution — the ownership rules that decide which task(s) a correction is attributed to.
 
-## Where the artifacts still live
+## Where the artifacts live now
 
-Reference files this skill used to load are **kept in place** and are still cited by the new contracts:
+Reference files this skill used to load have moved to `skills/pocket-development/references/`, where the new contracts cite them:
 
-- `references/spec-compliance-review.md`
-- `references/code-quality-review.md`
-- `references/review-report-template.md` — still the normative review-report JSON schema; now produced by pocket-development's in-loop auditor instead of this skill.
+- `skills/pocket-development/references/spec-compliance-review.md`
+- `skills/pocket-development/references/code-quality-review.md`
+- `skills/pocket-development/references/review-report-template.md` — still the normative review-report JSON schema; now produced by pocket-development's in-loop auditor instead of this skill.
+
+One file stayed behind in this skill's own `references/`:
+
 - `references/subagent-dispatch-template.md` — superseded; see the note at the top of that file.
 
 If you were about to run `/pocketto:pocket-review`, run `pocket-development` instead — it audits at phase completion without a separate invocation.

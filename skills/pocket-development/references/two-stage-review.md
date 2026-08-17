@@ -56,9 +56,9 @@ The auditor SHALL apply all three of the following, in the dispatch, by loading 
 
 1. **QUALITY BAR** from the task packet: every must-have present and correct; every must-not-have absent; every red flag checked.
 2. **Spec compliance** — reuse verbatim:
-   `<skills_root>/pocket-review/references/spec-compliance-review.md`
+   `<skills_root>/pocket-development/references/spec-compliance-review.md`
 3. **Code quality** — reuse verbatim:
-   `<skills_root>/pocket-review/references/code-quality-review.md`
+   `<skills_root>/pocket-development/references/code-quality-review.md`
 
 The auditor SHALL emit `stage_1` (spec compliance) and `stage_2` (code quality, including QUALITY BAR and refactor heuristics) into the verdict artifact. The main agent SHALL NOT substitute its own checklist for these files.
 
@@ -170,7 +170,7 @@ The skip stub JSON (verbatim):
 
 Every in-loop audit (and every skip stub, and every BLOCKED outcome) SHALL be written to exactly `<plan_dir>/reviews/<task_id>-review.json`.
 
-The file SHALL conform to `skills/pocket-review/references/review-report-template.md`. It SHALL carry:
+The file SHALL conform to `skills/pocket-development/references/review-report-template.md`. It SHALL carry:
 
 - `task_id`
 - `overall` (`REVIEW_PASS` | `REVIEW_FAIL` | `REVIEW_BLOCKED`)
