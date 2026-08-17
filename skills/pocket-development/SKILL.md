@@ -409,7 +409,7 @@ NEAR END:   [REPEAT: Final commit must land on branch task/<task_id>.
 
 ### Parallel Dispatch
 
-Dispatch ALL tasks in the group in ONE batch — single message containing N parallel Agent calls. Same pattern pocket-review uses for its review subagents.
+Dispatch ALL tasks in the group in ONE batch — single message containing N parallel Agent calls. Same batching the main agent uses when dispatching read-only auditors per `references/two-stage-review.md`.
 
 **Never** dispatch sequentially within a group. Concurrency is the entire point.
 
@@ -467,16 +467,18 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
 [CRITICAL] One task per loop iteration: `git merge` then `log update`, then the
 next task. NEVER merge the whole group first and log afterwards — every
 `log update` would capture the final merge commit, collapsing all tasks onto a
-single `done_sha`. That silently empties pocket-review's per-task diff range
-(`<prev_sha>..<done_sha>`) for the 2nd+ task, so it goes unreviewed. The CLI
+single `done_sha`. That silently empties the `prev_sha..done_sha` diff range
+for the 2nd+ task — the range the phase-level pass diffs per task
+(`references/phase-level-pass.md`) and pocket-closing's owner-map attribution
+depends on — so that content goes unreviewed and misattributed. The CLI
 refuses a duplicate `done_sha` across sibling tasks in a phase
 (`DUPLICATE_DONE_SHA`, exit 1, nothing written). Recover by re-running with
 `--sha <that task's own merge commit>` (find it via `git log --merges
 --oneline`); only for a task that legitimately produced no new commit, pass
-`--allow-duplicate-sha` to record the duplicate anyway (pocket-review emits a
-skip stub for it).
+`--allow-duplicate-sha` to record the duplicate anyway (the main agent writes
+a REVIEW_PASS skip stub for it per `references/two-stage-review.md`).
 
-Merge commit SHA becomes that task's `done_sha` in log.json — **schema stays linear**, pocket-review preflight unchanged.
+Merge commit SHA becomes that task's `done_sha` in log.json — **schema stays linear**, keeping the phase-level pass's per-task diff ranges and pocket-closing's owner-map attribution intact.
 
 ### Cleanup (main agent, after group fully merged + logged)
 
@@ -496,7 +498,7 @@ If ANY task in the group is BLOCKED → NO cleanup of any worktree in that group
 | Lockfile / build artifact race | Each worktree builds independently. Shared caches (pnpm store, cargo target) are project-specific — handle in plan, not skill |
 | `.worktree/` polluting repo | Auto-added to `.gitignore` on first parallel run, auto-removed after merge |
 | Conflict mid-merge | Sequential merge in plan order + `--abort` + structured BLOCKED with file list |
-| log.json schema drift | `done_sha = merge_sha` keeps log linear; pocket-review untouched |
+| log.json schema drift | `done_sha = merge_sha` keeps log linear; phase-level pass diff ranges and pocket-closing's owner-map attribution stay intact |
 | Misclassified parallel/sequential | Caught at Entry Gate item 5 (classification), not here |
 
 ### Sample Flow
