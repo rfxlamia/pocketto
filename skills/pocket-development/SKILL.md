@@ -174,7 +174,6 @@ Before constructing any Pocket Packet, you MUST load the relevant reference file
 | Task/Situation | Mandatory References to Load |
 |----------------|------------------------------|
 | Packet construction | `references/pocket-packet.md`, `references/sandwich-prompt.md` |
-| Task decomposition unclear | `references/task-decomposition.md` |
 | Entry gate fails | `references/entry-gate.md`, `references/iron-laws.md` |
 | Plan has `[parallel: TX]` annotations | `references/entry-gate.md` (classification rules) |
 | Status is BLOCKED/NEEDS_CONTEXT | `references/status-handling.md` |
@@ -195,7 +194,7 @@ In every Pocket Packet, you MUST include a `REFERENCES LOADED` section:
 **Example:**
 ```markdown
 ## REFERENCES LOADED
-references/task-decomposition.md — Guidelines for splitting complex tasks into bounded subtasks.
+references/entry-gate.md — Decision tree for gate pass/fail; Foundation/Parallel-Group/Solo classification rules.
 ```
 
 [CRITICAL] Without this citation, the Pocket Packet is incomplete and cannot proceed to spawn.
