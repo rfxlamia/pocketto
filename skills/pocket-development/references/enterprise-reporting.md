@@ -2,7 +2,7 @@
 
 # Enterprise Reporting (Phase-Completion)
 
-Relocated, in substance unchanged, from `pocket-review`'s former Enterprise mode section (E1–E6). Design decision (Option A): reporting moves to phase-completion inside `pocket-development`; `create-pr` (`skills/create-pr/SKILL.md`) stays a recorder — it creates or discovers a PR and records it in `.pocket-meta.json`, and it has **no** verdict-posting logic. Nothing in this file may be delegated to `create-pr`, and nothing in this file may modify `create-pr`.
+Enterprise reporting runs at phase completion inside `pocket-development`; `create-pr` (`skills/create-pr/SKILL.md`) stays a recorder — it creates or discovers a PR and records it in `.pocket-meta.json`, and it has **no** verdict-posting logic. Nothing in this file may be delegated to `create-pr`, and nothing in this file may modify `create-pr`.
 
 ## Contents
 - [Fail-closed contract](#fail-closed-contract)
@@ -53,9 +53,9 @@ npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --jso
 
 ### No PR found: offer, confirm, then post
 
-If `pr_number` is still empty after both attempts, this is the ordering rule the phase-completion relocation introduces (it replaces the old dead-end STOP that lived in `pocket-review`):
+If `pr_number` is still empty after both attempts, use this phase-completion ordering rule:
 
-1. Offer `create-pr` and await **exactly one** confirmation — the same offer-then-await pattern used for the `pocket-review → pocket-closing` chain, never a silent auto-create:
+1. Offer `create-pr` and await **exactly one** confirmation before the `pocket-closing` handoff — never silently auto-create:
    ```
    Enterprise mode is active but no PR exists for branch '<branch>'.
    Run /pocketto:create-pr <plan_dir> [<phase_file>] to open one and post verdicts?

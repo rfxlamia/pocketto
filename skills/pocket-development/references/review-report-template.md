@@ -1,6 +1,6 @@
 # Review Report Template
 
-> **Note:** `pocket-review` is deprecated as of 3.0.0. This file remains the normative review-report JSON schema; it is now produced by pocket-development's in-loop auditor (see `skills/pocket-development/references/two-stage-review.md` and `references/phase-level-pass.md`), not by pocket-review.
+> **Note:** This file is the normative review-report JSON schema produced by pocket-development's in-loop auditor (see `skills/pocket-development/references/two-stage-review.md` and `references/phase-level-pass.md`).
 
 ## Contents
 - [Schema](#schema)

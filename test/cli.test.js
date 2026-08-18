@@ -1156,7 +1156,7 @@ function gitInitRepo(dir) {
 // Issue #38 (supersedes the #28 warning): when a parallel group is merged in a
 // batch and logged afterwards, every `log update --task` captures the same
 // HEAD (one merge commit), so the 2nd+ task would reuse a sibling's done_sha —
-// which silently empties pocket-review's per-task diff range. The CLI must
+// which silently empties the phase-level pass's per-task diff range. The CLI must
 // refuse the duplicate without writing anything.
 test("log update errors when a task reuses a sibling done_sha (collapsed parallel merge)", {
 	skip: !hasGit(),

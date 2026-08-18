@@ -213,6 +213,10 @@ Status flow: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
 
 Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contract, data, error }` — that skills parse instead of scraping text. Add `--contract <N>` for a version handshake that fails loudly on mismatch rather than emitting output an older skill can't read.
 
+## 3.0.1
+
+Removes lingering references to deprecated skills.
+
 ## Migrating to 3.0.0
 
 Pocketto 3.0.0 introduces the in-loop build cycle: `pocket-development` now runs an audit per task and a phase-level pass before handoff, and — as part of that — **plans started under an older pipeline are refused, not repaired**. `log.json` gains a pipeline-version marker; a log without one (or with a lower one) makes any state-changing CLI command exit non-zero rather than silently continuing on stale assumptions.

@@ -122,7 +122,7 @@ npx -y pocketto-pi log update <plan_dir> <phase_file> \
 - `data.correction.skipped == true` — the commit had no file changes; nothing was recorded. Do not treat this sha as a correction and do not use it in the fan-out.
 - `ok: false` — halt and report the error; do not continue.
 
-`done_sha` is never touched by this command (`cli/commands/log.js` `recordCorrection` never writes `task.done_sha` — it only appends to `phase.corrections`). This is strictly the same append-only machinery `pocket-correction` used; only the caller changes.
+`done_sha` is never touched by this command (`cli/commands/log.js` `recordCorrection` never writes `task.done_sha` — it only appends to `phase.corrections`). This correction path is strictly append-only and never re-pins the original task commit.
 
 ## In-loop fixes are not corrections
 

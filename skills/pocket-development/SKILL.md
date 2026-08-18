@@ -73,7 +73,7 @@ Main agent = **Delegator + Auditor only**. This is non-negotiable. Auditor here 
 | Main agent MUST | Main agent MUST NOT |
 |-----------------|---------------------|
 | Initialize and update pocket log | Write, edit, or create implementation code |
-| Construct Pocket Packets and dispatch subagents | Invoke `pocket-review` as the per-task reviewer — dispatch the in-loop auditor instead |
+| Construct Pocket Packets and dispatch subagents | Invoke a separate per-task review workflow — dispatch the in-loop auditor instead |
 | Run the mechanical gate, then dispatch the read-only auditor | Judge code quality or spec compliance itself |
 | Emit PHASE_COMPLETE handoff | Take over a task because "it's faster to do it myself" |
 
@@ -801,7 +801,7 @@ When delegation pressure threatens to bypass structure:
 
 **Main agent role violations (HARDENED — see [Main Agent Role](#main-agent-role-hardened) section):**
 - Implement code yourself instead of delegating to a subagent
-- Invoke `pocket-review` as the per-task reviewer — per-task review is the in-loop auditor (see `references/two-stage-review.md`)
+- Invoke a separate per-task review workflow — per-task review is the in-loop auditor (see `references/two-stage-review.md`)
 - Mark task DONE in the log without a passing in-loop audit (mechanical gate + read-only auditor)
 - Mark a task DONE without passing `--sha <audited_head>`
 

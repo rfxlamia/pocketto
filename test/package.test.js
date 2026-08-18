@@ -28,6 +28,8 @@ const DELETED_SKILL_PREFIXES = [
 	"skills/pocket-correction/",
 ];
 
+const DEPRECATED_SKILL_NAMES = ["pocket-review", "pocket-correction"];
+
 // Path citations agents are told to load. Line suffixes (`:96-111`) are
 // stripped before lookup. `<skills_root>/…` is the parent of a skill dir.
 const CITATION_RE =
@@ -98,9 +100,16 @@ test("packed package keeps moved review files and drops deprecated skills", () =
 		assert.deepEqual(leaked, [], "deprecated skill paths must not be packed");
 
 		const missing = [];
+		const deprecatedMentions = [];
 		for (const rel of [...files].sort()) {
-			if (!rel.startsWith("skills/") || !rel.endsWith(".md")) continue;
+			if (!rel.endsWith(".md")) continue;
 			const text = readFileSync(path.join(extracted, rel), "utf8");
+			for (const name of DEPRECATED_SKILL_NAMES) {
+				if (text.includes(name)) {
+					deprecatedMentions.push(`${rel} mentions ${name}`);
+				}
+			}
+			if (!rel.startsWith("skills/")) continue;
 			const citations = text.match(CITATION_RE) || [];
 			for (const citation of citations) {
 				const resolved = resolveCitation(citation, rel);
@@ -110,6 +119,11 @@ test("packed package keeps moved review files and drops deprecated skills", () =
 			}
 		}
 		assert.deepEqual(missing, [], "active skill citations must resolve in the pack");
+		assert.deepEqual(
+			deprecatedMentions,
+			[],
+			"published Markdown must not mention deprecated skills",
+		);
 
 		const phasePass = readFileSync(
 			path.join(extracted, "skills/pocket-development/references/phase-level-pass.md"),
