@@ -30,6 +30,24 @@ const DELETED_SKILL_PREFIXES = [
 
 const DEPRECATED_SKILL_NAMES = ["pocket-review", "pocket-correction"];
 const IGNORED_SKILL_SOURCE_NAMES = new Set([".DS_Store", "Thumbs.db"]);
+const PIPELINE_DIAGRAM_LABELS = [
+	"pitching",
+	"grinding",
+	"planning",
+	"structuring",
+	"development",
+	"closing",
+];
+const STANDALONE_DIAGRAM_LABELS = [
+	"pocket-help",
+	"pocket-init",
+	"bug-hunting",
+	"hotfix",
+	"brand-design",
+	"structured-research",
+	"create-pr",
+];
+const ALL_DIAGRAM_LABELS = [...PIPELINE_DIAGRAM_LABELS, ...STANDALONE_DIAGRAM_LABELS];
 
 // Path citations agents are told to load. Line suffixes (`:96-111`) are
 // stripped before lookup. `<skills_root>/…` is the parent of a skill dir.
@@ -200,5 +218,55 @@ test("bundled .skill archives match their source directories", () => {
 				`${archive}: stale content for ${rel}`,
 			);
 		}
+	}
+});
+
+test("pipeline diagram inventory stays aligned across published assets", () => {
+	const readme = readFileSync(path.join(ROOT, "README.md"), "utf8");
+	const svg = readFileSync(path.join(ROOT, "assets/pipeline.svg"), "utf8");
+	const drawing = JSON.parse(
+		readFileSync(path.join(ROOT, "assets/pipeline.excalidraw"), "utf8"),
+	);
+
+	const svgLabels = [...svg.matchAll(/<text class="lbl"[^>]*>([^<]+)<\/text>/g)]
+		.map((match) => match[1])
+		.sort();
+	assert.deepEqual(svgLabels, [...ALL_DIAGRAM_LABELS].sort(), "SVG skill inventory differs");
+	assert.match(svg, />13 skills total[^<]*<\/text>/, "SVG total must be 13");
+
+	const activeElements = drawing.elements.filter((element) => !element.isDeleted);
+	const drawingIds = new Set(activeElements.map((element) => element.id));
+	const drawingLabels = activeElements
+		.filter((element) => element.type === "text" && element.containerId)
+		.map((element) => element.text.split("\n")[0].replace(/^\d+\.\s*/, ""))
+		.sort();
+	assert.deepEqual(
+		drawingLabels,
+		[...ALL_DIAGRAM_LABELS].sort(),
+		"Excalidraw skill inventory differs",
+	);
+	assert.ok(
+		activeElements.some(
+			(element) => element.type === "text" && element.text.startsWith("13 skills total"),
+		),
+		"Excalidraw total must be 13",
+	);
+
+	for (const element of activeElements) {
+		for (const id of [
+			element.containerId,
+			element.frameId,
+			element.startBinding?.elementId,
+			element.endBinding?.elementId,
+			...(element.boundElements || []).map((bound) => bound.id),
+		].filter(Boolean)) {
+			assert.ok(drawingIds.has(id), `${element.id} references missing element ${id}`);
+		}
+	}
+
+	const alt = readme.match(/<img src="assets\/pipeline\.svg" alt="([^"]+)"/)?.[1];
+	assert.ok(alt, "README pipeline image must have alt text");
+	for (const label of ALL_DIAGRAM_LABELS) {
+		assert.ok(alt.includes(label), `README pipeline alt text missing ${label}`);
 	}
 });

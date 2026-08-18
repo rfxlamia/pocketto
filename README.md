@@ -25,7 +25,7 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 13 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work. Working in a team? Opt into [Pocket Enterprise](#pocket-enterprise-opt-in) and the same pipeline tracks itself on GitHub — issues, PRs, and review verdicts.
 
 <p align="center">
-  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development (in-loop audit + phase-level pass) → closing, plus standalone skills (pocket-help, bug-hunting, hotfix, brand-design, structured-research)" width="100%">
+  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development (in-loop audit + phase-level pass) → closing, plus standalone skills (pocket-help, pocket-init, bug-hunting, hotfix, brand-design, structured-research, create-pr)" width="100%">
 </p>
 
 ## Install
