@@ -36,7 +36,7 @@ The Entry Gate is a mandatory 6-question checkpoint before any subagent spawn.
 6. VERIFICATION DEFINED?
    ├── Know exact criteria for "done"?
    ├── Can write 3-5 verification checklist items?
-   └── Have review strategy (explore reviewer plan)?
+   └── Verification criteria specific enough for the in-loop auditor to judge? (see references/two-stage-review.md)
 ```
 
 ## Decision Matrix

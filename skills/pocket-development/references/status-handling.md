@@ -6,23 +6,14 @@ Controller responses to each subagent status.
 
 | Status | Meaning | Controller Action |
 |--------|---------|-------------------|
-| **DONE** | Task complete, ready for review | Proceed to Stage 1 |
+| **DONE** | Task complete, ready for review | Mechanical gate, then the read-only auditor — see references/two-stage-review.md |
 | **DONE_WITH_CONCERNS** | Complete but flagged doubts | Read concerns, assess risk |
 | **NEEDS_CONTEXT** | Cannot proceed, needs info | Provide context, re-dispatch |
 | **BLOCKED** | Cannot complete task | Categorize blocker, fix, re-dispatch |
 
 ## Status: DONE
 
-**Trigger:** Implementer reports task complete.
-
-**Controller Action:**
-```
-1. Read implementer report
-2. Proceed to Stage 1: Spec Compliance review
-3. Do NOT trust report - verify via explore reviewer
-```
-
-**Next:** Spawn explore agent for Stage 1.
+DONE handling — the mechanical gate, the read-only auditor dispatch, severity ladder, round budget, and SHA pinning — is fully specified in `references/two-stage-review.md`. SKILL.md's citation table routes this file only for BLOCKED/NEEDS_CONTEXT status handling; DONE_WITH_CONCERNS guidance is below.
 
 ## Status: DONE_WITH_CONCERNS
 
@@ -44,7 +35,7 @@ Controller responses to each subagent status.
    - Re-dispatch to address
 4. If observation only:
    - Note for later
-   - Proceed to Stage 1
+   - Proceed to the mechanical gate, then the auditor
 ```
 
 **Decision Matrix:**

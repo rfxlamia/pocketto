@@ -1,6 +1,6 @@
 {
   "name": "pocketto-pi",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows for Pi.",
   "keywords": [
     "pi-package",
@@ -36,7 +36,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/cli.test.js",
+    "test": "node --test test/cli.test.js test/package.test.js",
     "prepublishOnly": "echo 'Publishing pocketto to npm...'"
   },
   "pi": {
