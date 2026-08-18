@@ -270,3 +270,54 @@ test("pipeline diagram inventory stays aligned across published assets", () => {
 		assert.ok(alt.includes(label), `README pipeline alt text missing ${label}`);
 	}
 });
+
+function readReviewReportTemplate() {
+	return readFileSync(
+		path.join(
+			ROOT,
+			"skills/pocket-development/references/review-report-template.md",
+		),
+		"utf8",
+	);
+}
+
+test("review report introduction names the canonical per-task artifact", () => {
+	const template = readReviewReportTemplate();
+	const introduction = template.slice(0, template.indexOf("## Schema"));
+	assert.match(introduction, /reviews\/<task_id>-review\.json/);
+	assert.doesNotMatch(introduction, /reviews\/<task_id>-cycle-<N>\.json/);
+});
+
+test("REVIEW_BLOCKED schema and example require blocked_category", () => {
+	const template = readReviewReportTemplate();
+	const schemaSource = template.match(/## Schema\s+```json\n([\s\S]*?)\n```/)?.[1];
+	assert.ok(schemaSource, "review report template must embed a JSON Schema");
+	const schema = JSON.parse(schemaSource);
+	assert.deepEqual(schema.properties.blocked_category, {
+		type: "string",
+		enum: ["audit-failed", "auditor-unavailable"],
+	});
+	assert.ok(
+		(schema.allOf || []).some(
+			(rule) =>
+				rule.if?.properties?.overall?.const === "REVIEW_BLOCKED" &&
+				rule.if?.required?.includes("overall") &&
+				rule.then?.required?.includes("blocked_category"),
+		),
+		"REVIEW_BLOCKED artifacts must require blocked_category",
+	);
+
+	const blockedExample = template.match(
+		/## Example: REVIEW_BLOCKED\s+```json\n([\s\S]*?)\n```/,
+	)?.[1];
+	assert.ok(blockedExample, "review report template must include a REVIEW_BLOCKED example");
+	assert.ok(JSON.parse(blockedExample).blocked_category, "blocked example needs its category");
+});
+
+test("empty-diff skip stub is attributed to the main agent", () => {
+	const template = readReviewReportTemplate();
+	assert.match(
+		template,
+		/Written by the main agent during the in-loop empty-diff path/,
+	);
+});

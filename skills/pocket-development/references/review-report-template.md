@@ -10,7 +10,7 @@
 - [File Naming](#file-naming)
 - [Write Location](#write-location)
 
-JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.json`.
+JSON schema for review report artifact written to `reviews/<task_id>-review.json`.
 
 ## Schema
 
@@ -136,6 +136,10 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
       "type": "string",
       "enum": ["REVIEW_PASS", "REVIEW_FAIL", "REVIEW_BLOCKED"]
     },
+    "blocked_category": {
+      "type": "string",
+      "enum": ["audit-failed", "auditor-unavailable"]
+    },
     "fix_instructions": {
       "type": "string",
       "description": "Human-readable fix instructions. Empty if PASS."
@@ -152,7 +156,20 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
       "type": "string",
       "description": "The newest commit SHA whose changes are covered by this review. On first cycle: task.done_sha. On re-review: max-by-commit-time of done_sha and all correction SHAs attributed to this task. pocket-closing uses exact-SHA match against latest_owned_sha(T) — this field is the exact-match anchor."
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "overall": { "const": "REVIEW_BLOCKED" }
+        },
+        "required": ["overall"]
+      },
+      "then": {
+        "required": ["blocked_category"]
+      }
+    }
+  ]
 }
 ```
 
@@ -271,6 +288,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
     "assessment": "N/A"
   },
   "overall": "REVIEW_BLOCKED",
+  "blocked_category": "audit-failed",
   "fix_instructions": "ESCALATE: Token expiry check failed 2 cycles. Implementer consistently misses error handling. Recommend human review of error handling approach or task split.",
   "loop_info": {
     "current_cycle": 3,
@@ -283,7 +301,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-cycle-N.jso
 
 ## Example: REVIEW_PASS (skip stub — no file changes)
 
-Written by pocket-development's in-loop auditor during its phase-level pass preflight for any `DONE + done_sha` task whose SHA range contains no file changes. No subagent is dispatched for these tasks.
+Written by the main agent during the in-loop empty-diff path for any `DONE + done_sha` task whose SHA range contains no file changes. No subagent is dispatched for these tasks.
 
 ```json
 {
