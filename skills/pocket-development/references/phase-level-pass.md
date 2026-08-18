@@ -103,7 +103,7 @@ A clean pass (zero findings on round 1, or zero findings remaining after a fix r
 
 Every phase-level fix is recorded as an append-only correction. `done_sha` for every task NEVER moves — a phase-level fix never re-pins any task's `done_sha`.
 
-Each fix SHALL be exactly one commit containing only the source files being fixed — never `log.json`. The implementer is instructed to stage files by name (`git add <file1> <file2>`, never `git add -A` / `git add .`), the same commit-hygiene requirement `pocket-correction` enforces today.
+Each fix SHALL be exactly one commit containing only the source files being fixed — never `log.json`. The implementer is instructed to stage files by name (`git add <file1> <file2>`, never `git add -A` / `git add .`).
 
 The main agent SHALL audit the returned commit before recording it: `git show --stat <sha>` must not list `log.json`. If it does, the commit is **rejected** — no correction entry is recorded for that sha — and the implementer is re-dispatched with explicit staging instructions (stage only the named source files; exclude or stash `log.json`).
 
