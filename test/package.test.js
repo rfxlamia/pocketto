@@ -29,6 +29,7 @@ const DELETED_SKILL_PREFIXES = [
 ];
 
 const DEPRECATED_SKILL_NAMES = ["pocket-review", "pocket-correction"];
+const IGNORED_SKILL_SOURCE_NAMES = new Set([".DS_Store", "Thumbs.db"]);
 
 // Path citations agents are told to load. Line suffixes (`:96-111`) are
 // stripped before lookup. `<skills_root>/…` is the parent of a skill dir.
@@ -50,6 +51,45 @@ function walkFiles(dir) {
 		}
 	}
 	return out;
+}
+
+function skillSourcePaths(skillDir) {
+	return walkFiles(skillDir)
+		.map((full) => posix(path.relative(skillDir, full)))
+		.filter((rel) => !rel.endsWith(".skill"))
+		.filter((rel) =>
+			rel.split("/").every((part) =>
+				!IGNORED_SKILL_SOURCE_NAMES.has(part) && part !== "__MACOSX"
+			),
+		)
+		.sort();
+}
+
+function skillArchivePaths(archive) {
+	let output;
+	try {
+		output = execFileSync("unzip", ["-Z1", archive], { encoding: "utf8" });
+	} catch (error) {
+		if (error.code === "ENOENT") {
+			assert.fail("unzip executable is required to validate .skill archives");
+		}
+		throw error;
+	}
+
+	const entries = output.split(/\r?\n/).filter(Boolean);
+	const seen = new Set();
+	for (const entry of entries) {
+		assert.equal(path.posix.isAbsolute(entry), false, `${archive}: absolute ZIP entry ${entry}`);
+		assert.equal(entry.includes("\\"), false, `${archive}: backslash in ZIP entry ${entry}`);
+		assert.equal(
+			entry.split("/").includes(".."),
+			false,
+			`${archive}: parent traversal in ZIP entry ${entry}`,
+		);
+		assert.equal(seen.has(entry), false, `${archive}: duplicate ZIP entry ${entry}`);
+		seen.add(entry);
+	}
+	return entries.sort();
 }
 
 function packAndExtract() {
@@ -136,5 +176,29 @@ test("packed package keeps moved review files and drops deprecated skills", () =
 		);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("bundled .skill archives match their source directories", () => {
+	const archives = walkFiles(path.join(ROOT, "skills"))
+		.filter((full) => full.endsWith(".skill"))
+		.sort();
+	assert.ok(archives.length > 0, "expected at least one bundled .skill archive");
+
+	for (const archive of archives) {
+		const skillDir = path.dirname(archive);
+		const expected = skillSourcePaths(skillDir);
+		const actual = skillArchivePaths(archive);
+		assert.deepEqual(actual, expected, `${archive}: ZIP file manifest differs from source`);
+
+		for (const rel of expected) {
+			const archived = execFileSync("unzip", ["-p", archive, rel]);
+			const source = readFileSync(path.join(skillDir, rel));
+			assert.equal(
+				archived.equals(source),
+				true,
+				`${archive}: stale content for ${rel}`,
+			);
+		}
 	}
 });
