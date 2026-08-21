@@ -54,8 +54,8 @@ Run ALL steps before changing any state. Failure in steps 1–3 → `CLOSE_BLOCK
 ### Step 1: Resolve plan_dir and target phases
 
 ```text
-If invoked with a file path → plan_dir = parent dir, target = that phase file
-If invoked with a dir path  → plan_dir = dir, target = every phase in log.json
+If invoked with a file path → if parent dir is 'execution-plan', plan_dir = grandparent dir; else plan_dir = parent dir; target = that phase file
+If invoked with a dir path  → if dir ends with 'execution-plan', plan_dir = parent dir; else plan_dir = dir; target = every phase in log.json
 ```
 
 Also derive `spec_dir` (used by the enterprise reads in E2 and E5), mirroring create-pr:

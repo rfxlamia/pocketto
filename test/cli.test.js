@@ -896,6 +896,95 @@ test("structure --dry-run surfaces execution flow without writing files", () => 
 	assert.equal(existsSync(path.join(dir, "execution-plan")), false);
 });
 
+test("splitPhases chunks 7 independent tasks into 2 phases", () => {
+	const dir = tmp();
+	const SEVEN_INDEPENDENT = `# EXECUTION PLAN — Seven Independent
+
+**Date:** 2026-08-20
+**Spec:** x.md
+
+## Pocket Packets
+
+---
+
+### Task 1: T1 [prereq]
+body
+---
+### Task 2: T2 [prereq]
+body
+---
+### Task 3: T3 [prereq]
+body
+---
+### Task 4: T4 [prereq]
+body
+---
+### Task 5: T5 [prereq]
+body
+---
+### Task 6: T6 [prereq]
+body
+---
+### Task 7: T7 [prereq]
+body
+
+## Plan Summary
+`;
+	const plan = writePlan(dir, SEVEN_INDEPENDENT);
+	const env = json(["structure", plan, "--json"]);
+	assert.equal(env.ok, true);
+	assert.equal(env.data.action, "split");
+	assert.equal(env.data.taskCount, 7);
+	assert.equal(env.data.phaseCount, 2);
+	assert.deepEqual(env.data.phases.map(p => p.tasks.length), [4, 3]);
+});
+
+test("structure refuses to re-generate layout for IN_PROGRESS plan when source plan changed without --force", () => {
+	const dir = tmp();
+	const plan = writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", plan]);
+	run(["log", "init", dir]);
+
+	// Modify source plan
+	writeFileSync(plan, NINE_TASK_PLAN + "\n<!-- modification -->\n");
+
+	// Running structure without --force should fail
+	const res = run(["structure", plan, "--json"], { expectFail: true });
+	const env = JSON.parse(res.stdout.trim());
+	assert.equal(env.ok, false);
+	assert.equal(env.error.code, "ACTIVE_PLAN_SOURCE_CHANGED");
+
+	// With --force it succeeds
+	const forceRes = json(["structure", plan, "--force", "--json"]);
+	assert.equal(forceRes.ok, true);
+});
+
+test("structure and log.js handle custom/non-default source plan basenames (auth-plan.md)", () => {
+	const dir = tmp();
+	const customPlanPath = path.join(dir, "auth-plan.md");
+	writeFileSync(customPlanPath, SMALL_PLAN);
+
+	const env = json(["structure", customPlanPath, "--json"]);
+	assert.equal(env.ok, true);
+	assert.equal(env.data.action, "single");
+
+	const logRes = json(["log", "init", dir, "--json"]);
+	assert.equal(logRes.ok, true);
+	assert.equal(logRes.data.phases[0].tasks.length, 2);
+});
+
+test("resolvePlanDir in log.js resolves nested execution-plan/ directory to parent planDir", () => {
+	const dir = tmp();
+	writePlan(dir, SMALL_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	run(["log", "init", dir]);
+
+	const nestedDir = path.join(dir, "execution-plan");
+	const upd = json(["log", "update", nestedDir, "index.md", "DONE", "--task", "T1", "--json"]);
+	assert.equal(upd.ok, true);
+	assert.equal(upd.data.newStatus, "DONE");
+});
+
 test("structure exposes the depth-based execution flow for split plans", () => {
 	const dir = tmp();
 	const plan = writePlan(dir, NINE_TASK_PLAN);

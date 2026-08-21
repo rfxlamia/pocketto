@@ -47,10 +47,10 @@ GATE 3: Design Decision section must be present in spec.
 GATE 4: Spec Reviewer must APPROVE before Test-Architect runs.
         Issues Found → fix plan, re-run reviewer. Do not skip.
 
-GATE 5: User must approve the final plan before ANY downstream handoff —
-        pocket-structuring (split, ≥7 tasks) OR pocket-development (passthrough, ≤6 tasks).
+GATE 5: User must approve the final plan before ANY downstream handoff.
+        All plans hand off to pocket-structuring (which generates the execution-plan/ index and task files).
         Running `structure --dry-run` is validation only and never authorizes a handoff.
-        Do not invoke either skill before the user explicitly approves.
+        Do not invoke pocket-structuring before the user explicitly approves.
 ```
 
 ---
@@ -504,37 +504,23 @@ Parse the JSON envelope — do not scrape prose:
 
 ### Step 3: User Approval Gate (branch-aware)
 
-Present the result, showing the execution flow and the route the dry-run selected:
+Present the result, showing the execution flow and the route:
 
-- **Passthrough (`data.action == "passthrough"`, ≤6 tasks):**
-  > "Plan complete — N tasks, TDD-structured, spec-reviewed, tests designed.
-  > Saved to docs/pocket/plans/…
-  > Execution flow: {data.executionFlow}
-  > N tasks (≤6) — no phase-splitting needed. Ready to hand off directly to pocket-development?"
-
-- **Split (`data.action == "split"`, ≥7 tasks):**
-  > "Plan complete — N tasks, TDD-structured, spec-reviewed, tests designed.
-  > Saved to docs/pocket/plans/…
-  > Execution flow: {data.executionFlow}
-  > Dependency order shown is recommended — pocket-structuring enforces phase sequencing.
-  > N tasks (≥7) — ready to hand off to pocket-structuring for phasing?"
+> "Plan complete — N tasks, TDD-structured, spec-reviewed, tests designed.
+> Saved to docs/pocket/plans/…
+> Execution flow: {data.executionFlow}
+> Ready to hand off to pocket-structuring for execution index generation?"
 
 Wait for confirmation. Apply any changes requested (re-run Step 2 if the plan changed).
 
-### Step 4: Route to exactly one target (MANDATORY)
+### Step 4: Route to pocket-structuring (MANDATORY)
 
-**DO NOT STOP AFTER USER APPROVAL.** Route on `data.action` — invoke exactly one skill:
+**DO NOT STOP AFTER USER APPROVAL.** Invoke `pocket-structuring` with:
+- Execution plan path: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
+- Task count (from Phase 3)
+- Spec file path
 
-- **`passthrough`** → invoke the `pocket-development` skill (use the Skill tool: `pocket-development`)
-  directly with the flat plan `docs/pocket/plans/{date}-{slug}/execution-plan.md`. Do not invoke
-  pocket-structuring — there are no phases to split.
-- **`split`** → invoke the `pocket-structuring` skill (use the Skill tool: `pocket-structuring`) with:
-  - Execution plan path: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
-  - Task count (from Phase 3)
-  - Spec file path
-
-  pocket-structuring re-parses the plan from disk and writes the phase files, so any edit made
-  between approval and structuring is re-validated there (self-healing).
+pocket-structuring re-parses the plan from disk and decomposes it into `execution-plan/index.md` + per-task files.
 
 ---
 

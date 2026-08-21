@@ -40,14 +40,14 @@ Two kinds of skills:
 ### pocket-structuring
 - **What:** Sequences execution for **split (≥7-task)** plans. Runs a CLI (`npx pocketto-pi structure`) that counts tasks and decides: passthrough or phase-split. The CLI counts exactly — never estimate.
 - **Input:** A completed execution plan from pocket-planning.
-- **Output:** Either nothing extra (passthrough), or a set of bounded phase files (`execution-plan-phase-N.md`).
+- **Output:** Execution index (`execution-plan/index.md`), per-task files (`execution-plan/tasks/T*-*.md`), and phase manifests (`execution-plan/phase-N.md`) if multi-phase.
 - **Handoff:** ≤6 tasks → invokes `pocket-development` directly with the flat plan. ≥7 tasks → hands phase files to `pocket-development` **one at a time**, gating each phase's completion before the next.
 - **Use when:** pocket-planning routed a ≥7-task (split) plan here, or a user invokes it directly (any size — ≤6 passes straight through to pocket-development).
 - **Skip when:** Never skip for ≥7-task plans. Bypass requires the exact phrase `OVERRIDE: skip structuring`.
 
 ### pocket-development
 - **What:** Precise subagent delegation, task-by-task. Main agent is **delegator + auditor only** — it never writes implementation code. Every spawn requires a Pocket Packet (the contract). Enforces 6 iron laws and an entry gate; after each implementer reports DONE it runs a mechanical gate (git log + tests + DELIVERABLE) then dispatches a read-only auditor subagent for the in-loop audit (spec compliance + code quality). Once every task in the phase is DONE it dispatches a phase-level pass over the whole phase — one read-only subagent over every task's diff range and packet — and, for any `REVIEW_FAIL` finding, delegates and records an append-only fix (never writes the fix itself). Supports parallel groups via git worktrees.
-- **Input:** A flat plan (`execution-plan.md`, Type A) or a phase file (`execution-plan-phase-N.md`, Type B).
+- **Input:** Execution index (`execution-plan/index.md`, Type A) or a phase file (`execution-plan/phase-N.md`, Type B).
 - **Output:** Committed, audited code, per-task review JSON (`<plan_dir>/reviews/<task>-review.json`), task statuses tracked in `log.json` via the CLI.
 - **Handoff:** Emits a `PHASE_COMPLETE` handoff message naming `pocket-closing` as the user-triggered next step. Never auto-chains to it — the user always invokes `pocket-closing` directly.
 - **Use when:** A plan/phase is ready and tasks are mostly independent; "execute plan", "delegate tasks", "dispatch subagents".

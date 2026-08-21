@@ -25,7 +25,7 @@ Examples:
 
 ```text
 /pocketto:create-pr docs/pocket/plans/2026-06-09-github-trace-loop/
-/pocketto:create-pr docs/pocket/plans/2026-06-09-github-trace-loop/ execution-plan-phase-1.md
+/pocketto:create-pr docs/pocket/plans/2026-06-09-github-trace-loop/ execution-plan/phase-1.md
 ```
 
 - `<plan_dir>` — directory containing `log.json` and execution plan file(s).
