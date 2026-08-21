@@ -867,6 +867,86 @@ test("structure splits a 9-task plan into execution-plan/ index, phase files, an
 	assert.equal(env.data.phaseCount, 3);
 });
 
+test("structure preserves non-default source plan path and log init recovers tasks", () => {
+	const dir = tmp();
+	const planPath = path.join(dir, "auth-plan.md");
+	writeFileSync(planPath, NINE_TASK_PLAN);
+
+	run(["structure", planPath]);
+
+	const indexContent = readFileSync(
+		path.join(dir, "execution-plan", "index.md"),
+		"utf8",
+	);
+	assert.match(indexContent, /\*\*Source Plan:\*\* \.\.\/auth-plan\.md/);
+
+	const taskFiles = readdirSync(path.join(dir, "execution-plan", "tasks"));
+	const t1Content = readFileSync(
+		path.join(dir, "execution-plan", "tasks", taskFiles.find((f) => f.startsWith("T1-"))),
+		"utf8",
+	);
+	assert.match(t1Content, /\*\*Source plan:\*\* \.\.\/\.\.\/auth-plan\.md/);
+
+	run(["log", "init", dir]);
+	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.equal(log.phases[0].tasks.length, 4);
+
+	const env = json([
+		"log",
+		"update",
+		dir,
+		"execution-plan/phase-1.md",
+		"DONE",
+		"--task",
+		"T1",
+		"--json",
+	]);
+	assert.equal(env.ok, true);
+	assert.equal(env.data.newStatus, "DONE");
+});
+
+test("log init migration normalizes legacy phase.file to execution-plan layout", () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", path.join(dir, "execution-plan.md")]);
+
+	const marked = {
+		header: {
+			plan_dir: dir,
+			plan_type: "phased",
+			status: "IN_PROGRESS",
+			date_started: "2026-01-01",
+			date_completed: null,
+			pipeline: version.PIPELINE,
+		},
+		phases: [
+			{ order: 1, file: "execution-plan-phase-1.md", status: "WAITING" },
+			{ order: 2, file: "execution-plan-phase-2.md", status: "WAITING" },
+			{ order: 3, file: "execution-plan-phase-3.md", status: "WAITING" },
+		],
+	};
+	writeFileSync(
+		path.join(dir, "log.json"),
+		JSON.stringify(marked, null, 2) + "\n",
+	);
+
+	run(["log", "init", dir]);
+	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.equal(log.phases[0].file, "execution-plan/phase-1.md");
+	assert.equal(log.phases[0].tasks.length, 4);
+
+	const env = json([
+		"log",
+		"update",
+		dir,
+		"execution-plan/phase-1.md",
+		"REVIEW",
+		"--json",
+	]);
+	assert.equal(env.ok, true);
+	assert.equal(env.data.phaseFile, "execution-plan/phase-1.md");
+});
+
 test("structure decomposes plans below 7 tasks into execution-plan/index.md and tasks/ without phase-*.md", () => {
 	const dir = tmp();
 	const plan = writePlan(dir, SMALL_PLAN);

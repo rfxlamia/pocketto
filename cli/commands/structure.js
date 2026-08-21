@@ -5,7 +5,7 @@
 
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { readFileSync, existsSync, writeFileSync, mkdirSync, rmSync, renameSync } = require('node:fs');
+const { readFileSync, existsSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, renameSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 
 const THRESHOLD = 7;
@@ -166,7 +166,7 @@ function splitPhases(tasks, depths) {
 
 // ─── RENDERERS ──────────────────────────────────────────────────────────────
 
-function renderIndexFile(plan, tasks, phaseGroups, executionFlow) {
+function renderIndexFile(plan, tasks, phaseGroups, executionFlow, sourcePlanRel) {
   const totalPhases = phaseGroups.length;
   const totalTasks = Object.keys(tasks).length;
 
@@ -192,7 +192,7 @@ function renderIndexFile(plan, tasks, phaseGroups, executionFlow) {
 
 **Date:** ${plan.date}
 **Spec:** ${plan.spec}
-**Source Plan:** ../execution-plan.md
+**Source Plan:** ${sourcePlanRel}
 **source-sha256:** ${plan.sha256}
 **Total Tasks:** ${totalTasks}
 **Total Phases:** ${totalPhases}
@@ -263,13 +263,13 @@ Hand off to ${nextPhaseLabel} ONLY after this gate passes.
 `;
 }
 
-function renderTaskFile(task, phaseNum, tasks) {
+function renderTaskFile(task, phaseNum, sourcePlanRel) {
   const depsStr = task.deps.length ? task.deps.join(', ') : 'none';
   return `# Task ${task.id} — ${task.name}
 
 **Phase:** ${phaseNum}
 **Depends:** ${depsStr}
-**Source plan:** ../../execution-plan.md
+**Source plan:** ${sourcePlanRel}
 
 ---
 
@@ -329,9 +329,10 @@ function run({ planArg, dryRun }) {
   const totalPhases = phaseGroups.length;
 
   const targetExecPlanDir = path.join(planDir, 'execution-plan');
-  const tempExecPlanDir = path.join(planDir, `execution-plan-tmp-${Date.now()}`);
+  const sourcePlanRelFromIndex = path.relative(targetExecPlanDir, planPath).split(path.sep).join('/');
+  const sourcePlanRelFromTasks = path.relative(path.join(targetExecPlanDir, 'tasks'), planPath).split(path.sep).join('/');
 
-  const indexContent = renderIndexFile(plan, tasks, phaseGroups, executionFlow);
+  const indexContent = renderIndexFile(plan, tasks, phaseGroups, executionFlow, sourcePlanRelFromIndex);
   const tasksToRender = [];
   const phasesToRender = [];
 
@@ -353,7 +354,7 @@ function run({ planArg, dryRun }) {
 
     for (const tid of ids) {
       const task = tasks[tid];
-      const taskContent = renderTaskFile(task, phaseNum, tasks);
+      const taskContent = renderTaskFile(task, phaseNum, sourcePlanRelFromTasks);
       tasksToRender.push({
         tid,
         filename: task.filename,
@@ -364,21 +365,33 @@ function run({ planArg, dryRun }) {
   }
 
   if (!dryRun) {
-    mkdirSync(path.join(tempExecPlanDir, 'tasks'), { recursive: true });
-    writeFileSync(path.join(tempExecPlanDir, 'index.md'), indexContent, 'utf8');
+    const tempExecPlanDir = mkdtempSync(path.join(planDir, 'execution-plan-staging-'));
+    let backupDir = null;
+    try {
+      mkdirSync(path.join(tempExecPlanDir, 'tasks'), { recursive: true });
+      writeFileSync(path.join(tempExecPlanDir, 'index.md'), indexContent, 'utf8');
 
-    for (const p of phasesToRender) {
-      writeFileSync(path.join(tempExecPlanDir, p.filename), p.content, 'utf8');
-    }
+      for (const p of phasesToRender) {
+        writeFileSync(path.join(tempExecPlanDir, p.filename), p.content, 'utf8');
+      }
 
-    for (const t of tasksToRender) {
-      writeFileSync(path.join(tempExecPlanDir, 'tasks', t.filename), t.content, 'utf8');
-    }
+      for (const t of tasksToRender) {
+        writeFileSync(path.join(tempExecPlanDir, 'tasks', t.filename), t.content, 'utf8');
+      }
 
-    if (existsSync(targetExecPlanDir)) {
-      rmSync(targetExecPlanDir, { recursive: true, force: true });
+      if (existsSync(targetExecPlanDir)) {
+        backupDir = mkdtempSync(path.join(planDir, 'execution-plan-backup-'));
+        renameSync(targetExecPlanDir, backupDir);
+      }
+      renameSync(tempExecPlanDir, targetExecPlanDir);
+      if (backupDir) rmSync(backupDir, { recursive: true, force: true });
+    } catch (err) {
+      if (backupDir && !existsSync(targetExecPlanDir) && existsSync(backupDir)) {
+        renameSync(backupDir, targetExecPlanDir);
+      }
+      if (existsSync(tempExecPlanDir)) rmSync(tempExecPlanDir, { recursive: true, force: true });
+      throw err;
     }
-    renameSync(tempExecPlanDir, targetExecPlanDir);
   }
 
   human.push('STRUCTURING COMPLETE' + (dryRun ? ' (dry run — no files written)' : ''));

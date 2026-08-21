@@ -36,6 +36,34 @@ function extractTasks(phaseFile) {
   return tasks;
 }
 
+function parseSourcePlanPath(indexContent, planDir) {
+  const m = indexContent.match(/^\*\*Source Plan:\*\* (.+)$/m);
+  if (m) {
+    const resolved = path.normalize(path.join(planDir, 'execution-plan', m[1].trim()));
+    if (existsSync(resolved)) return resolved;
+  }
+  return path.join(planDir, 'execution-plan.md');
+}
+
+function resolveSourcePlanPath(planDir) {
+  const indexFile = path.join(planDir, 'execution-plan', 'index.md');
+  if (existsSync(indexFile)) {
+    return parseSourcePlanPath(readFileSync(indexFile, 'utf8'), planDir);
+  }
+  return path.join(planDir, 'execution-plan.md');
+}
+
+function resolveLegacyPhasePath(planDir, phaseFile) {
+  const norm = path.basename(phaseFile);
+  const phaseMatch = norm.match(/execution-plan-phase-(\d+)\.md$/);
+  if (phaseMatch) {
+    const newFile = `execution-plan/phase-${phaseMatch[1]}.md`;
+    const absPath = path.join(planDir, newFile);
+    if (existsSync(absPath)) return { file: newFile, absPath };
+  }
+  return { file: phaseFile, absPath: path.join(planDir, phaseFile) };
+}
+
 function resolvePlanDir(arg) {
   let st;
   try {
@@ -81,7 +109,7 @@ function collectPlanFiles(planDir) {
           let tasks = extractTasks(absPath);
           if (tasks.length === 0) {
             // Fallback: if phase-N.md only references task files via Markdown links, extract tasks from index.md / source plan
-            const sourcePlanPath = path.join(planDir, 'execution-plan.md');
+            const sourcePlanPath = parseSourcePlanPath(indexContent, planDir);
             const allTasks = extractTasks(sourcePlanPath);
             const phaseContent = readFileSync(absPath, 'utf8');
             const matchTids = [...phaseContent.matchAll(/-\s*\*\*(T\d+):\*\*/g)].map((m) => m[1]);
@@ -115,7 +143,7 @@ function collectPlanFiles(planDir) {
 
       // Fallback extract if regex didn't match table
       if (tasks.length === 0) {
-        const sourcePlanPath = path.join(planDir, 'execution-plan.md');
+        const sourcePlanPath = parseSourcePlanPath(indexContent, planDir);
         const extracted = extractTasks(sourcePlanPath);
         for (const t of extracted) {
           const tf = findTaskFile(t.id);
@@ -271,19 +299,15 @@ function migrateExisting(planDir, logPath) {
   const log = readLogChecked(logPath);
   let migrated = 0;
   for (const phase of log.phases) {
+    const { file: resolvedFile, absPath } = resolveLegacyPhasePath(planDir, phase.file);
+    if (resolvedFile !== phase.file) phase.file = resolvedFile;
+
     if ('tasks' in phase) continue;
-    let absPath = path.join(planDir, phase.file);
-    if (!existsSync(absPath)) {
-      const norm = path.basename(phase.file);
-      const phaseMatch = norm.match(/execution-plan-phase-(\d+)\.md$/);
-      if (phaseMatch) {
-        absPath = path.join(planDir, 'execution-plan', `phase-${phaseMatch[1]}.md`);
-      }
-    }
+
     let tasks = extractTasks(absPath);
     if (!tasks.length && phase.file.includes('phase')) {
-      // Fallback: extract from source execution-plan.md for phase references
-      const sourcePlanPath = path.join(planDir, 'execution-plan.md');
+      // Fallback: extract from source plan for phase references
+      const sourcePlanPath = resolveSourcePlanPath(planDir);
       const allTasks = extractTasks(sourcePlanPath);
       if (existsSync(absPath)) {
         const phaseContent = readFileSync(absPath, 'utf8');
