@@ -123,51 +123,18 @@ These are non-negotiable. Violating any iron law leads to degraded delegation qu
 
 ## Entry Gate Checklist
 
-Before dispatching any subagent, ALL items must pass.
+Run the normative Entry Gate Checklist verbatim from `references/entry-gate.md`.
 
-**Phase File Pre-Gate** (Type B input only — fires before items 1–6):
-```
-0. PHASE FILE CHECK
-   - Input is execution-plan/phase-N.md?
-   - If YES: phase metadata extracted? (N of M, prerequisite, task list, Completion Gate)
-   - Prerequisite phase confirmed COMPLETE?
-   FAIL → STOP. Emit PHASE_BLOCKED with prerequisite reason. Do not proceed to item 1.
-```
+**Summary of Pre-Gate & Items:**
+0. **PHASE FILE CHECK** (Type B input only) — Phase metadata extracted and prerequisite phase confirmed COMPLETE?
+1. **TASK BOUNDED?** — Read task file `execution-plan/tasks/TN-*.md` on demand when starting TN.
+2. **PACKET CONSTRUCTIBLE?** — Can write precise 7-field packet (or 8-field with WORKTREE for PARALLEL GROUP)?
+3. **TASK TYPE CLEAR?** — Implementation vs review/audit.
+4. **PROMPT SANDWICH?** — Critical instruction at START, constraint at END.
+5. **PARALLEL CLASSIFICATION** — Classify as Foundation, Solo, or Parallel Group.
+6. **VERIFICATION DEFINED?** — Exact criteria for "done".
 
-```
-1. TASK BOUNDED?
-   - Scope clear? Deliverables defined? Stop conditions known?
-   - Read task file execution-plan/tasks/TN-*.md on demand when starting TN
-   FAIL → KEEP LOCAL with reason
-
-2. REFERENCES LOADED?
-   - Relevant reference files read and cited in packet?
-   - Packet includes REFERENCES LOADED section?
-   FAIL → LOAD REFERENCES first, then reconstruct packet
-
-3. PACKET CONSTRUCTIBLE?
-   - Can you write a precise 7-field packet?
-   - Must have: specific objective, exact verification criteria
-   FAIL → KEEP LOCAL until task is clearer
-
-4. TASK TYPE CLEAR?
-   - Task = implementation → proceed with packet construction
-   - Task = review/audit → route to review workflow
-   UNCLEAR → Clarify task type before proceeding
-
-5. PROMPT SANDWICH?
-   - Critical instruction at START?
-   - Key constraint at END?
-   - Middle section free of filler/padding?
-   FAIL → Restructure before spawn
-
-6. VERIFICATION DEFINED?
-   - Know exact criteria for "done"?
-   - Can write 3-5 verification checklist items?
-   FAIL → Define before spawn
-
-ANY "NO" → KEEP LOCAL with reason written in task notes
-```
+ANY "NO" → KEEP LOCAL with reason written in task notes.
 
 ## Mandatory Reference Preloading
 

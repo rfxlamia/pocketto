@@ -202,6 +202,29 @@ function splitPhases(tasks, depths) {
       }
     }
   }
+
+  // Post-processing: rebalance trailing phase if < PHASE_MIN and previous phase can share
+  if (phases.length > 1) {
+    const lastIdx = phases.length - 1;
+    if (phases[lastIdx].length < PHASE_MIN) {
+      const prevIdx = lastIdx - 1;
+      const combined = [...phases[prevIdx], ...phases[lastIdx]];
+      if (combined.length <= PHASE_MAX) {
+        phases[prevIdx] = combined;
+        phases.pop();
+      } else {
+        // Find a valid split point that obeys PHASE_MIN <= size <= PHASE_MAX for both
+        let splitPoint = Math.ceil(combined.length / 2);
+        if (splitPoint < PHASE_MIN) splitPoint = PHASE_MIN;
+        if (combined.length - splitPoint < PHASE_MIN) splitPoint = combined.length - PHASE_MIN;
+        if (splitPoint <= PHASE_MAX && (combined.length - splitPoint) <= PHASE_MAX) {
+          phases[prevIdx] = combined.slice(0, splitPoint);
+          phases[lastIdx] = combined.slice(splitPoint);
+        }
+      }
+    }
+  }
+
   return phases;
 }
 
@@ -277,7 +300,7 @@ function renderPhaseFile(phaseIdx, totalPhases, phaseTaskIds, name, tasks, plan,
   return `# ${plan.feature} — ${name} (Phase ${phaseNum} of ${totalPhases})
 
 **Date:** ${plan.date}
-**Original plan:** ${sourceBasename}
+**Original plan:** ../${sourceBasename}
 **Prerequisite:** ${prevReq}
 **Contains tasks:** {${taskIdsStr}}
 **Unlocks next:** ${unlocks}
@@ -354,10 +377,24 @@ function run({ planArg, dryRun, force }) {
 
   // Refusal policy for active execution log on source plan change
   const logJsonPath = path.join(planDir, 'log.json');
-  if (sourceChanged && existsSync(logJsonPath) && !force) {
+  if (sourceChanged && existsSync(logJsonPath)) {
     try {
       const logData = JSON.parse(readFileSync(logJsonPath, 'utf8'));
-      if (logData.header && logData.header.status === 'IN_PROGRESS') {
+      const hasProgress = (logData.phases || []).some((p) =>
+        p.status === 'DONE' ||
+        p.status === 'REVIEW' ||
+        p.status === 'BLOCKED' ||
+        (p.tasks || []).some((t) => t.status === 'DONE' || t.status === 'REVIEW' || t.status === 'BLOCKED' || t.done_sha) ||
+        (p.corrections && p.corrections.length > 0)
+      );
+
+      if (hasProgress && !force) {
+        throw new CliError(
+          'ACTIVE_PLAN_PROGRESS_EXISTS',
+          `Source plan '${sourceBasename}' changed while execution progress exists in '${logJsonPath}' (tasks or phases are DONE/REVIEW/BLOCKED). ` +
+            `Regenerating layout is refused to prevent topology drift. Re-run with --force to override if intentional.`
+        );
+      } else if (logData.header && logData.header.status === 'IN_PROGRESS' && !force) {
         throw new CliError(
           'ACTIVE_PLAN_SOURCE_CHANGED',
           `Source plan '${sourceBasename}' changed while execution log at '${logJsonPath}' is IN_PROGRESS. ` +

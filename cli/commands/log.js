@@ -429,6 +429,13 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
   let human;
   let data;
 
+  if (!taskId && newStatus === 'DONE' && phase.status !== 'REVIEW') {
+    throw new CliError(
+      'INVALID_PHASE_TRANSITION',
+      `Cannot advance phase '${phase.file}' directly from '${phase.status}' to 'DONE'. Phase status must be 'REVIEW' before marking 'DONE'.`
+    );
+  }
+
   if (taskId) {
     const tasks = phase.tasks || [];
     if (!tasks.length) {

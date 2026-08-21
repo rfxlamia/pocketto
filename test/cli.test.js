@@ -845,7 +845,6 @@ test("structure splits a 9-task plan into execution-plan/ index, phase files, an
 	assert.ok(existsSync(path.join(execDir, "index.md")));
 	assert.ok(existsSync(path.join(execDir, "phase-1.md")));
 	assert.ok(existsSync(path.join(execDir, "phase-2.md")));
-	assert.ok(existsSync(path.join(execDir, "phase-3.md")));
 
 	const tasksDir = path.join(execDir, "tasks");
 	assert.ok(existsSync(tasksDir));
@@ -864,7 +863,7 @@ test("structure splits a 9-task plan into execution-plan/ index, phase files, an
 	assert.equal(env.contract, 2);
 	assert.equal(env.data.action, "split");
 	assert.equal(env.data.taskCount, 9);
-	assert.equal(env.data.phaseCount, 3);
+	assert.equal(env.data.phaseCount, 2);
 });
 
 test("structure decomposes plans below 7 tasks into execution-plan/index.md and tasks/ without phase-*.md", () => {
@@ -1048,7 +1047,7 @@ test("log init creates a phased log.json with tasks + SHA tracking field", () =>
 	assert.equal(log.header.plan_type, "phased");
 	assert.equal(log.header.status, "IN_PROGRESS");
 	assert.ok("baseline_sha" in log.header);
-	assert.equal(log.phases.length, 3);
+	assert.equal(log.phases.length, 2);
 	assert.deepEqual(
 		log.phases[0].tasks.map((t) => t.id),
 		["T1", "T2", "T3", "T4"],
@@ -1537,12 +1536,12 @@ test("log close refuses while phases are not DONE, then finalizes when all DONE"
 	const early = run(["log", "close", dir, "--json"], { expectFail: true });
 	assert.equal(JSON.parse(early.stdout.trim()).error.code, "PHASES_NOT_DONE");
 
-	// Mark all phases DONE.
+	// Mark all phases REVIEW then DONE.
 	for (const f of [
 		"execution-plan-phase-1.md",
 		"execution-plan-phase-2.md",
-		"execution-plan-phase-3.md",
 	]) {
+		run(["log", "update", dir, f, "REVIEW"]);
 		run(["log", "update", dir, f, "DONE"]);
 	}
 	const env = json(["log", "close", dir, "--json"]);
@@ -1656,8 +1655,8 @@ test("log update/close accept a plan file argument, not just the directory", () 
 	for (const f of [
 		"execution-plan-phase-1.md",
 		"execution-plan-phase-2.md",
-		"execution-plan-phase-3.md",
 	]) {
+		run(["log", "update", planFile, f, "REVIEW"]);
 		run(["log", "update", planFile, f, "DONE"]);
 	}
 	assert.equal(json(["log", "close", planFile, "--json"]).ok, true);
@@ -1751,8 +1750,8 @@ test("log close is refused on a marker-less log even when every phase is DONE", 
 	for (const f of [
 		"execution-plan-phase-1.md",
 		"execution-plan-phase-2.md",
-		"execution-plan-phase-3.md",
 	]) {
+		run(["log", "update", dir, f, "REVIEW"]);
 		run(["log", "update", dir, f, "DONE"]);
 	}
 	const logPath = stripPipelineMarker(dir);
