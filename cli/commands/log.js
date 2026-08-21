@@ -64,6 +64,22 @@ function resolveLegacyPhasePath(planDir, phaseFile) {
   return { file: phaseFile, absPath: path.join(planDir, phaseFile) };
 }
 
+function attachTaskFiles(planDir, phase) {
+  if (!phase.tasks || !phase.tasks.length) return false;
+  const tasksDir = path.join(planDir, 'execution-plan', 'tasks');
+  if (!existsSync(tasksDir)) return false;
+  let changed = false;
+  for (const t of phase.tasks) {
+    if (t.file) continue;
+    const tFiles = readdirSync(tasksDir).filter((f) => f.startsWith(`${t.id}-`) || f === `${t.id}.md`);
+    if (tFiles.length > 0) {
+      t.file = `execution-plan/tasks/${tFiles[0]}`;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function resolvePlanDir(arg) {
   let st;
   try {
@@ -298,11 +314,18 @@ function warnDuplicateDoneShas(human, duplicateDoneShas) {
 function migrateExisting(planDir, logPath) {
   const log = readLogChecked(logPath);
   let migrated = 0;
+  let enriched = 0;
   for (const phase of log.phases) {
     const { file: resolvedFile, absPath } = resolveLegacyPhasePath(planDir, phase.file);
-    if (resolvedFile !== phase.file) phase.file = resolvedFile;
+    if (resolvedFile !== phase.file) {
+      phase.file = resolvedFile;
+      enriched++;
+    }
 
-    if ('tasks' in phase) continue;
+    if ('tasks' in phase) {
+      if (attachTaskFiles(planDir, phase)) enriched++;
+      continue;
+    }
 
     let tasks = extractTasks(absPath);
     if (!tasks.length && phase.file.includes('phase')) {
@@ -320,12 +343,13 @@ function migrateExisting(planDir, logPath) {
     const taskStatus = ['DONE', 'REVIEW', 'BLOCKED'].includes(phaseStatus) ? phaseStatus : 'WAITING';
     for (const t of tasks) t.status = taskStatus;
     phase.tasks = tasks;
+    attachTaskFiles(planDir, phase);
     migrated++;
   }
 
   const duplicateDoneShas = findDuplicateDoneShas(log);
 
-  if (migrated === 0) {
+  if (migrated === 0 && enriched === 0) {
     const human = [`log.json already exists at ${logPath} — no migration needed.`];
     warnDuplicateDoneShas(human, duplicateDoneShas);
     return {
@@ -337,7 +361,9 @@ function migrateExisting(planDir, logPath) {
   }
 
   writeLog(logPath, log);
-  const human = [`Migrated tasks into existing ${logPath}`];
+  const human = migrated > 0
+    ? [`Migrated tasks into existing ${logPath}`]
+    : [`Updated artifact pointers in existing ${logPath}`];
   for (const phase of log.phases) {
     const ids = (phase.tasks || []).map((t) => t.id).join(', ');
     human.push(`  [${phase.order}] ${phase.file} (${phase.status}) → tasks: ${ids || 'none'}`);
@@ -347,7 +373,7 @@ function migrateExisting(planDir, logPath) {
     command: 'log init',
     exit: 0,
     human,
-    data: { planDir, logPath, migrated: true, phaseCount: log.phases.length, phases: log.phases, duplicateDoneShas },
+    data: { planDir, logPath, migrated: migrated > 0 || enriched > 0, phaseCount: log.phases.length, phases: log.phases, duplicateDoneShas },
   };
 }
 

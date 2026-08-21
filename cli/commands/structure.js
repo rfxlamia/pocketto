@@ -281,6 +281,13 @@ ${task.body}
 `;
 }
 
+function readStoredSourceSha(execPlanDir) {
+  const indexPath = path.join(execPlanDir, 'index.md');
+  if (!existsSync(indexPath)) return null;
+  const m = readFileSync(indexPath, 'utf8').match(/^\*\*source-sha256:\*\* (.+)$/m);
+  return m ? m[1].trim() : null;
+}
+
 // ─── RUN ────────────────────────────────────────────────────────────────────
 
 function run({ planArg, dryRun }) {
@@ -306,6 +313,41 @@ function run({ planArg, dryRun }) {
     );
   }
 
+  if (count < THRESHOLD) {
+    // Validate task structure even for passthrough plans: computeDepths surfaces
+    // dangling [depends:] refs (UNKNOWN_TASK_REF) and cycles (CYCLE_DETECTED)
+    // early, instead of letting them slip through to pocket-development.
+    const depths = computeDepths(tasks);
+    const executionFlow = formatExecutionFlow(tasks, depths);
+    human.push(
+      '',
+      `Execution flow: ${executionFlow}`,
+      '',
+      `Plan has ${count} tasks (<${THRESHOLD}). Pass through to pocket-development directly.`,
+      `File: ${planPath}`,
+    );
+    return {
+      command: 'structure',
+      exit: 0,
+      human,
+      data: {
+        feature: plan.feature,
+        date: plan.date,
+        spec: plan.spec,
+        sha256: plan.sha256,
+        taskCount: count,
+        threshold: THRESHOLD,
+        action: 'passthrough',
+        dryRun: !!dryRun,
+        executionFlow,
+        planFile: planPath,
+        phases: [],
+      },
+    };
+  }
+
+  human.push(`Plan has ${count} tasks (≥${THRESHOLD}). Decomposing into per-task files...`, '');
+
   const depths = computeDepths(tasks);
   const maxDepth = Math.max(...Object.values(depths));
 
@@ -325,7 +367,7 @@ function run({ planArg, dryRun }) {
   const executionFlow = formatExecutionFlow(tasks, depths);
   human.push(`Execution flow: ${executionFlow}`, '');
 
-  const phaseGroups = count < THRESHOLD ? [[...Object.keys(tasks)]] : splitPhases(tasks, depths);
+  const phaseGroups = splitPhases(tasks, depths);
   const totalPhases = phaseGroups.length;
 
   const targetExecPlanDir = path.join(planDir, 'execution-plan');
@@ -362,6 +404,15 @@ function run({ planArg, dryRun }) {
         phaseNum,
       });
     }
+  }
+
+  const previousSha256 = readStoredSourceSha(targetExecPlanDir);
+  const sourcePlanChanged = previousSha256 != null && previousSha256 !== plan.sha256;
+  if (sourcePlanChanged) {
+    human.push(
+      '',
+      `Source plan changed (was ${previousSha256}, now ${plan.sha256}). Regenerating execution-plan/.`,
+    );
   }
 
   if (!dryRun) {
@@ -429,7 +480,7 @@ function run({ planArg, dryRun }) {
       sha256: plan.sha256,
       taskCount: count,
       threshold: THRESHOLD,
-      action: totalPhases > 1 ? 'split' : 'single',
+      action: 'split',
       dryRun: !!dryRun,
       executionFlow,
       phaseCount: totalPhases,
@@ -437,6 +488,8 @@ function run({ planArg, dryRun }) {
       phases: phasesOutput,
       planFile: planPath,
       execPlanDir: targetExecPlanDir,
+      sourcePlanChanged,
+      previousSha256: sourcePlanChanged ? previousSha256 : null,
     },
   };
 }

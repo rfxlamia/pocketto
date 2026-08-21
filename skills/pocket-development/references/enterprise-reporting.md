@@ -35,7 +35,7 @@ This file runs at **phase-completion** in `pocket-development`, after every task
 Derive the meta location the same way `create-pr` and `pocket-closing` do — `.pocket-meta.json` lives under the **spec** directory, not the plan directory:
 
 - `spec_dir` = `docs/pocket/spec/<slug>/` where `<slug>` matches the plan directory basename (e.g. `2026-06-09-github-trace-loop`).
-- `phase_key` = `phase-N` from the phase file name (`execution-plan-phase-N.md` → `phase-N`); flat single-file plan → `phase-1`.
+- `phase_key` = `phase-N` from the phase file basename (`execution-plan/phase-N.md` or legacy `execution-plan-phase-N.md` → `phase-N`); flat single-file plan → `phase-1`.
 
 Read the PR number from the phase-nested path `create-pr` writes:
 

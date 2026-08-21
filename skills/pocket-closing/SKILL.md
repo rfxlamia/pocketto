@@ -31,7 +31,7 @@ Examples:
 ```text
 /pocketto:pocket-closing docs/pocket/plans/2026-06-03-typing-dna/
 /pocketto:pocket-closing docs/pocket/plans/2026-05-28-auth/execution-plan.md
-/pocketto:pocket-closing docs/pocket/plans/2026-05-28-auth/execution-plan-phase-2.md
+/pocketto:pocket-closing docs/pocket/plans/2026-05-28-auth/execution-plan/phase-2.md
 ```
 
 ## Main Agent Role (HARDENED)
@@ -240,7 +240,7 @@ Parse `data.bodyFile` and `data.marker` (`<!-- pocket-tasklist -->`), then upser
 
 ### Step E5: Discover linking PR number
 
-Derive `<phase_key>` from the target phase file name, mirroring create-pr: `phase-N` from the phase file name (`execution-plan-phase-N.md` → `phase-N`); flat single-file plan → `phase-1`. The PR number is written by create-pr at the phase-nested path, so read it there:
+Derive `<phase_key>` from the target phase file basename, mirroring create-pr: `execution-plan/phase-N.md` or legacy `execution-plan-phase-N.md` → `phase-N`; flat single-file plan → `phase-1`. The PR number is written by create-pr at the phase-nested path, so read it there:
 
 ```bash
 npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2

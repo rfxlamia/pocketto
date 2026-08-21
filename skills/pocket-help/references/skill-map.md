@@ -38,10 +38,10 @@ Two kinds of skills:
 - **Skip when:** No spec yet (→ pocket-grinding), or re-running a task already in execution (→ pocket-development directly).
 
 ### pocket-structuring
-- **What:** Sequences execution for **split (≥7-task)** plans. Runs a CLI (`npx pocketto-pi structure`) that counts tasks and decides: passthrough or phase-split. The CLI counts exactly — never estimate.
+- **What:** Sequences execution for **split (≥7-task)** plans. Runs a CLI (`npx pocketto-pi structure`) that counts tasks and decides: passthrough (<7) or indexed decomposition (≥7). The CLI counts exactly — never estimate.
 - **Input:** A completed execution plan from pocket-planning.
-- **Output:** Either nothing extra (passthrough), or a set of bounded phase files (`execution-plan-phase-N.md`).
-- **Handoff:** ≤6 tasks → invokes `pocket-development` directly with the flat plan. ≥7 tasks → hands phase files to `pocket-development` **one at a time**, gating each phase's completion before the next.
+- **Output:** Passthrough (<7): nothing extra. Split (≥7): `execution-plan/index.md` + `execution-plan/tasks/T*-*.md` + optional `execution-plan/phase-N.md`.
+- **Handoff:** ≤6 tasks → pocket-planning invokes `pocket-development` directly with flat `execution-plan.md`. ≥7 tasks → pocket-structuring decomposes, then hands phase manifests to `pocket-development` **one at a time**, gating each phase's completion before the next.
 - **Use when:** pocket-planning routed a ≥7-task (split) plan here, or a user invokes it directly (any size — ≤6 passes straight through to pocket-development).
 - **Skip when:** Never skip for ≥7-task plans. Bypass requires the exact phrase `OVERRIDE: skip structuring`.
 

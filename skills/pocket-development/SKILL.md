@@ -17,7 +17,9 @@ Precise subagent delegation for task-by-task development execution. POCKET ensur
 npx -y pocketto-pi log init "<plan_dir>" --json --contract 2
 ```
 
-No install step, PATH setup, or shell-specific guard — `npx` resolves the cross-platform binary and `log init` is idempotent, so this is safe to run unconditionally every session. Replace `<plan_dir>` with the folder containing your `execution-plan.md` or `execution-plan-phase-N.md` file (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`).
+No install step, PATH setup, or shell-specific guard — `npx` resolves the cross-platform binary and `log init` is idempotent, so this is safe to run unconditionally every session. Replace `<plan_dir>` with the folder containing your plan artifacts (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`). Layout determines which files exist:
+- **Type A (flat):** `execution-plan.md`
+- **Type B/C (structured):** `execution-plan/index.md`, optional `execution-plan/phase-N.md`, and per-task files under `execution-plan/tasks/`
 
 - No `log.json` yet → creates it from the plan files in that directory
 - `log.json` exists but tasks missing → migrates tasks into existing phases (status preserved)
@@ -52,19 +54,39 @@ Have implementation plan?
 pocket-development receives two distinct input formats. Identify which type before proceeding.
 
 **Type A — Flat plan** (`execution-plan.md`)
-- Produced by pocket-planning directly (≤6 tasks) or pocket-structuring pass-through
+- Produced by pocket-planning directly (≤6 tasks) — passthrough, no structuring step
 - No phase metadata in header
+- Read task Pocket Packets directly from this file (`### Task N:` sections under `## Pocket Packets`)
 - Proceed normally through Entry Gate
 
-**Type B — Phase file** (`execution-plan-phase-N.md`)
-- Produced by pocket-structuring for plans with ≥7 tasks
+**Type B — Legacy phase file** (`execution-plan-phase-N.md`)
+- Pre-indexed-layout phased plans (legacy on-disk format)
 - Header contains: `Phase N of M`, `Prerequisite`, `Contains tasks`, `Unlocks next`, `## Phase Completion Gate`
+- Read task Pocket Packets from the phase file body (`### Task N:` sections)
 - **Before any task execution:**
   1. Extract phase metadata from header: Phase N of M, prerequisite status, task list
   2. Confirm `**Prerequisite:** Phase N-1 must be COMPLETE` is satisfied
   3. If prerequisite NOT confirmed COMPLETE → STOP. Report: `PHASE_BLOCKED: Phase N of M | Prerequisite phase not confirmed complete. Verify Phase N-1 gate before proceeding.`
+
+**Type C — Indexed layout** (`execution-plan/` directory)
+- Produced by pocket-structuring for plans with ≥7 tasks
+- Artifacts: `execution-plan/index.md` (read **once** per session), `execution-plan/phase-N.md` (lightweight manifest), `execution-plan/tasks/T*-*.md` (one complete Pocket Packet per task)
+- **`log.json` carries `task.file` pointers** — this is the authoritative path for each task's packet
+- **Before any task execution:**
+  1. Read `execution-plan/index.md` **once** for execution flow, phase summary, and task index — do not re-read for each task
+  2. Open the current phase manifest (`execution-plan/phase-N.md`) for prerequisite/gate metadata only — phase manifests reference tasks via links, they do **not** contain full Pocket Packets
+  3. Confirm phase prerequisite is satisfied (same gate as Type B)
+  4. If prerequisite NOT confirmed COMPLETE → STOP with `PHASE_BLOCKED` (same as Type B)
+- **Per ready task (Type C only):**
+  1. Look up the task in `log.json` and read its `task.file` path (e.g. `execution-plan/tasks/T1-slug.md`)
+  2. Open **only** that task file for Pocket Packet content — never parse packets from the phase manifest or source plan
+  3. Extract the packet from the `### Pocket Packet` section (or the `### Task N:` block) in that task file
+  4. If `task.file` is missing → re-run `log init` to inject pointers, then retry
+
+**Types B and C — phase tracking:**
 - Track "Phase N of M" context throughout execution — surface it in all status reports
 - Terminal step is a structured PHASE_COMPLETE or PHASE_BLOCKED report (see Phase Completion Protocol)
+- Use `execution-plan/phase-N.md` as `<phase_file>` in all `log update` commands (Type C); legacy Type B uses `execution-plan-phase-N.md`
 
 ## Main Agent Role (HARDENED)
 
@@ -123,11 +145,12 @@ These are non-negotiable. Violating any iron law leads to degraded delegation qu
 
 Before dispatching any subagent, ALL items must pass.
 
-**Phase File Pre-Gate** (Type B input only — fires before items 1–6):
+**Phase File Pre-Gate** (Type B or Type C input only — fires before items 1–6):
 ```
 0. PHASE FILE CHECK
-   - Input is execution-plan-phase-N.md?
+   - Input is execution-plan-phase-N.md (Type B) or execution-plan/phase-N.md (Type C)?
    - If YES: phase metadata extracted? (N of M, prerequisite, task list, Completion Gate)
+   - Type C: index.md read once? task.file pointers present in log.json for this phase's tasks?
    - Prerequisite phase confirmed COMPLETE?
    FAIL → STOP. Emit PHASE_BLOCKED with prerequisite reason. Do not proceed to item 1.
 ```
@@ -732,7 +755,7 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns 
 
 ## Phase Completion Protocol
 
-Activates **only for Type B input** (execution-plan-phase-N.md). Runs after all tasks reach DONE/DONE_WITH_CONCERNS and their per-task in-loop audits pass.
+Activates **only for Type B or Type C input** (phased plans). Runs after all tasks reach DONE/DONE_WITH_CONCERNS and their per-task in-loop audits pass.
 
 **Ordering is fixed: dispatch the phase-level pass → record its result → set phase status `REVIEW` → run enterprise reporting (`references/enterprise-reporting.md`).** `PHASE_COMPLETE` may be emitted only after the phase-level pass has recorded its result.
 
