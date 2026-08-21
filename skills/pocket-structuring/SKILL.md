@@ -1,23 +1,19 @@
 ---
 name: pocket-structuring
-description: Bridges pocket-planning and pocket-development for all execution plans. Use when pocket-planning hands off any execution plan. Routes ≤6-task plans as a passthrough to pocket-development; splits ≥7-task plans into phase files. Trigger on "structure plan", "split plan", or when pocket-planning invokes this.
+description: Bridges pocket-planning and pocket-development for all execution plans. Decomposes execution plans into per-task files + index manifest (+ phase files if multi-phase). Trigger on "structure plan", "split plan", or when pocket-planning invokes this.
 ---
 
 # Pocket Structuring
 
-Bridges pocket-planning and pocket-development. Runs a CLI that parses the execution plan, splits it into bounded phase files, then hands off phase files to pocket-development one at a time.
+Bridges pocket-planning and pocket-development. Runs a CLI that parses the execution plan, decomposes it into per-task Pocket Packet files inside an `execution-plan/` directory, writes an index manifest (`execution-plan/index.md`), and generates phase manifests (`execution-plan/phase-N.md`) if multi-phase.
 
-**Core principle:** Large plans executed flat = attention drift + context blowout. Phase boundaries are checkpoints, not ceremony.
-
-**Why this skill is not merged into pocket-planning:** pocket-planning *produces* the plan; pocket-structuring *sequences execution* (phasing + per-phase handoff loop to pocket-development). pocket-planning routes only **split** plans (≥7 tasks) here; passthrough plans (≤6 tasks) go straight to pocket-development. When pocket-structuring **is invoked directly** (e.g. the user runs it by hand), the passthrough handler and the Hard Gate / override protocol still apply for any task count. Collapsing this into pocket-planning would fold execution-orchestration into a planning skill and remove the phase-splitting gate.
+**Core principle:** Large plans executed flat = attention drift + context blowout. Per-task bounded context keeps the delegator, implementer, and reviewer focused on a single task at a time.
 
 ## When to Use
 
-- pocket-planning produced a **split** plan (≥7 tasks) and invoked this skill → CLI splits into bounded phase files
-- User invokes this skill directly for any task count (≥7 → split; ≤6 → CLI passthrough, pocket-development invoked directly, no phase files created)
-- User says "structure the plan", "split into phases", "break this up"
-
-(For ≤6-task plans, pocket-planning hands off straight to pocket-development — it does not route through this skill. The passthrough handler below remains for direct invocation.)
+- pocket-planning produced an execution plan and invoked this skill → CLI decomposes into `execution-plan/index.md` + per-task files
+- User invokes this skill directly for any task count
+- User says "structure the plan", "split into tasks", "break this up"
 
 Do NOT use:
 - Without a completed execution plan from pocket-planning
@@ -25,15 +21,14 @@ Do NOT use:
 ## Hard Gates
 
 ```
-GATE 1: RUN THE CLI FIRST. It counts and decides.
-        data.action == "passthrough" (≤6 tasks) → invoke pocket-development directly.
-        data.action == "split" (≥7 tasks) → present summary, proceed.
-        DO NOT estimate task count — the CLI counts exactly.
+GATE 1: RUN THE CLI FIRST.
+        The CLI decomposes all plans into execution-plan/index.md + execution-plan/tasks/T*-*.md.
+        Phase files (execution-plan/phase-N.md) are generated when total phases > 1.
 
 GATE 2: HARD OVERRIDE PROTOCOL.
-        If any human asks to skip structuring for a ≥7 task plan, respond:
+        If any human asks to skip structuring, respond:
 
-        "Structuring is a hard gate for plans ≥7 tasks. Skipping it
+        "Structuring is required to create per-task files and index manifests. Skipping it
         risks context blowout and attention drift in pocket-development.
         To override: type exactly → OVERRIDE: skip structuring"
 
@@ -44,20 +39,19 @@ GATE 2: HARD OVERRIDE PROTOCOL.
         If override is typed: log it, proceed to pocket-development,
         document the skip in the plan file header.
 
-GATE 3: NO PARTIAL PHASES.
-        Each phase file is complete (full pocket packets, not referenced).
-        The script handles this — do not hand-edit phase files to link out.
+GATE 3: COMPLETE POCKET PACKETS PER TASK.
+        Index and phase manifests reference task files, but every task file (execution-plan/tasks/T*-*.md)
+        must contain a complete, standalone Pocket Packet.
 ```
 
 ## Pressure Countermeasures
 
 | Pressure | What they say | Correct response |
 |----------|--------------|-----------------|
-| Time | "We're urgent, skip phases" | "Script takes 5 seconds. Blowout at task 8 costs hours. OVERRIDE phrase to skip." |
-| Sunk cost | "Plan is already written" | "Plan is the input. Phases are the output. Script is the job." |
+| Time | "We're urgent, skip decomposition" | "Script takes 5 seconds. Context blowout costs hours. OVERRIDE phrase to skip." |
+| Sunk cost | "Plan is already written" | "Plan is the source. Per-task files are generated outputs. Script is the job." |
 | Authority | "I'm making the call, skip it" | "Acknowledged. Override phrase to proceed: OVERRIDE: skip structuring" |
 | User insists | "Just run it flat, I've done it before" | Same override protocol. Verbal insistence ≠ override. |
-| Threshold edge | "It's only 7, practically 6" | "Threshold is ≥7. Count is 7. Structuring runs." |
 
 ---
 
@@ -72,22 +66,22 @@ No install step or PATH setup — `npx` resolves the cross-platform binary. Use 
 The CLI prints a JSON envelope to stdout:
 
 ```json
-{ "ok": true, "command": "structure", "cliVersion": "2.0.0", "contract": 2,
+{ "ok": true, "command": "structure", "cliVersion": "3.0.0", "contract": 2,
   "data": {
-    "action": "split",
+    "feature": "...",
+    "sha256": "...",
     "taskCount": 9,
+    "phaseCount": 3,
     "phases": [
-      { "phase": 1, "name": "...", "tasks": ["T1","T2","T3"], "file": "execution-plan-phase-1.md" }
+      { "phase": 1, "name": "...", "tasks": ["T1","T2","T3"], "file": "execution-plan/phase-1.md" }
     ]
   },
   "error": null }
 ```
 
-Parse `data` — do not scrape prose:
-- `data.action == "passthrough"` (≤6 tasks): invoke `pocket-development` directly with `execution-plan.md`. Do not create phase files.
-- `data.action == "split"` (≥7 tasks): `data.phases[]` gives each phase (`phase`, `name`, `tasks`, `file`). Present the summary and proceed.
+Parse `data` — do not scrape prose.
 
-If `ok == false`: report `error.message` to the user and do not proceed. A `CONTRACT_MISMATCH` means the installed CLI is incompatible with this skill — tell the user to update the pocketto plugin (or pin: `npx -y pocketto-pi@2`).
+If `ok == false`: report `error.message` to the user and do not proceed. A `CONTRACT_MISMATCH` means the installed CLI is incompatible with this skill — tell the user to update the pocketto plugin.
 
 (Omit `--json` for human-readable output when running by hand.)
 
@@ -98,7 +92,7 @@ If `ok == false`: report `error.message` to the user and do not proceed. A `CONT
 Present the script's summary output to the user, then ask:
 
 ```
-Ready to start Phase 1 with pocket-development?
+Ready to start with pocket-development?
 ```
 
 Do not start Phase 1 until the user says yes.
@@ -107,19 +101,18 @@ Do not start Phase 1 until the user says yes.
 
 ## Step 3: Sequential Handoff to pocket-development
 
-1. User approves → invoke `pocket-development` with `execution-plan-phase-1.md`
+1. User approves → invoke `pocket-development` with `execution-plan/index.md` (or `execution-plan/phase-1.md` if multi-phase)
 2. pocket-development completes Phase 1 → it runs its phase-level review pass and sets phase status to `REVIEW` (it never advances a phase beyond `REVIEW` on its own) → **wait for the phase status to reach `REVIEW`**
-3. On `REVIEW`, **halt** — do not invoke the next phase file. Tell the user to run `/pocketto:pocket-closing <plan_dir>/execution-plan-phase-N.md` themselves.
+3. On `REVIEW`, **halt** — do not invoke the next phase. Tell the user to run `/pocketto:pocket-closing <plan_dir>` themselves.
 4. Wait for the user-triggered `pocket-closing` to run and advance the phase from `REVIEW` to `DONE`.
 5. Verify Phase N gate (phase status DONE, all tasks done, tests green, commits exist)
-6. Gate passes → invoke `pocket-development` with `execution-plan-phase-(N+1).md`
+6. Gate passes → invoke `pocket-development` with `execution-plan/phase-(N+1).md`
 7. Repeat until all phases complete
 
 **NEVER start Phase N+1 until Phase N gate is confirmed DONE (set by user-triggered pocket-closing, not merely all tasks DONE).**
 **NEVER treat phase status REVIEW as sufficient to advance — REVIEW is a checkpoint for the user, not a handoff signal.**
-**NEVER hand all phase files simultaneously to pocket-development.**
 
-[CRITICAL] pocket-structuring must never invoke `pocket-closing` itself, anywhere in this flow — it is strictly user-triggered, the same REVIEW → DONE boundary that pocket-development itself already respects.
+[CRITICAL] pocket-structuring must never invoke `pocket-closing` itself, anywhere in this flow — it is strictly user-triggered.
 
 ### Phase Completion Gate
 

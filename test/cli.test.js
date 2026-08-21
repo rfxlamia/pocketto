@@ -834,30 +834,29 @@ function writePlan(dir, content) {
 	return p;
 }
 
-test("structure splits a 9-task plan into 3 phases (human + JSON)", () => {
+test("structure splits a 9-task plan into execution-plan/ index, phase files, and task files", () => {
 	const dir = tmp();
 	const plan = writePlan(dir, NINE_TASK_PLAN);
 
 	const human = run(["structure", plan]).stdout;
 	assert.match(human, /STRUCTURING COMPLETE/);
 
-	const phaseFiles = readdirSync(dir)
-		.filter((f) => /^execution-plan-phase-\d+\.md$/.test(f))
-		.sort();
-	assert.deepEqual(phaseFiles, [
-		"execution-plan-phase-1.md",
-		"execution-plan-phase-2.md",
-		"execution-plan-phase-3.md",
-	]);
+	const execDir = path.join(dir, "execution-plan");
+	assert.ok(existsSync(path.join(execDir, "index.md")));
+	assert.ok(existsSync(path.join(execDir, "phase-1.md")));
+	assert.ok(existsSync(path.join(execDir, "phase-2.md")));
+	assert.ok(existsSync(path.join(execDir, "phase-3.md")));
 
-	// Phase file format invariants.
-	const p1 = readFileSync(path.join(dir, "execution-plan-phase-1.md"), "utf8");
-	assert.match(
-		p1,
-		/^# Auth refactor — Scaffold auth module \(Phase 1 of 3\)$/m,
-	);
-	assert.match(p1, /\*\*Contains tasks:\*\* \{T1, T2, T3, T4\}/);
-	assert.match(p1, /## Phase Completion Gate/);
+	const tasksDir = path.join(execDir, "tasks");
+	assert.ok(existsSync(tasksDir));
+	const taskFiles = readdirSync(tasksDir);
+	assert.equal(taskFiles.length, 9);
+	assert.ok(taskFiles.some((f) => f.startsWith("T1-")));
+
+	// Check task file content
+	const t1Content = readFileSync(path.join(tasksDir, taskFiles.find((f) => f.startsWith("T1-"))), "utf8");
+	assert.match(t1Content, /^# Task T1 — /m);
+	assert.match(t1Content, /### Pocket Packet/);
 
 	const env = json(["structure", plan, "--dry-run", "--json"]);
 	assert.equal(env.ok, true);
@@ -865,42 +864,36 @@ test("structure splits a 9-task plan into 3 phases (human + JSON)", () => {
 	assert.equal(env.contract, 2);
 	assert.equal(env.data.action, "split");
 	assert.equal(env.data.taskCount, 9);
-	assert.deepEqual(
-		env.data.phases.map((p) => p.tasks),
-		[
-			["T1", "T2", "T3", "T4"],
-			["T5", "T6", "T7"],
-			["T8", "T9"],
-		],
-	);
+	assert.equal(env.data.phaseCount, 3);
 });
 
-test("structure passes through plans below the threshold", () => {
+test("structure decomposes plans below 7 tasks into execution-plan/index.md and tasks/ without phase-*.md", () => {
 	const dir = tmp();
 	const plan = writePlan(dir, SMALL_PLAN);
 
 	const env = json(["structure", plan, "--json"]);
-	assert.equal(env.data.action, "passthrough");
+	assert.equal(env.data.action, "single");
 	assert.equal(env.data.taskCount, 2);
-	// No phase files written.
-	assert.equal(
-		readdirSync(dir).some((f) => /phase-\d+/.test(f)),
-		false,
-	);
+	assert.equal(env.data.phaseCount, 1);
+
+	const execDir = path.join(dir, "execution-plan");
+	assert.ok(existsSync(path.join(execDir, "index.md")));
+	// Single phase -> no phase-1.md file
+	assert.equal(existsSync(path.join(execDir, "phase-1.md")), false);
+
+	const tasksDir = path.join(execDir, "tasks");
+	assert.ok(existsSync(tasksDir));
+	assert.equal(readdirSync(tasksDir).length, 2);
 });
 
-test("structure --dry-run surfaces an execution flow for passthrough plans (no files)", () => {
+test("structure --dry-run surfaces execution flow without writing files", () => {
 	const dir = tmp();
 	const plan = writePlan(dir, SMALL_PLAN);
 
 	const env = json(["structure", plan, "--dry-run", "--json"]);
-	assert.equal(env.data.action, "passthrough");
+	assert.equal(env.data.action, "single");
 	assert.equal(env.data.executionFlow, "T1→T2");
-	// Validation is side-effect-free — no phase files written.
-	assert.equal(
-		readdirSync(dir).some((f) => /phase-\d+/.test(f)),
-		false,
-	);
+	assert.equal(existsSync(path.join(dir, "execution-plan")), false);
 });
 
 test("structure exposes the depth-based execution flow for split plans", () => {
@@ -1392,7 +1385,7 @@ test("log init warns about pre-existing duplicate done_sha values", () => {
 	// Re-running init adopts the existing log and surfaces the duplicates.
 	const res = json(["log", "init", dir, "--json"]);
 	assert.deepEqual(res.data.duplicateDoneShas, {
-		"execution-plan-phase-1.md": {
+		"execution-plan/phase-1.md": {
 			"1111111111111111111111111111111111111111": [a.id, b.id],
 		},
 	});
@@ -2516,7 +2509,8 @@ function setupPhasedDone(dir) {
 	run(["structure", path.join(dir, "execution-plan.md")]);
 	gitInitRepo(dir);
 	run(["log", "init", dir]);
-	const phase = "execution-plan.md";
+	const logJson = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	const phase = logJson.phases[0].file;
 	for (const t of ["T1", "T2", "T3"]) {
 		writeFileSync(path.join(dir, `${t.toLowerCase()}.txt`), t);
 		git(dir, ["add", "-A"]);

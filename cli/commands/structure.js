@@ -1,22 +1,29 @@
 'use strict';
 
 // Port of pocket-structure.py — splits a pocket-planning execution plan into
-// bounded phase files. Semantics preserved exactly:
-//   THRESHOLD=7, PHASE_MIN=3, PHASE_MAX=6, depth computation, seam detection,
-//   phase-file format, passthrough (<7 tasks) vs split (>=7).
+// bounded per-task files + index manifest (+ phase manifests if multi-phase).
 
 const path = require('node:path');
-const { readFileSync, existsSync, writeFileSync } = require('node:fs');
+const crypto = require('node:crypto');
+const { readFileSync, existsSync, writeFileSync, mkdirSync, rmSync, renameSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 
 const THRESHOLD = 7;
 const PHASE_MIN = 3;
 const PHASE_MAX = 6;
 
+function slugify(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
 // ─── PARSING ────────────────────────────────────────────────────────────────
 
 function parsePlan(planPath) {
   const text = readFileSync(planPath, 'utf8');
+  const sha256 = crypto.createHash('sha256').update(text, 'utf8').digest('hex');
   const fm = text.match(/^# EXECUTION PLAN — (.+)$/m);
   const dm = text.match(/\*\*Date:\*\* (.+)/);
   const sm = text.match(/\*\*Spec:\*\* (.+)/);
@@ -24,6 +31,7 @@ function parsePlan(planPath) {
     feature: fm ? fm[1].trim() : 'Unknown Feature',
     date: dm ? dm[1].trim() : 'UNKNOWN',
     spec: sm ? sm[1].trim() : 'UNKNOWN',
+    sha256,
     tasks: parseTasks(text),
   };
 }
@@ -54,13 +62,14 @@ function parseTasks(text) {
     body = body.replace(/^\s*---\s*/, '').replace(/\s*---\s*$/, '').trim();
 
     const { deps, parallelTarget } = parseAnnotation(annotation);
-    tasks[tid] = { id: tid, num, name, annotation, deps, parallelTarget, body };
+    const slug = slugify(name);
+    const filename = `${tid}${slug ? '-' + slug : ''}.md`;
+    tasks[tid] = { id: tid, num, name, annotation, deps, parallelTarget, body, slug, filename };
   }
   return tasks;
 }
 
 function parseAnnotation(annotation) {
-  // annotation is the full bracket string, e.g. "[prereq]" or "[depends: T2] [parallel: T3]"
   const brackets = [...annotation.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1].trim());
   let deps = [];
   let parallelTarget = null;
@@ -68,13 +77,10 @@ function parseAnnotation(annotation) {
     if (part === 'prereq') {
       // no-op — no dependencies
     } else if (part.startsWith('depends:')) {
-      // accumulate and deduplicate across multiple [depends:] brackets; filter empty strings
       const incoming = part.slice('depends:'.length).trim().split(',')
         .map((d) => d.trim()).filter(Boolean);
       deps = [...new Set([...deps, ...incoming])];
     } else if (part.startsWith('parallel:')) {
-      // last [parallel:] wins; ignore empty values
-      // when parallel: and depends: both present, computeDepths uses parallelTarget only
       const target = part.slice('parallel:'.length).trim();
       if (target) parallelTarget = target;
     }
@@ -109,11 +115,6 @@ function computeDepths(tasks) {
 
 // ─── EXECUTION FLOW ──────────────────────────────────────────────────────────
 
-// Render the execution order as a compact flow, e.g.
-//   T1→T2,T3,T4(PARALLEL)→T5,T6(PARALLEL)→T7
-// Tasks are grouped by dependency depth. A level with >1 task is marked
-// (PARALLEL) because those tasks share a depth and can run concurrently — this
-// reflects depth co-residence, NOT the presence of a [parallel:] annotation.
 function formatExecutionFlow(tasks, depths) {
   const byDepth = {};
   for (const [tid, d] of Object.entries(depths)) (byDepth[d] ||= []).push(tid);
@@ -146,7 +147,7 @@ function splitPhases(tasks, depths) {
 
     const isLast = i === depthLevels.length - 1;
     if (isLast) {
-      phases.push([...current]); // terminal phase can be < PHASE_MIN
+      phases.push([...current]);
       break;
     }
 
@@ -163,9 +164,58 @@ function splitPhases(tasks, depths) {
   return phases;
 }
 
-// ─── PHASE FILE GENERATION ──────────────────────────────────────────────────
+// ─── RENDERERS ──────────────────────────────────────────────────────────────
 
-function writePhaseFile(phaseIdx, totalPhases, phaseTaskIds, name, tasks, plan, planRef, planDir, dryRun) {
+function renderIndexFile(plan, tasks, phaseGroups, executionFlow) {
+  const totalPhases = phaseGroups.length;
+  const totalTasks = Object.keys(tasks).length;
+
+  let phaseSummarySection = '';
+  if (totalPhases > 1) {
+    const phaseSummaryLines = phaseGroups.map((pTaskIds, idx) => {
+      const pNum = idx + 1;
+      const name = tasks[pTaskIds[0]].name;
+      return `- **Phase ${pNum}:** [phase-${pNum}.md](phase-${pNum}.md) — ${name} (${pTaskIds.join(', ')})`;
+    }).join('\n');
+    phaseSummarySection = `## Phase Summary\n\n${phaseSummaryLines}\n\n---\n\n`;
+  }
+
+  const taskTableRows = Object.values(tasks)
+    .sort((a, b) => a.num - b.num)
+    .map((t) => {
+      const phaseNum = phaseGroups.findIndex((ids) => ids.includes(t.id)) + 1;
+      return `| ${t.id} | ${t.name} | Phase ${phaseNum} | [${t.filename}](tasks/${t.filename}) | ${t.annotation} |`;
+    })
+    .join('\n');
+
+  return `# ${plan.feature} — Execution Index
+
+**Date:** ${plan.date}
+**Spec:** ${plan.spec}
+**Source Plan:** ../execution-plan.md
+**source-sha256:** ${plan.sha256}
+**Total Tasks:** ${totalTasks}
+**Total Phases:** ${totalPhases}
+
+---
+
+## Execution Flow
+
+\`\`\`
+${executionFlow}
+\`\`\`
+
+---
+
+${phaseSummarySection}## Task Index
+
+| Task ID | Name | Phase | Task File | Annotation |
+|---|---|---|---|---|
+${taskTableRows}
+`;
+}
+
+function renderPhaseFile(phaseIdx, totalPhases, phaseTaskIds, name, tasks, plan, planRef) {
   const phaseNum = phaseIdx + 1;
   const prevReq = phaseIdx > 0
     ? `Phase ${phaseIdx} must be COMPLETE — all tests green, all commits created`
@@ -175,20 +225,15 @@ function writePhaseFile(phaseIdx, totalPhases, phaseTaskIds, name, tasks, plan, 
     : 'All phases complete — proceed to final validation';
 
   const taskListLines = phaseTaskIds
-    .map((tid) => `${tid}: ${tasks[tid].name} ${tasks[tid].annotation}`)
-    .join('\n');
-  const taskIdsStr = phaseTaskIds.join(', ');
-
-  const packetsStr = phaseTaskIds
     .map((tid) => {
       const t = tasks[tid];
-      return `### Task ${t.num}: ${t.name} ${t.annotation}\n\n${t.body}`;
+      return `- **${tid}:** ${t.name} ${t.annotation} → [tasks/${t.filename}](tasks/${t.filename})`;
     })
-    .join('\n\n---\n\n');
-
+    .join('\n');
+  const taskIdsStr = phaseTaskIds.join(', ');
   const nextPhaseLabel = phaseIdx + 1 < totalPhases ? `Phase ${phaseIdx + 2}` : '(none — all phases complete)';
 
-  const content = `# ${plan.feature} — ${name} (Phase ${phaseNum} of ${totalPhases})
+  return `# ${plan.feature} — ${name} (Phase ${phaseNum} of ${totalPhases})
 
 **Date:** ${plan.date}
 **Original plan:** ${planRef}
@@ -206,14 +251,6 @@ ${taskListLines}
 
 ---
 
-## Pocket Packets
-
----
-
-${packetsStr}
-
----
-
 ## Phase Completion Gate
 
 DONE when ALL of the following:
@@ -224,10 +261,24 @@ DONE when ALL of the following:
 
 Hand off to ${nextPhaseLabel} ONLY after this gate passes.
 `;
+}
 
-  const outPath = path.join(planDir, `execution-plan-phase-${phaseNum}.md`);
-  if (!dryRun) writeFileSync(outPath, content);
-  return outPath;
+function renderTaskFile(task, phaseNum, tasks) {
+  const depsStr = task.deps.length ? task.deps.join(', ') : 'none';
+  return `# Task ${task.id} — ${task.name}
+
+**Phase:** ${phaseNum}
+**Depends:** ${depsStr}
+**Source plan:** ../../execution-plan.md
+
+---
+
+### Pocket Packet
+
+### Task ${task.num}: ${task.name} ${task.annotation}
+
+${task.body}
+`;
 }
 
 // ─── RUN ────────────────────────────────────────────────────────────────────
@@ -240,7 +291,7 @@ function run({ planArg, dryRun }) {
   const planPath = path.resolve(planArg);
   if (!existsSync(planPath)) throw new CliError('FILE_NOT_FOUND', `${planPath} not found`);
 
-  const planRef = planArg; // original argument, echoed into phase-file headers
+  const planRef = planArg;
   const planDir = path.dirname(planPath);
   const plan = parsePlan(planPath);
   const tasks = plan.tasks;
@@ -254,40 +305,6 @@ function run({ planArg, dryRun }) {
       'no tasks parsed. Check that the plan uses ### Task N: name [annotation] headers.',
     );
   }
-
-  if (count < THRESHOLD) {
-    // Validate task structure even for passthrough plans: computeDepths surfaces
-    // dangling [depends:] refs (UNKNOWN_TASK_REF) and cycles (CYCLE_DETECTED)
-    // early, instead of letting them slip through to pocket-development.
-    const depths = computeDepths(tasks);
-    const executionFlow = formatExecutionFlow(tasks, depths);
-    human.push(
-      '',
-      `Execution flow: ${executionFlow}`,
-      '',
-      `Plan has ${count} tasks (<${THRESHOLD}). Pass through to pocket-development directly.`,
-      `File: ${planPath}`,
-    );
-    return {
-      command: 'structure',
-      exit: 0,
-      human,
-      data: {
-        feature: plan.feature,
-        date: plan.date,
-        spec: plan.spec,
-        taskCount: count,
-        threshold: THRESHOLD,
-        action: 'passthrough',
-        dryRun: !!dryRun,
-        executionFlow,
-        planFile: planPath,
-        phases: [],
-      },
-    };
-  }
-
-  human.push(`Plan has ${count} tasks (≥${THRESHOLD}). Splitting into phases...`, '');
 
   const depths = computeDepths(tasks);
   const maxDepth = Math.max(...Object.values(depths));
@@ -308,40 +325,85 @@ function run({ planArg, dryRun }) {
   const executionFlow = formatExecutionFlow(tasks, depths);
   human.push(`Execution flow: ${executionFlow}`, '');
 
-  const phaseGroups = splitPhases(tasks, depths);
-  const total = phaseGroups.length;
+  const phaseGroups = count < THRESHOLD ? [[...Object.keys(tasks)]] : splitPhases(tasks, depths);
+  const totalPhases = phaseGroups.length;
 
-  const written = [];
+  const targetExecPlanDir = path.join(planDir, 'execution-plan');
+  const tempExecPlanDir = path.join(planDir, `execution-plan-tmp-${Date.now()}`);
+
+  const indexContent = renderIndexFile(plan, tasks, phaseGroups, executionFlow);
+  const tasksToRender = [];
+  const phasesToRender = [];
+
   for (let i = 0; i < phaseGroups.length; i++) {
     const ids = phaseGroups[i];
+    const phaseNum = i + 1;
     const name = tasks[ids[0]].name;
-    const out = writePhaseFile(i, total, ids, name, tasks, plan, planRef, planDir, dryRun);
-    written.push({ name, ids, out });
+
+    if (totalPhases > 1) {
+      const phaseContent = renderPhaseFile(i, totalPhases, ids, name, tasks, plan, planRef);
+      phasesToRender.push({
+        phaseNum,
+        name,
+        ids,
+        filename: `phase-${phaseNum}.md`,
+        content: phaseContent,
+      });
+    }
+
+    for (const tid of ids) {
+      const task = tasks[tid];
+      const taskContent = renderTaskFile(task, phaseNum, tasks);
+      tasksToRender.push({
+        tid,
+        filename: task.filename,
+        content: taskContent,
+        phaseNum,
+      });
+    }
+  }
+
+  if (!dryRun) {
+    mkdirSync(path.join(tempExecPlanDir, 'tasks'), { recursive: true });
+    writeFileSync(path.join(tempExecPlanDir, 'index.md'), indexContent, 'utf8');
+
+    for (const p of phasesToRender) {
+      writeFileSync(path.join(tempExecPlanDir, p.filename), p.content, 'utf8');
+    }
+
+    for (const t of tasksToRender) {
+      writeFileSync(path.join(tempExecPlanDir, 'tasks', t.filename), t.content, 'utf8');
+    }
+
+    if (existsSync(targetExecPlanDir)) {
+      rmSync(targetExecPlanDir, { recursive: true, force: true });
+    }
+    renameSync(tempExecPlanDir, targetExecPlanDir);
   }
 
   human.push('STRUCTURING COMPLETE' + (dryRun ? ' (dry run — no files written)' : ''));
-  human.push(`Original plan: ${count} tasks → ${total} phases`, '');
+  human.push(`Original plan: ${count} tasks → ${totalPhases} phase(s)`, '');
 
-  const phases = [];
-  for (let i = 0; i < written.length; i++) {
-    const { name, ids, out } = written[i];
-    const shortTerminal = i === total - 1 && ids.length < PHASE_MIN;
-    const tag = shortTerminal ? ' ⚠ short terminal phase' : '';
-    human.push(`Phase ${i + 1} — ${name}: ${ids.join(', ')} (${ids.length} tasks)${tag}`);
-    if (!dryRun) human.push(`  → ${out}`);
-    phases.push({
-      phase: i + 1,
+  const phasesOutput = [];
+  for (let i = 0; i < phaseGroups.length; i++) {
+    const ids = phaseGroups[i];
+    const name = tasks[ids[0]].name;
+    const phaseNum = i + 1;
+    const file = totalPhases > 1 ? `execution-plan/phase-${phaseNum}.md` : 'execution-plan/index.md';
+    const absPath = path.join(planDir, file);
+    human.push(`Phase ${phaseNum} — ${name}: ${ids.join(', ')} (${ids.length} tasks)`);
+    if (!dryRun) human.push(`  → ${absPath}`);
+    phasesOutput.push({
+      phase: phaseNum,
       name,
       tasks: ids,
-      file: `execution-plan-phase-${i + 1}.md`,
-      path: out,
-      shortTerminal,
+      file,
+      path: absPath,
     });
   }
 
-  human.push('', 'Execution order: sequential. Phase N must complete before Phase N+1.');
-  if (!dryRun) human.push(`Files saved to: ${planDir}`);
-  human.push('', 'Ready to start Phase 1 with pocket-development?');
+  if (!dryRun) human.push(`Files saved to: ${targetExecPlanDir}`);
+  human.push('', 'Ready to start with pocket-development?');
 
   return {
     command: 'structure',
@@ -351,15 +413,17 @@ function run({ planArg, dryRun }) {
       feature: plan.feature,
       date: plan.date,
       spec: plan.spec,
+      sha256: plan.sha256,
       taskCount: count,
       threshold: THRESHOLD,
-      action: 'split',
+      action: totalPhases > 1 ? 'split' : 'single',
       dryRun: !!dryRun,
       executionFlow,
-      phaseCount: total,
+      phaseCount: totalPhases,
       depthTable,
-      phases,
+      phases: phasesOutput,
       planFile: planPath,
+      execPlanDir: targetExecPlanDir,
     },
   };
 }

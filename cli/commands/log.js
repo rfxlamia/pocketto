@@ -1,7 +1,8 @@
 'use strict';
 
 // Port of pocket-log-init.py / pocket-log-update.py / pocket-log-close.py.
-// log.json schema is unchanged — fully backward compatible with existing plans.
+// log.json schema supports new execution-plan/ layout with per-task file pointers,
+// while remaining fully backward compatible with legacy phased and flat plans.
 // git-SHA tracking (baseline_sha / done_sha) preserved from the bin/* versions.
 
 const path = require('node:path');
@@ -48,6 +49,91 @@ function resolvePlanDir(arg) {
 }
 
 function collectPlanFiles(planDir) {
+  const execPlanSubdir = path.join(planDir, 'execution-plan');
+  const indexFile = path.join(execPlanSubdir, 'index.md');
+
+  // NEW LAYOUT: execution-plan/ directory with index.md
+  if (existsSync(execPlanSubdir) && existsSync(indexFile)) {
+    const indexContent = readFileSync(indexFile, 'utf8');
+    const phaseFiles = readdirSync(execPlanSubdir)
+      .filter((f) => /^phase-\d+\.md$/.test(f))
+      .sort((a, b) => {
+        const na = parseInt(a.match(/phase-(\d+)/)[1], 10);
+        const nb = parseInt(b.match(/phase-(\d+)/)[1], 10);
+        return na - nb;
+      });
+
+    // Helper to find task file in execution-plan/tasks/
+    const findTaskFile = (tid) => {
+      const tasksDir = path.join(execPlanSubdir, 'tasks');
+      if (!existsSync(tasksDir)) return null;
+      const tFiles = readdirSync(tasksDir).filter((f) => f.startsWith(`${tid}-`) || f === `${tid}.md`);
+      if (tFiles.length > 0) return `execution-plan/tasks/${tFiles[0]}`;
+      return null;
+    };
+
+    if (phaseFiles.length > 0) {
+      // Multi-phase in execution-plan/
+      return {
+        planFile: 'execution-plan/index.md',
+        phases: phaseFiles.map((f, i) => {
+          const absPath = path.join(execPlanSubdir, f);
+          let tasks = extractTasks(absPath);
+          if (tasks.length === 0) {
+            // Fallback: if phase-N.md only references task files via Markdown links, extract tasks from index.md / source plan
+            const sourcePlanPath = path.join(planDir, 'execution-plan.md');
+            const allTasks = extractTasks(sourcePlanPath);
+            const phaseContent = readFileSync(absPath, 'utf8');
+            const matchTids = [...phaseContent.matchAll(/-\s*\*\*(T\d+):\*\*/g)].map((m) => m[1]);
+            tasks = allTasks.filter((t) => matchTids.includes(t.id));
+          }
+          for (const t of tasks) {
+            const tf = findTaskFile(t.id);
+            if (tf) t.file = tf;
+          }
+          const entry = { order: i + 1, file: `execution-plan/${f}`, status: 'WAITING' };
+          if (tasks.length) entry.tasks = tasks;
+          return entry;
+        }),
+      };
+    } else {
+      // Single phase in execution-plan/ (index.md + tasks/*)
+      const tasks = [];
+      const re = /^\| (T\d+) \| (.+?) \| Phase \d+ \| \[([^\]]+)\]\(tasks\/([^\)]+)\) \|/gm;
+      let m;
+      while ((m = re.exec(indexContent)) !== null) {
+        const tid = m[1];
+        const name = m[2].trim();
+        const filename = m[4].trim();
+        tasks.push({
+          id: tid,
+          name,
+          file: `execution-plan/tasks/${filename}`,
+          status: 'WAITING',
+        });
+      }
+
+      // Fallback extract if regex didn't match table
+      if (tasks.length === 0) {
+        const sourcePlanPath = path.join(planDir, 'execution-plan.md');
+        const extracted = extractTasks(sourcePlanPath);
+        for (const t of extracted) {
+          const tf = findTaskFile(t.id);
+          if (tf) t.file = tf;
+          tasks.push(t);
+        }
+      }
+
+      const entry = { order: 1, file: 'execution-plan/index.md', status: 'WAITING' };
+      if (tasks.length) entry.tasks = tasks;
+      return {
+        planFile: 'execution-plan/index.md',
+        phases: [entry],
+      };
+    }
+  }
+
+  // LEGACY FALLBACK 1: execution-plan-phase-N.md
   const phaseFiles = readdirSync(planDir)
     .filter((f) => /^execution-plan-phase-\d+\.md$/.test(f))
     .sort((a, b) => {
@@ -57,20 +143,27 @@ function collectPlanFiles(planDir) {
     });
 
   if (phaseFiles.length) {
-    return phaseFiles.map((f, i) => {
-      const tasks = extractTasks(path.join(planDir, f));
-      const entry = { order: i + 1, file: f, status: 'WAITING' };
-      if (tasks.length) entry.tasks = tasks;
-      return entry;
-    });
+    return {
+      planFile: phaseFiles[0],
+      phases: phaseFiles.map((f, i) => {
+        const tasks = extractTasks(path.join(planDir, f));
+        const entry = { order: i + 1, file: f, status: 'WAITING' };
+        if (tasks.length) entry.tasks = tasks;
+        return entry;
+      }),
+    };
   }
 
+  // LEGACY FALLBACK 2: execution-plan.md
   const flat = path.join(planDir, 'execution-plan.md');
   if (existsSync(flat)) {
     const tasks = extractTasks(flat);
     const entry = { order: 1, file: 'execution-plan.md', status: 'WAITING' };
     if (tasks.length) entry.tasks = tasks;
-    return [entry];
+    return {
+      planFile: 'execution-plan.md',
+      phases: [entry],
+    };
   }
 
   throw new CliError('NO_PLAN_FILES', `no execution-plan*.md files found in '${planDir}'.`);
@@ -105,21 +198,24 @@ function init(positionals) {
 
   // A fresh init cannot produce duplicate done_sha values: tasks are created
   // without done_sha, which is only ever set by `log update … DONE`.
-  const phases = collectPlanFiles(planDir);
+  const { planFile, phases } = collectPlanFiles(planDir);
   const planType = phases.length > 1 || phases[0].file.includes('phase') ? 'phased' : 'flat';
 
-  const log = {
-    header: {
-      plan_dir: planDir,
-      plan_type: planType,
-      status: 'IN_PROGRESS',
-      date_started: todayISO(),
-      date_completed: null,
-      baseline_sha: getGitSha(planDir),
-      pipeline: PIPELINE, // execution-pipeline generation; independent of CONTRACT
-    },
-    phases,
+  const header = {
+    plan_dir: planDir,
+    plan_type: planType,
+    status: 'IN_PROGRESS',
+    date_started: todayISO(),
+    date_completed: null,
+    baseline_sha: getGitSha(planDir),
+    pipeline: PIPELINE, // execution-pipeline generation; independent of CONTRACT
   };
+
+  if (planFile && planFile !== phases[0].file) {
+    header.plan_file = planFile;
+  }
+
+  const log = { header, phases };
   writeLog(logPath, log);
 
   const human = [`Created ${logPath}`, `  type    : ${planType}`, `  phases  : ${phases.length}`];
@@ -176,7 +272,25 @@ function migrateExisting(planDir, logPath) {
   let migrated = 0;
   for (const phase of log.phases) {
     if ('tasks' in phase) continue;
-    const tasks = extractTasks(path.join(planDir, phase.file));
+    let absPath = path.join(planDir, phase.file);
+    if (!existsSync(absPath)) {
+      const norm = path.basename(phase.file);
+      const phaseMatch = norm.match(/execution-plan-phase-(\d+)\.md$/);
+      if (phaseMatch) {
+        absPath = path.join(planDir, 'execution-plan', `phase-${phaseMatch[1]}.md`);
+      }
+    }
+    let tasks = extractTasks(absPath);
+    if (!tasks.length && phase.file.includes('phase')) {
+      // Fallback: extract from source execution-plan.md for phase references
+      const sourcePlanPath = path.join(planDir, 'execution-plan.md');
+      const allTasks = extractTasks(sourcePlanPath);
+      if (existsSync(absPath)) {
+        const phaseContent = readFileSync(absPath, 'utf8');
+        const matchTids = [...phaseContent.matchAll(/-\s*\*\*(T\d+):\*\*/g)].map((m) => m[1]);
+        tasks = allTasks.filter((t) => matchTids.includes(t.id));
+      }
+    }
     if (!tasks.length) continue;
     const phaseStatus = phase.status || 'WAITING';
     const taskStatus = ['DONE', 'REVIEW', 'BLOCKED'].includes(phaseStatus) ? phaseStatus : 'WAITING';
@@ -213,6 +327,35 @@ function migrateExisting(planDir, logPath) {
   };
 }
 
+// Helper to resolve phase object in log.json, matching either exact phase.file,
+// basename matches, or relative execution-plan/ prefix differences.
+function findPhaseInLog(log, phaseFileArg) {
+  let phase = log.phases.find((p) => p.file === phaseFileArg);
+  if (phase) return phase;
+
+  const normArg = path.basename(phaseFileArg);
+  phase = log.phases.find((p) => path.basename(p.file) === normArg);
+  if (phase) return phase;
+
+  // Handle execution-plan-phase-N.md matching execution-plan/phase-N.md
+  const phaseMatch = normArg.match(/execution-plan-phase-(\d+)\.md$/);
+  if (phaseMatch) {
+    const targetFile = `execution-plan/phase-${phaseMatch[1]}.md`;
+    phase = log.phases.find((p) => p.file === targetFile);
+    if (phase) return phase;
+  }
+
+  // Try matching with execution-plan/ prefix
+  phase = log.phases.find((p) => p.file === `execution-plan/${phaseFileArg}` || p.file === `execution-plan/${normArg}`);
+  if (phase) return phase;
+
+  if (log.phases.length === 1 && (normArg === 'execution-plan.md' || normArg === 'index.md')) {
+    return log.phases[0];
+  }
+
+  return null;
+}
+
 // ─── UPDATE ─────────────────────────────────────────────────────────────────
 
 function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSha = false } = {}) {
@@ -241,7 +384,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
   }
 
   const log = readLogChecked(logPath);
-  const phase = log.phases.find((p) => p.file === phaseFile);
+  const phase = findPhaseInLog(log, phaseFile);
   if (!phase) {
     const available = log.phases.map((p) => p.file);
     throw new CliError('PHASE_NOT_FOUND', `'${phaseFile}' not found in log. Available: ${JSON.stringify(available)}`);
@@ -335,7 +478,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     task.status = newStatus;
     if (doneSha) task.done_sha = doneSha;
     writeLog(logPath, log);
-    human = [`Updated ${phaseFile} / ${task.id} (${task.name}): ${oldStatus} → ${newStatus}`];
+    human = [`Updated ${phase.file} / ${task.id} (${task.name}): ${oldStatus} → ${newStatus}`];
     if (shaCollision) {
       human.push(
         `⚠ done_sha ${task.done_sha} is already recorded for ${shaCollision.join(', ')} in this phase.`,
@@ -345,7 +488,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     }
     data = {
       planDir,
-      phaseFile,
+      phaseFile: phase.file,
       level: 'task',
       taskId: task.id,
       name: task.name,
@@ -358,13 +501,13 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     const oldStatus = phase.status;
     phase.status = newStatus;
     writeLog(logPath, log);
-    human = [`Updated ${phaseFile}: ${oldStatus} → ${newStatus}`];
-    data = { planDir, phaseFile, level: 'phase', oldStatus, newStatus };
+    human = [`Updated ${phase.file}: ${oldStatus} → ${newStatus}`];
+    data = { planDir, phaseFile: phase.file, level: 'phase', oldStatus, newStatus };
   }
 
   human.push('Current log:');
   for (const p of log.phases) {
-    const marker = p.file === phaseFile ? '←' : ' ';
+    const marker = p.file === phase.file ? '←' : ' ';
     const tasks = p.tasks || [];
     const taskSummary = tasks.length
       ? ' | tasks: ' + tasks.map((t) => `${t.id}=${t.status}`).join(', ')
@@ -392,7 +535,7 @@ function recordCorrection(positionals, sha, forTask) {
     throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
   }
   const log = readLogChecked(logPath);
-  const phase = log.phases.find((p) => p.file === phaseFile);
+  const phase = findPhaseInLog(log, phaseFile);
   if (!phase) {
     const available = log.phases.map((p) => p.file);
     throw new CliError('PHASE_NOT_FOUND', `'${phaseFile}' not found in log. Available: ${JSON.stringify(available)}`);
@@ -429,7 +572,7 @@ function recordCorrection(positionals, sha, forTask) {
       human: [`Correction ${sha} has no file changes — skipped (nothing to attribute).`],
       data: {
         planDir,
-        phaseFile,
+        phaseFile: phase.file,
         level: 'correction',
         correction: { sha, files: [], affectedTasks: [], bleed: [], skipped: true },
       },
@@ -479,10 +622,10 @@ function recordCorrection(positionals, sha, forTask) {
     return {
       command: 'log update',
       exit: 0,
-      human: [`Correction ${sha} is already recorded on ${phaseFile} — no-op.`],
+      human: [`Correction ${sha} is already recorded on ${phase.file} — no-op.`],
       data: {
         planDir,
-        phaseFile,
+        phaseFile: phase.file,
         level: 'correction',
         correction: {
           sha,
@@ -500,7 +643,7 @@ function recordCorrection(positionals, sha, forTask) {
   phase.corrections.push(entry);
   writeLog(logPath, log);
 
-  const human = [`Recorded correction ${sha} on ${phaseFile}${forId ? ` (for ${forId})` : ''}: ${files.length} file(s).`];
+  const human = [`Recorded correction ${sha} on ${phase.file}${forId ? ` (for ${forId})` : ''}: ${files.length} file(s).`];
   if (bleedTasks.length) {
     human.push(
       `⚠ this correction also touches files owned by ${bleedTasks.join(', ')} (cross-task bleed).`,
@@ -513,7 +656,7 @@ function recordCorrection(positionals, sha, forTask) {
     human,
     data: {
       planDir,
-      phaseFile,
+      phaseFile: phase.file,
       level: 'correction',
       correction: { sha, files, affectedTasks, bleed: bleedTasks, idempotent: false },
     },
