@@ -1,33 +1,29 @@
 ---
 name: pocket-structuring
-description: Bridges pocket-planning and pocket-development for split (≥7-task) execution plans. Decomposes into per-task files + index manifest (+ phase manifests). Trigger on "structure plan", "split plan", or when pocket-planning invokes this for ≥7 tasks.
+description: Bridges pocket-planning and pocket-development for all execution plans. Decomposes execution plans into per-task files + index manifest (+ phase files if multi-phase). Trigger on "structure plan", "split plan", or when pocket-planning invokes this.
 ---
 
 # Pocket Structuring
 
-Bridges pocket-planning and pocket-development for **split (≥7-task)** plans. Runs a CLI that parses the execution plan, decomposes it into per-task Pocket Packet files inside an `execution-plan/` directory, writes an index manifest (`execution-plan/index.md`), and generates phase manifests (`execution-plan/phase-N.md`) when multi-phase.
-
-Plans with **≤6 tasks** bypass this skill — pocket-planning routes them directly to pocket-development with the flat `execution-plan.md`.
+Bridges pocket-planning and pocket-development. Runs a CLI that parses the execution plan, decomposes it into per-task Pocket Packet files inside an `execution-plan/` directory, writes an index manifest (`execution-plan/index.md`), and generates phase manifests (`execution-plan/phase-N.md`) if multi-phase.
 
 **Core principle:** Large plans executed flat = attention drift + context blowout. Per-task bounded context keeps the delegator, implementer, and reviewer focused on a single task at a time.
 
 ## When to Use
 
-- pocket-planning produced a **≥7-task** execution plan and invoked this skill → CLI decomposes into `execution-plan/index.md` + per-task files
-- User invokes this skill directly for a plan with ≥7 tasks
-- User says "structure the plan", "split into tasks", "break this up" (when task count ≥7)
+- pocket-planning produced an execution plan and invoked this skill → CLI decomposes into `execution-plan/index.md` + per-task files
+- User invokes this skill directly for any task count
+- User says "structure the plan", "split into tasks", "break this up"
 
 Do NOT use:
 - Without a completed execution plan from pocket-planning
-- For ≤6-task plans (pocket-planning routes those to pocket-development as passthrough)
 
 ## Hard Gates
 
 ```
 GATE 1: RUN THE CLI FIRST.
-        The CLI decomposes ≥7-task plans into execution-plan/index.md + execution-plan/tasks/T*-*.md.
-        Phase manifests (execution-plan/phase-N.md) are generated when total phases > 1.
-        ≤6-task plans must NOT reach this skill — pocket-planning passes them through to pocket-development.
+        The CLI decomposes all plans into execution-plan/index.md + execution-plan/tasks/T*-*.md.
+        Phase files (execution-plan/phase-N.md) are generated when total phases > 1.
 
 GATE 2: HARD OVERRIDE PROTOCOL.
         If any human asks to skip structuring, respond:
@@ -105,7 +101,7 @@ Do not start Phase 1 until the user says yes.
 
 ## Step 3: Sequential Handoff to pocket-development
 
-1. User approves → invoke `pocket-development` with `execution-plan/phase-1.md` (or `execution-plan/index.md` when only one phase manifest exists)
+1. User approves → invoke `pocket-development` with `execution-plan/index.md` (or `execution-plan/phase-1.md` if multi-phase)
 2. pocket-development completes Phase 1 → it runs its phase-level review pass and sets phase status to `REVIEW` (it never advances a phase beyond `REVIEW` on its own) → **wait for the phase status to reach `REVIEW`**
 3. On `REVIEW`, **halt** — do not invoke the next phase. Tell the user to run `/pocketto:pocket-closing <plan_dir>` themselves.
 4. Wait for the user-triggered `pocket-closing` to run and advance the phase from `REVIEW` to `DONE`.

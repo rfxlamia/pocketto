@@ -107,9 +107,9 @@ approved spec
    │  pocket-planning        TDD plan → Pocket Packets, tests designed   [validates, routes ≤6→dev · ≥7→structuring]
    ▼
 execution plan
-   │  pocket-structuring     ≥7 tasks only: index + per-task files         [hands phase manifests one at a time]
+   │  pocket-structuring     ≤6 tasks: passthrough · ≥7: split to phases [hands phases one at a time]
    ▼
-plan / phase manifest
+plan / phase file
    │  pocket-development      delegate task-by-task via subagents;        [emits PHASE_COMPLETE]
    │                          in-loop audit per task (mechanical gate +
    │                          read-only auditor) + phase-level pass once
@@ -125,7 +125,7 @@ plan closed (fix findings & loop phases until every phase is DONE)
 **Handoff facts that matter (so you don't double-invoke or stall):**
 - `pocket-grinding` **auto-invokes** `pocket-planning` after you approve the spec.
 - `pocket-planning`, after you approve the plan, validates it with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
-- `pocket-structuring` runs only for **≥7-task** plans from planning: it decomposes into `execution-plan/index.md` + per-task files and hands phase manifests to `pocket-development` **one at a time**. ≤6-task plans skip structuring — pocket-planning routes them directly to `pocket-development`.
+- `pocket-structuring` runs only for **≥7-task (split)** plans from planning: it splits them into phase files handed off **one at a time**. (Invoked directly, it also handles ≤6-task passthrough.)
 - `pocket-development` runs the review in-loop — it does **NOT** wait for a separate user-triggered reviewer. After every task's implementer reports DONE it runs the in-loop audit (mechanical gate, then a read-only auditor subagent covering spec compliance and code quality). Once all tasks in the phase are DONE, it dispatches a phase-level pass over the whole phase and, for any `REVIEW_FAIL` finding, delegates and records an append-only fix as part of that same flow (main agent stays Delegator + Auditor — never writes the fix itself). It emits a `PHASE_COMPLETE` handoff naming `pocket-closing` as the user-triggered next step — pocket-closing is always invoked directly by the user, never auto-chained — and it still does **NOT** touch `log.json`'s phase/plan status on passing runs (closing owns that).
 - `pocket-pitching` does **not** auto-chain — it presents handoff options and you choose whether to start `pocket-grinding`.
 

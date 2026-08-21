@@ -37,8 +37,7 @@ Preflight the codebase → parse the spec → map files → decompose into bound
 
 ### 4. pocket-structuring — phase
 Runs `npx pocketto-pi structure <plan>` — the CLI counts tasks exactly and decides.
-- **≤6 tasks → passthrough:** pocket-planning invokes `pocket-development` directly with the flat `execution-plan.md`; no `execution-plan/` directory.
-- **≥7 tasks → split:** pocket-planning invokes `pocket-structuring`, which writes `execution-plan/index.md` + per-task files (+ phase manifests). pocket-development reads `index.md` once and opens each `task.file` on demand.
+- **≤6 tasks → passthrough:** invokes `pocket-development` directly with the flat plan; no phase files.
 - **≥7 tasks → split:** produces `execution-plan-phase-N.md` files and hands them to `pocket-development` **one at a time**.
 - **Gate:** A hard override gate — skipping structuring for a ≥7-task plan requires the exact phrase `OVERRIDE: skip structuring`. Verbal insistence is not enough.
 - **Next:** `pocket-development`, phase by phase, never all phases at once.

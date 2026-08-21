@@ -867,111 +867,23 @@ test("structure splits a 9-task plan into execution-plan/ index, phase files, an
 	assert.equal(env.data.phaseCount, 3);
 });
 
-test("structure preserves non-default source plan path and log init recovers tasks", () => {
-	const dir = tmp();
-	const planPath = path.join(dir, "auth-plan.md");
-	writeFileSync(planPath, NINE_TASK_PLAN);
-
-	run(["structure", planPath]);
-
-	const indexContent = readFileSync(
-		path.join(dir, "execution-plan", "index.md"),
-		"utf8",
-	);
-	assert.match(indexContent, /\*\*Source Plan:\*\* \.\.\/auth-plan\.md/);
-
-	const taskFiles = readdirSync(path.join(dir, "execution-plan", "tasks"));
-	const t1Content = readFileSync(
-		path.join(dir, "execution-plan", "tasks", taskFiles.find((f) => f.startsWith("T1-"))),
-		"utf8",
-	);
-	assert.match(t1Content, /\*\*Source plan:\*\* \.\.\/\.\.\/auth-plan\.md/);
-
-	run(["log", "init", dir]);
-	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
-	assert.equal(log.phases[0].tasks.length, 4);
-
-	const env = json([
-		"log",
-		"update",
-		dir,
-		"execution-plan/phase-1.md",
-		"DONE",
-		"--task",
-		"T1",
-		"--json",
-	]);
-	assert.equal(env.ok, true);
-	assert.equal(env.data.newStatus, "DONE");
-});
-
-test("log init migration normalizes legacy phase.file to execution-plan layout", () => {
-	const dir = tmp();
-	writePlan(dir, NINE_TASK_PLAN);
-	run(["structure", path.join(dir, "execution-plan.md")]);
-
-	const marked = {
-		header: {
-			plan_dir: dir,
-			plan_type: "phased",
-			status: "IN_PROGRESS",
-			date_started: "2026-01-01",
-			date_completed: null,
-			pipeline: version.PIPELINE,
-		},
-		phases: [
-			{ order: 1, file: "execution-plan-phase-1.md", status: "WAITING" },
-			{ order: 2, file: "execution-plan-phase-2.md", status: "WAITING" },
-			{ order: 3, file: "execution-plan-phase-3.md", status: "WAITING" },
-		],
-	};
-	writeFileSync(
-		path.join(dir, "log.json"),
-		JSON.stringify(marked, null, 2) + "\n",
-	);
-
-	run(["log", "init", dir]);
-	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
-	assert.equal(log.phases[0].file, "execution-plan/phase-1.md");
-	assert.equal(log.phases[0].tasks.length, 4);
-	assert.match(log.phases[0].tasks[0].file, /^execution-plan\/tasks\/T1-/);
-
-	const env = json([
-		"log",
-		"update",
-		dir,
-		"execution-plan/phase-1.md",
-		"REVIEW",
-		"--json",
-	]);
-	assert.equal(env.ok, true);
-	assert.equal(env.data.phaseFile, "execution-plan/phase-1.md");
-});
-
-test("structure passthrough for plans below 7 tasks writes no execution-plan directory", () => {
+test("structure decomposes plans below 7 tasks into execution-plan/index.md and tasks/ without phase-*.md", () => {
 	const dir = tmp();
 	const plan = writePlan(dir, SMALL_PLAN);
 
 	const env = json(["structure", plan, "--json"]);
-	assert.equal(env.data.action, "passthrough");
+	assert.equal(env.data.action, "single");
 	assert.equal(env.data.taskCount, 2);
-	assert.equal(env.data.executionFlow, "T1→T2");
-	assert.equal(existsSync(path.join(dir, "execution-plan")), false);
-});
+	assert.equal(env.data.phaseCount, 1);
 
-test("structure detects source-plan changes via source-sha256 on re-run", () => {
-	const dir = tmp();
-	const plan = writePlan(dir, NINE_TASK_PLAN);
-	run(["structure", plan]);
+	const execDir = path.join(dir, "execution-plan");
+	assert.ok(existsSync(path.join(execDir, "index.md")));
+	// Single phase -> no phase-1.md file
+	assert.equal(existsSync(path.join(execDir, "phase-1.md")), false);
 
-	const env = json(["structure", plan, "--json"]);
-	assert.equal(env.data.sourcePlanChanged, false);
-
-	writeFileSync(plan, NINE_TASK_PLAN.replace("Docs", "Documentation"));
-	const changed = json(["structure", plan, "--json"]);
-	assert.equal(changed.data.sourcePlanChanged, true);
-	assert.ok(changed.data.previousSha256);
-	assert.notEqual(changed.data.previousSha256, changed.data.sha256);
+	const tasksDir = path.join(execDir, "tasks");
+	assert.ok(existsSync(tasksDir));
+	assert.equal(readdirSync(tasksDir).length, 2);
 });
 
 test("structure --dry-run surfaces execution flow without writing files", () => {
@@ -979,7 +891,7 @@ test("structure --dry-run surfaces execution flow without writing files", () => 
 	const plan = writePlan(dir, SMALL_PLAN);
 
 	const env = json(["structure", plan, "--dry-run", "--json"]);
-	assert.equal(env.data.action, "passthrough");
+	assert.equal(env.data.action, "single");
 	assert.equal(env.data.executionFlow, "T1→T2");
 	assert.equal(existsSync(path.join(dir, "execution-plan")), false);
 });

@@ -25,11 +25,11 @@ Examples:
 
 ```text
 /pocketto:create-pr docs/pocket/plans/2026-06-09-github-trace-loop/
-/pocketto:create-pr docs/pocket/plans/2026-06-09-github-trace-loop/ execution-plan/phase-1.md
+/pocketto:create-pr docs/pocket/plans/2026-06-09-github-trace-loop/ execution-plan-phase-1.md
 ```
 
 - `<plan_dir>` — directory containing `log.json` and execution plan file(s).
-- `<phase_file>` — optional; defaults to the sole plan file (flat) or must be supplied for phased plans (`execution-plan/phase-N.md` for indexed layout, or legacy `execution-plan-phase-N.md`).
+- `<phase_file>` — optional; defaults to the sole plan file (flat) or must be supplied for phased plans (`execution-plan-phase-N.md`).
 
 ---
 
@@ -72,9 +72,9 @@ If not authenticated → **STOP** with an actionable `gh auth login` error. No p
 | Input | Resolution |
 |-------|------------|
 | `plan_dir` | Absolute path to the plan directory |
-| `phase_file` | Explicit arg, or the only `execution-plan*.md` in `plan_dir` (flat), or `execution-plan/phase-N.md` / legacy `execution-plan-phase-N.md` when phased |
+| `phase_file` | Explicit arg, or the only `execution-plan*.md` in `plan_dir` (flat), or `execution-plan-phase-N.md` when phased |
 | `spec_dir` | `docs/pocket/spec/<slug>/` where `<slug>` matches the plan directory basename (e.g. `2026-06-09-github-trace-loop`) |
-| `phase_key` | `phase-N` from the phase file basename (`execution-plan/phase-N.md` or `execution-plan-phase-N.md` → `phase-N`); flat single-file plan → `phase-1` |
+| `phase_key` | `phase-N` from the phase file name (`execution-plan-phase-1.md` → `phase-1`); flat single-file plan → `phase-1` |
 
 Confirm `log.json` exists under `plan_dir`. Read it to determine phase position for `finalPhase` (see below).
 

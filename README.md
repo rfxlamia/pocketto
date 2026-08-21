@@ -100,7 +100,7 @@ Each stage invokes the next at handoff, carrying spec, plan, and acceptance crit
 | 1 | `pocket-pitching` | Rough idea, no clear problem yet |
 | 2 | `pocket-grinding` | Clear problem — need a spec + acceptance criteria |
 | 3 | `pocket-planning` | Spec ready — need an execution plan |
-| 4 | `pocket-structuring` | Plan ready (≥7 tasks) — decompose into index + per-task files |
+| 4 | `pocket-structuring` | Plan ready — passthrough ≤6 tasks, phase-split ≥7 |
 | 5 | `pocket-development` | Plan ready — execute task-by-task via subagents, with an in-loop audit and phase-level pass |
 | 6 | `pocket-closing` | After the phase-level pass — gate, close, summarize |
 

@@ -5,7 +5,8 @@
 
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { readFileSync, existsSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, renameSync } = require('node:fs');
+const { readFileSync, existsSync, writeFileSync, mkdirSync, rmSync, renameSync, mkdtempSync } = require('node:fs');
+const { tmpdir } = require('node:os');
 const { CliError } = require('../lib/envelope');
 
 const THRESHOLD = 7;
@@ -166,7 +167,7 @@ function splitPhases(tasks, depths) {
 
 // ─── RENDERERS ──────────────────────────────────────────────────────────────
 
-function renderIndexFile(plan, tasks, phaseGroups, executionFlow, sourcePlanRel) {
+function renderIndexFile(plan, tasks, phaseGroups, executionFlow, sourceBasename) {
   const totalPhases = phaseGroups.length;
   const totalTasks = Object.keys(tasks).length;
 
@@ -192,7 +193,7 @@ function renderIndexFile(plan, tasks, phaseGroups, executionFlow, sourcePlanRel)
 
 **Date:** ${plan.date}
 **Spec:** ${plan.spec}
-**Source Plan:** ${sourcePlanRel}
+**Source Plan:** ../${sourceBasename}
 **source-sha256:** ${plan.sha256}
 **Total Tasks:** ${totalTasks}
 **Total Phases:** ${totalPhases}
@@ -263,13 +264,13 @@ Hand off to ${nextPhaseLabel} ONLY after this gate passes.
 `;
 }
 
-function renderTaskFile(task, phaseNum, sourcePlanRel) {
+function renderTaskFile(task, phaseNum, tasks, sourceBasename) {
   const depsStr = task.deps.length ? task.deps.join(', ') : 'none';
   return `# Task ${task.id} — ${task.name}
 
 **Phase:** ${phaseNum}
 **Depends:** ${depsStr}
-**Source plan:** ${sourcePlanRel}
+**Source plan:** ../../${sourceBasename}
 
 ---
 
@@ -279,13 +280,6 @@ function renderTaskFile(task, phaseNum, sourcePlanRel) {
 
 ${task.body}
 `;
-}
-
-function readStoredSourceSha(execPlanDir) {
-  const indexPath = path.join(execPlanDir, 'index.md');
-  if (!existsSync(indexPath)) return null;
-  const m = readFileSync(indexPath, 'utf8').match(/^\*\*source-sha256:\*\* (.+)$/m);
-  return m ? m[1].trim() : null;
 }
 
 // ─── RUN ────────────────────────────────────────────────────────────────────
@@ -300,11 +294,30 @@ function run({ planArg, dryRun }) {
 
   const planRef = planArg;
   const planDir = path.dirname(planPath);
+  const sourceBasename = path.basename(planPath);
   const plan = parsePlan(planPath);
   const tasks = plan.tasks;
   const count = Object.keys(tasks).length;
 
+  const targetExecPlanDir = path.join(planDir, 'execution-plan');
+  const indexFilePath = path.join(targetExecPlanDir, 'index.md');
+
+  // Check if source-sha256 matches existing index.md
+  let sourceChanged = true;
+  if (existsSync(indexFilePath)) {
+    const existingIndexText = readFileSync(indexFilePath, 'utf8');
+    const matchSha = existingIndexText.match(/\*\*source-sha256:\*\* ([a-f0-9]{64})/);
+    if (matchSha && matchSha[1] === plan.sha256) {
+      sourceChanged = false;
+    }
+  }
+
   const human = [`Plan: ${plan.feature}`, `Tasks found: ${count}`];
+  if (!sourceChanged) {
+    human.push('Source plan sha256 unchanged. Generated layout is up-to-date.');
+  } else if (existsSync(indexFilePath)) {
+    human.push('Source plan sha256 changed. Re-generating execution-plan layout.');
+  }
 
   if (count === 0) {
     throw new CliError(
@@ -312,41 +325,6 @@ function run({ planArg, dryRun }) {
       'no tasks parsed. Check that the plan uses ### Task N: name [annotation] headers.',
     );
   }
-
-  if (count < THRESHOLD) {
-    // Validate task structure even for passthrough plans: computeDepths surfaces
-    // dangling [depends:] refs (UNKNOWN_TASK_REF) and cycles (CYCLE_DETECTED)
-    // early, instead of letting them slip through to pocket-development.
-    const depths = computeDepths(tasks);
-    const executionFlow = formatExecutionFlow(tasks, depths);
-    human.push(
-      '',
-      `Execution flow: ${executionFlow}`,
-      '',
-      `Plan has ${count} tasks (<${THRESHOLD}). Pass through to pocket-development directly.`,
-      `File: ${planPath}`,
-    );
-    return {
-      command: 'structure',
-      exit: 0,
-      human,
-      data: {
-        feature: plan.feature,
-        date: plan.date,
-        spec: plan.spec,
-        sha256: plan.sha256,
-        taskCount: count,
-        threshold: THRESHOLD,
-        action: 'passthrough',
-        dryRun: !!dryRun,
-        executionFlow,
-        planFile: planPath,
-        phases: [],
-      },
-    };
-  }
-
-  human.push(`Plan has ${count} tasks (≥${THRESHOLD}). Decomposing into per-task files...`, '');
 
   const depths = computeDepths(tasks);
   const maxDepth = Math.max(...Object.values(depths));
@@ -367,14 +345,12 @@ function run({ planArg, dryRun }) {
   const executionFlow = formatExecutionFlow(tasks, depths);
   human.push(`Execution flow: ${executionFlow}`, '');
 
-  const phaseGroups = splitPhases(tasks, depths);
+  const phaseGroups = count < THRESHOLD ? [[...Object.keys(tasks)]] : splitPhases(tasks, depths);
   const totalPhases = phaseGroups.length;
 
-  const targetExecPlanDir = path.join(planDir, 'execution-plan');
-  const sourcePlanRelFromIndex = path.relative(targetExecPlanDir, planPath).split(path.sep).join('/');
-  const sourcePlanRelFromTasks = path.relative(path.join(targetExecPlanDir, 'tasks'), planPath).split(path.sep).join('/');
+  const tempExecPlanDir = mkdtempSync(path.join(planDir, '.execution-plan-tmp-'));
 
-  const indexContent = renderIndexFile(plan, tasks, phaseGroups, executionFlow, sourcePlanRelFromIndex);
+  const indexContent = renderIndexFile(plan, tasks, phaseGroups, executionFlow, sourceBasename);
   const tasksToRender = [];
   const phasesToRender = [];
 
@@ -396,7 +372,7 @@ function run({ planArg, dryRun }) {
 
     for (const tid of ids) {
       const task = tasks[tid];
-      const taskContent = renderTaskFile(task, phaseNum, sourcePlanRelFromTasks);
+      const taskContent = renderTaskFile(task, phaseNum, tasks, sourceBasename);
       tasksToRender.push({
         tid,
         filename: task.filename,
@@ -406,43 +382,42 @@ function run({ planArg, dryRun }) {
     }
   }
 
-  const previousSha256 = readStoredSourceSha(targetExecPlanDir);
-  const sourcePlanChanged = previousSha256 != null && previousSha256 !== plan.sha256;
-  if (sourcePlanChanged) {
-    human.push(
-      '',
-      `Source plan changed (was ${previousSha256}, now ${plan.sha256}). Regenerating execution-plan/.`,
-    );
-  }
-
   if (!dryRun) {
-    const tempExecPlanDir = mkdtempSync(path.join(planDir, 'execution-plan-staging-'));
-    let backupDir = null;
-    try {
-      mkdirSync(path.join(tempExecPlanDir, 'tasks'), { recursive: true });
-      writeFileSync(path.join(tempExecPlanDir, 'index.md'), indexContent, 'utf8');
+    if (!sourceChanged) {
+      rmSync(tempExecPlanDir, { recursive: true, force: true });
+    } else {
+      const backupDir = path.join(planDir, `.execution-plan-backup-${Date.now()}`);
+      try {
+        mkdirSync(path.join(tempExecPlanDir, 'tasks'), { recursive: true });
+        writeFileSync(path.join(tempExecPlanDir, 'index.md'), indexContent, 'utf8');
 
-      for (const p of phasesToRender) {
-        writeFileSync(path.join(tempExecPlanDir, p.filename), p.content, 'utf8');
-      }
+        for (const p of phasesToRender) {
+          writeFileSync(path.join(tempExecPlanDir, p.filename), p.content, 'utf8');
+        }
 
-      for (const t of tasksToRender) {
-        writeFileSync(path.join(tempExecPlanDir, 'tasks', t.filename), t.content, 'utf8');
-      }
+        for (const t of tasksToRender) {
+          writeFileSync(path.join(tempExecPlanDir, 'tasks', t.filename), t.content, 'utf8');
+        }
 
-      if (existsSync(targetExecPlanDir)) {
-        backupDir = mkdtempSync(path.join(planDir, 'execution-plan-backup-'));
-        renameSync(targetExecPlanDir, backupDir);
+        if (existsSync(targetExecPlanDir)) {
+          renameSync(targetExecPlanDir, backupDir);
+        }
+        renameSync(tempExecPlanDir, targetExecPlanDir);
+        if (existsSync(backupDir)) {
+          rmSync(backupDir, { recursive: true, force: true });
+        }
+      } catch (err) {
+        if (existsSync(backupDir) && !existsSync(targetExecPlanDir)) {
+          renameSync(backupDir, targetExecPlanDir);
+        }
+        if (existsSync(tempExecPlanDir)) {
+          rmSync(tempExecPlanDir, { recursive: true, force: true });
+        }
+        throw new CliError('WRITE_FAILED', `Failed to atomically write execution-plan directory: ${err.message}`);
       }
-      renameSync(tempExecPlanDir, targetExecPlanDir);
-      if (backupDir) rmSync(backupDir, { recursive: true, force: true });
-    } catch (err) {
-      if (backupDir && !existsSync(targetExecPlanDir) && existsSync(backupDir)) {
-        renameSync(backupDir, targetExecPlanDir);
-      }
-      if (existsSync(tempExecPlanDir)) rmSync(tempExecPlanDir, { recursive: true, force: true });
-      throw err;
     }
+  } else {
+    rmSync(tempExecPlanDir, { recursive: true, force: true });
   }
 
   human.push('STRUCTURING COMPLETE' + (dryRun ? ' (dry run — no files written)' : ''));
@@ -478,9 +453,10 @@ function run({ planArg, dryRun }) {
       date: plan.date,
       spec: plan.spec,
       sha256: plan.sha256,
+      sourceChanged,
       taskCount: count,
       threshold: THRESHOLD,
-      action: 'split',
+      action: totalPhases > 1 ? 'split' : 'single',
       dryRun: !!dryRun,
       executionFlow,
       phaseCount: totalPhases,
@@ -488,8 +464,6 @@ function run({ planArg, dryRun }) {
       phases: phasesOutput,
       planFile: planPath,
       execPlanDir: targetExecPlanDir,
-      sourcePlanChanged,
-      previousSha256: sourcePlanChanged ? previousSha256 : null,
     },
   };
 }
