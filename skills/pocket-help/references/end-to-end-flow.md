@@ -31,15 +31,15 @@ Scan context → lock scope → question from three lenses (Business / Developer
 
 ### 3. pocket-planning — plan (TDD)
 Preflight the codebase → parse the spec → map files → decompose into bounded tasks → write 7-field Pocket Packets (each: failing test → minimal code → commit) → run a spec-reviewer subagent, then a test-architect subagent.
-- **Gates:** Handoff inputs verified; spec-reviewer must APPROVE before test-architect runs; user approves the final plan.
+- **Gates:** Handoff inputs verified; spec-reviewer must APPROVE before test-architect runs; user gives **plan approval** (authorize derived artifacts — not implementation).
 - **Produces:** `docs/pocket/plans/<date>-<slug>/execution-plan.md`.
-- **Next:** After approval, validates the plan with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
+- **Next:** After plan approval, validates the plan with `structure --dry-run` and routes **all plans** to `pocket-structuring` (`planning → structuring for all plans`).
 
-### 4. pocket-structuring — phase
-Runs `npx pocketto-pi structure <plan>` — the CLI counts tasks exactly and decides.
-- **≤6 tasks → passthrough:** invokes `pocket-development` directly with the flat plan; no phase files.
-- **Decomposes all plans:** produces `execution-plan/index.md` + per-task files (`execution-plan/tasks/T*-*.md`), plus `execution-plan/phase-N.md` files if multi-phase.
-- **Gate:** A hard override gate — skipping structuring for a ≥7-task plan requires the exact phrase `OVERRIDE: skip structuring`. Verbal insistence is not enough.
+### 4. pocket-structuring — index + task files (phases when needed)
+Runs `npx pocketto-pi structure <plan>`.
+- **All plans:** `structuring → index + task files` (`execution-plan/index.md` + `execution-plan/tasks/T*-*.md`).
+- **Phase manifests** (`execution-plan/phase-N.md`) only when `phaseCount > 1`.
+- **Gate:** **Execution approval** (authorize implementation) — separate from planning's plan approval. Skipping structuring requires the exact phrase `OVERRIDE: skip structuring` (legacy path: development reads the flat source plan; context-cost accepted). Verbal insistence is not enough.
 - **Next:** `pocket-development`, phase by phase, never all phases at once.
 
 ### 5. pocket-development — delegate (+ in-loop audit, phase-level pass)
@@ -61,7 +61,7 @@ Always invoked directly by the user: `/pocketto:pocket-closing <plan_dir>`, afte
 3. **`pocket-planning`** preflights the auth module, maps files, decomposes into 8 tasks (schema, endpoint, rotation logic, revocation, tests, etc.), writes Pocket Packets, runs spec-reviewer + test-architect. User approves → validates via `structure --dry-run` → 8 tasks (≥7) → routes to **structuring**.
 4. **`pocket-structuring`** runs the CLI → 8 tasks ⇒ **split** into Phase 1 (schema + scaffolding) and Phase 2 (endpoint + rotation + revocation). Hands Phase 1 to development.
 5. **`pocket-development`** executes Phase 1 task-by-task (packet → spawn → in-loop audit → log DONE). Once every task is DONE, it dispatches the phase-level pass over Phase 1, sets the phase to `REVIEW`, and emits `PHASE_COMPLETE`.
-6. Phase-level pass is clean → development emits `PHASE_COMPLETE` with Phase 1 at `REVIEW` → user runs `/pocketto:pocket-closing <plan_dir>/execution-plan/phase-1.md` → closing reports `PHASE_ADVANCED` and marks Phase 1 `DONE` → structuring proceeds to Phase 2.
+6. Phase-level pass is clean → development sets Phase 1 to `REVIEW` and emits `PHASE_COMPLETE` → user runs `/pocketto:pocket-closing <plan_dir>` → closing selects the unique REVIEW phase, reports `PHASE_ADVANCED`, and marks Phase 1 `DONE` → structuring proceeds to Phase 2.
 7. Development runs Phase 2's in-loop audits and phase-level pass. The user runs pocket-closing again after its `PHASE_COMPLETE`; the final phase returns `CLOSED` instead of `PHASE_ADVANCED`.
 
 ## Entry Points — Don't Always Start at the Top

@@ -488,7 +488,7 @@ Save plan to: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
 
 Run the CLI against the **saved** path to confirm the plan parses, conforms to the
 `### Task N: name [annotation]` template, has a valid dependency order, and to capture
-its routing decision — **without writing any files**:
+the execution flow — **without writing any files**:
 
 ```bash
 npx -y pocketto-pi structure "docs/pocket/plans/{date}-{slug}/execution-plan.md" --dry-run --json --contract 2
@@ -498,24 +498,30 @@ Parse the JSON envelope — do not scrape prose:
 - **`ok == false`** → **STOP. Do not present the approval gate.** Report `error.message` to the
   user (e.g. `NO_TASKS`, `UNKNOWN_TASK_REF`, `CYCLE_DETECTED` — the plan is malformed or has a
   bad/cyclic dependency). Fix the plan, then re-run this step.
-- **`ok == true`** → capture `data.action` (`"passthrough"` | `"split"`) and `data.executionFlow`
+- **`ok == true`** → capture `data.action` (`"single"` | `"split"`) and `data.executionFlow`
   (the run-order graph, e.g. `T1→T2,T3(PARALLEL)→T4`). This dry-run writes nothing and never
-  authorizes a handoff — it only validates and decides the route.
+  authorizes a handoff — it only validates. Routing does not branch on `data.action`; every
+  approved plan goes to pocket-structuring.
 
-### Step 3: User Approval Gate (branch-aware)
+### Step 3: Plan approval
 
-Present the result, showing the execution flow and the route:
+This gate is **plan approval**: the user authorizes generation of derived execution
+artifacts (`execution-plan/index.md`, task files, and phase manifests when multi-phase).
+It does **not** authorize implementation. Structuring will ask separately for
+**execution approval** before pocket-development starts.
+
+Present the result, showing the execution flow:
 
 > "Plan complete — N tasks, TDD-structured, spec-reviewed, tests designed.
 > Saved to docs/pocket/plans/…
 > Execution flow: {data.executionFlow}
-> Ready to hand off to pocket-structuring for execution index generation?"
+> Plan approval: Ready to hand off to pocket-structuring for execution index generation?"
 
 Wait for confirmation. Apply any changes requested (re-run Step 2 if the plan changed).
 
 ### Step 4: Route to pocket-structuring (MANDATORY)
 
-**DO NOT STOP AFTER USER APPROVAL.** Invoke `pocket-structuring` with:
+**DO NOT STOP AFTER PLAN APPROVAL.** Invoke `pocket-structuring` with:
 - Execution plan path: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
 - Task count (from Phase 3)
 - Spec file path

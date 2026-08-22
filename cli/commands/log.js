@@ -62,8 +62,20 @@ function findSourcePlanFile(planDir, indexContent = null) {
   const defaultPlan = path.join(planDir, 'execution-plan.md');
   if (existsSync(defaultPlan)) return defaultPlan;
 
-  const files = readdirSync(planDir).filter((f) => f.endsWith('.md') && !f.startsWith('closeout') && !f.startsWith('AGENTS'));
-  if (files.length > 0) return path.join(planDir, files[0]);
+  const files = readdirSync(planDir).filter((f) =>
+    f.endsWith('.md') &&
+    !f.startsWith('closeout') &&
+    !f.startsWith('AGENTS') &&
+    !f.startsWith('CLAUDE') &&
+    f.toLowerCase() !== 'readme.md',
+  );
+  if (files.length === 1) return path.join(planDir, files[0]);
+  if (files.length > 1) {
+    throw new CliError(
+      'AMBIGUOUS_SOURCE_PLAN',
+      `Multiple candidate source plans in '${planDir}': ${files.join(', ')}. Pass the source plan explicitly or keep a single execution-plan.md.`,
+    );
+  }
   return defaultPlan;
 }
 
@@ -287,6 +299,10 @@ function warnDuplicateDoneShas(human, duplicateDoneShas) {
   );
 }
 
+// Injects a missing `tasks` array into legacy phase entries. Topology
+// reconcile after a source-plan change is owned by `structure --force`
+// (no progress) / `structure --reset` (discards progress) — this function
+// must not replace an existing tasks array.
 function migrateExisting(planDir, logPath) {
   const log = readLogChecked(logPath);
   let migrated = 0;

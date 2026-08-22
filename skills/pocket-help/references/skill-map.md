@@ -33,17 +33,17 @@ Two kinds of skills:
 - **What:** Converts a spec into a TDD-structured execution plan. Scans codebase, maps files, decomposes acceptance criteria into bounded tasks, writes full 7-field Pocket Packets (red → green → refactor → commit), then runs a spec-reviewer and a test-architect subagent.
 - **Input:** A completed pocket-grinding spec (path + acceptance criteria + architecture constraints + design decision).
 - **Output:** An execution plan of Pocket Packets with tests designed (`docs/pocket/plans/<date>-<slug>/execution-plan.md`).
-- **Handoff:** After the user approves, validates the plan with `structure --dry-run` and routes: **≤6 tasks → `pocket-development` directly**; **≥7 tasks → `pocket-structuring`**.
+- **Handoff:** After **plan approval**, validates the plan with `structure --dry-run` and routes **all plans** to `pocket-structuring` (`planning → structuring for all plans`). `data.action` is `"single"` | `"split"` (informational; routing does not branch on it).
 - **Use when:** A spec exists and needs to become executable tasks; "create plan", "build plan".
 - **Skip when:** No spec yet (→ pocket-grinding), or re-running a task already in execution (→ pocket-development directly).
 
 ### pocket-structuring
-- **What:** Sequences execution for **split (≥7-task)** plans. Runs a CLI (`npx pocketto-pi structure`) that counts tasks and decides: passthrough or phase-split. The CLI counts exactly — never estimate.
+- **What:** Decomposes every execution plan into per-task files + an index manifest. Runs `npx pocketto-pi structure` — the CLI counts exactly; never estimate. `planning → structuring for all plans`. `structuring → index + task files for all plans`. Phase manifests (`execution-plan/phase-N.md`) only when `phaseCount > 1`.
 - **Input:** A completed execution plan from pocket-planning.
-- **Output:** Execution index (`execution-plan/index.md`), per-task files (`execution-plan/tasks/T*-*.md`), and phase manifests (`execution-plan/phase-N.md`) if multi-phase.
-- **Handoff:** ≤6 tasks → invokes `pocket-development` directly with the flat plan. ≥7 tasks → hands phase files to `pocket-development` **one at a time**, gating each phase's completion before the next.
-- **Use when:** pocket-planning routed a ≥7-task (split) plan here, or a user invokes it directly (any size — ≤6 passes straight through to pocket-development).
-- **Skip when:** Never skip for ≥7-task plans. Bypass requires the exact phrase `OVERRIDE: skip structuring`.
+- **Output:** Execution index (`execution-plan/index.md`), per-task files (`execution-plan/tasks/T*-*.md`), and phase manifests if multi-phase.
+- **Handoff:** After **execution approval**, hands `execution-plan/index.md` (or `execution-plan/phase-1.md` if multi-phase) to `pocket-development` **one phase at a time**, gating each phase's `DONE` (set by user-triggered pocket-closing) before the next.
+- **Use when:** pocket-planning routed a plan here (always), or a user invokes it directly.
+- **Skip when:** Bypass requires the exact phrase `OVERRIDE: skip structuring`. That path is legacy: development reads the flat source plan directly and accepts the context-cost consequence. Verbal insistence is not enough.
 
 ### pocket-development
 - **What:** Precise subagent delegation, task-by-task. Main agent is **delegator + auditor only** — it never writes implementation code. Every spawn requires a Pocket Packet (the contract). Enforces 6 iron laws and an entry gate; after each implementer reports DONE it runs a mechanical gate (git log + tests + DELIVERABLE) then dispatches a read-only auditor subagent for the in-loop audit (spec compliance + code quality). Once every task in the phase is DONE it dispatches a phase-level pass over the whole phase — one read-only subagent over every task's diff range and packet — and, for any `REVIEW_FAIL` finding, delegates and records an append-only fix (never writes the fix itself). Supports parallel groups via git worktrees.
@@ -54,7 +54,7 @@ Two kinds of skills:
 - **Skip when:** No plan yet (→ pocket-planning), or tasks are tightly coupled (manual execution / redesign).
 
 ### pocket-closing
-- **What:** Terminal stage. Main agent is **reconciler + closer only** — it never reviews code. Reads `log.json` + every `reviews/*.json`, gates the close on review verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` blocks), advances passed phases `REVIEW → DONE` via the CLI, runs `log close`, and writes a closeout summary. State changes go through `pocketto-pi log` only — no hand-editing.
+- **What:** Terminal stage. Main agent is **reconciler + closer only** — it never reviews code. Reads `log.json` + every `reviews/*.json`, gates the close on review verdicts (any `REVIEW_FAIL`/`REVIEW_BLOCKED` blocks), advances the unique `REVIEW` phase `REVIEW → DONE` via the CLI, runs `log close`, and writes a closeout summary. Directory input selects the unique `REVIEW` phase; it never targets `WAITING`, `BLOCKED`, or already-DONE phases.
 - **Input:** A reviewed phase/plan: `log.json` plus `reviews/<task>-review.json` for every reviewable task.
 - **Output:** `log.json` header set to `DONE` + `date_completed`; `<plan_dir>/closeout.md`. States: `CLOSED`, `PHASE_ADVANCED`, `CLOSE_BLOCKED`, `ALREADY_CLOSED`.
 - **Handoff:** Terminal — this is where the pipeline ends. For phased plans, `PHASE_ADVANCED` points back to pocket-development for the next phase.

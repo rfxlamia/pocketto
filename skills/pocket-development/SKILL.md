@@ -51,9 +51,10 @@ Have implementation plan?
 
 pocket-development receives two distinct input formats. Identify which type before proceeding.
 
-**Type A — Index manifest / Flat plan** (`execution-plan/index.md` or legacy `execution-plan.md`)
-- Produced by pocket-planning / pocket-structuring (single-phase)
-- Reads `execution-plan/index.md` once for summary, then opens `execution-plan/tasks/T*-*.md` when starting each task
+**Type A — Index manifest / Flat plan** (`execution-plan/index.md` or, on `OVERRIDE: skip structuring`, the legacy source `execution-plan.md`)
+- Produced by pocket-planning / pocket-structuring (single-phase), or by the structuring override (flat source, no `execution-plan/` directory)
+- Canonical path: read `execution-plan/index.md` once for summary, then open `execution-plan/tasks/T*-*.md` when starting each task
+- Override/legacy path: read the flat source plan in full (context-cost accepted) — no per-task files
 - Proceed normally through Entry Gate
 
 **Type B — Phase file** (`execution-plan/phase-N.md` or legacy `execution-plan-phase-N.md`)
@@ -214,7 +215,7 @@ Move: login(), logout(), verify_token(), refresh_token() functions.
 Update imports in user_service.py to use auth_service.
 
 ## REFERENCES LOADED
-references/pocket-packet.md — 9-field packet structure, must include REFERENCES LOADED section
+references/pocket-packet.md — 7 mandatory fields; WORKTREE is an 8th field only for PARALLEL GROUP
 references/sandwich-prompt.md — Critical constraint in FIRST LINE, repeat near END for long outputs
 [CRITICAL: Without REFERENCES LOADED, packet is incomplete]
 

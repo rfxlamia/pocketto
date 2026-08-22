@@ -17,7 +17,7 @@ verification, stop conditions; no packet, no spawn), and gate before done
 - [pocket-pitching](skills/pocket-pitching/SKILL.md): Pre-grinding problem exploration when the problem is unformed; diverge→converge, produces a pitch doc.
 - [pocket-grinding](skills/pocket-grinding/SKILL.md): BDD-driven discovery producing a spec + acceptance criteria; invokes pocket-planning at handoff.
 - [pocket-planning](skills/pocket-planning/SKILL.md): Converts a spec into a TDD-structured execution plan of Pocket Packets.
-- [pocket-structuring](skills/pocket-structuring/SKILL.md): Splits a plan into sequential phase files (passthrough <7 tasks, phase-split ≥7).
+- [pocket-structuring](skills/pocket-structuring/SKILL.md): Decomposes every plan into index + per-task files; phase manifests only when phaseCount > 1.
 - [pocket-development](skills/pocket-development/SKILL.md): Task-by-task subagent delegation; enforces 6 iron laws, no packet = no spawn; runs an in-loop audit (spec compliance + code quality) per task and a phase-level pass at phase completion, including append-only corrections for any failing findings.
 - [pocket-closing](skills/pocket-closing/SKILL.md): User-triggered terminal stage; reconciles the phase-level pass verdicts vs log.json, gates the close, advances phases, writes closeout.md.
 
@@ -33,7 +33,7 @@ verification, stop conditions; no packet, no spawn), and gate before done
 
 ## CLI (pocketto-pi, run via npx, Node ≥18)
 
-- `npx pocketto-pi structure <execution-plan.md> [--dry-run]`: split a plan into phase files.
+- `npx pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset]`: decompose a plan into execution-plan/ (index + task files; phase manifests when multi-phase).
 - `npx pocketto-pi log init <plan_dir>`: initialize log.json for a plan directory.
 - `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN]`: update phase/task status (WAITING → REVIEW → DONE | BLOCKED).
 - `npx pocketto-pi log close <plan_dir>`: finalize log after all phases complete.

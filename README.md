@@ -100,7 +100,7 @@ Each stage invokes the next at handoff, carrying spec, plan, and acceptance crit
 | 1 | `pocket-pitching` | Rough idea, no clear problem yet |
 | 2 | `pocket-grinding` | Clear problem — need a spec + acceptance criteria |
 | 3 | `pocket-planning` | Spec ready — need an execution plan |
-| 4 | `pocket-structuring` | Plan ready — passthrough ≤6 tasks, phase-split ≥7 |
+| 4 | `pocket-structuring` | Plan ready — index + task files for all plans; phase manifests when `phaseCount > 1` |
 | 5 | `pocket-development` | Plan ready — execute task-by-task via subagents, with an in-loop audit and phase-level pass |
 | 6 | `pocket-closing` | After the phase-level pass — gate, close, summarize |
 
@@ -132,7 +132,7 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 **`pocket-planning`** — Converts a `pocket-grinding` spec into a TDD-structured execution plan of full Pocket Packets. Outputs tasks ready to dispatch via `pocket-development`.
 *Trigger:* "create plan", "build plan", or invoked by `pocket-grinding`.
 
-**`pocket-structuring`** — Splits a `pocket-planning` plan into sequential phase files. Passthrough below 7 tasks, phase-split at ≥7. Produces phase files for `pocket-development`, one at a time.
+**`pocket-structuring`** — Decomposes every `pocket-planning` plan into `execution-plan/index.md` + per-task files. Phase manifests (`execution-plan/phase-N.md`) only when `phaseCount > 1`. Hands phases to `pocket-development` one at a time.
 *Trigger:* "structure plan", "split plan", or invoked by `pocket-planning`.
 
 **`pocket-development`** — Precise subagent delegation for task-by-task execution. Every delegation requires a Pocket Packet — a structured contract with objective, verification criteria, and stop conditions. Enforces 6 iron laws: no packet = no spawn. Runs an in-loop audit per task (mechanical gate, then a read-only auditor subagent covering spec compliance and code quality) and, once every task is DONE, a phase-level pass over the whole phase — including delegating and recording append-only fixes for any failing findings — before handing off to `pocket-closing`.
@@ -196,7 +196,7 @@ The pocket skills drive a single cross-platform Node CLI, run via `npx` — no i
 
 | Command | What it does |
 |---------|--------------|
-| `npx pocketto-pi structure <execution-plan.md> [--dry-run]` | Split a plan into phase files (passthrough if < 7 tasks) |
+| `npx pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset]` | Decompose a plan into `execution-plan/` (index + task files; phase manifests when `phaseCount > 1`) |
 | `npx pocketto-pi log init <plan_dir>` | Initialize `log.json` for a plan directory |
 | `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha]` | Update phase or task status |
 | `npx pocketto-pi log close <plan_dir>` | Finalize log after all phases complete |

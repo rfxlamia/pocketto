@@ -7,6 +7,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { readFileSync, existsSync, writeFileSync, mkdirSync, rmSync, renameSync, mkdtempSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
+const { writeLog, todayISO } = require('../lib/logjson');
+const { getGitSha } = require('../lib/git');
+const { PIPELINE } = require('../lib/version');
 
 const THRESHOLD = 7;
 const PHASE_MIN = 3;
@@ -203,29 +206,146 @@ function splitPhases(tasks, depths) {
     }
   }
 
-  // Post-processing: rebalance trailing phase if < PHASE_MIN and previous phase can share
-  if (phases.length > 1) {
-    const lastIdx = phases.length - 1;
-    if (phases[lastIdx].length < PHASE_MIN) {
-      const prevIdx = lastIdx - 1;
-      const combined = [...phases[prevIdx], ...phases[lastIdx]];
-      if (combined.length <= PHASE_MAX) {
-        phases[prevIdx] = combined;
-        phases.pop();
-      } else {
-        // Find a valid split point that obeys PHASE_MIN <= size <= PHASE_MAX for both
-        let splitPoint = Math.ceil(combined.length / 2);
-        if (splitPoint < PHASE_MIN) splitPoint = PHASE_MIN;
-        if (combined.length - splitPoint < PHASE_MIN) splitPoint = combined.length - PHASE_MIN;
-        if (splitPoint <= PHASE_MAX && (combined.length - splitPoint) <= PHASE_MAX) {
-          phases[prevIdx] = combined.slice(0, splitPoint);
-          phases[lastIdx] = combined.slice(splitPoint);
-        }
+  return rebalancePhases(phases);
+}
+
+// Adjacent merge/steal so EVERY phase (not only the tail) is PHASE_MIN–PHASE_MAX
+// when there is more than one phase. Order is preserved; dependents never move
+// ahead of their prerequisites.
+function findValidSplit(combined) {
+  for (let sp = PHASE_MIN; sp <= PHASE_MAX && sp <= combined.length - PHASE_MIN; sp++) {
+    const right = combined.length - sp;
+    if (right >= PHASE_MIN && right <= PHASE_MAX) return sp;
+  }
+  return null;
+}
+
+function rebalancePhases(phases) {
+  if (phases.length <= 1) return phases;
+
+  const result = phases.map((p) => [...p]);
+  let guard = 0;
+  while (guard++ < 64) {
+    const undersized = result.findIndex((p) => p.length < PHASE_MIN);
+    if (undersized < 0) break;
+
+    const i = undersized;
+    if (i > 0 && result[i - 1].length + result[i].length <= PHASE_MAX) {
+      result[i - 1] = [...result[i - 1], ...result[i]];
+      result.splice(i, 1);
+      continue;
+    }
+    if (i < result.length - 1 && result[i].length + result[i + 1].length <= PHASE_MAX) {
+      result[i] = [...result[i], ...result[i + 1]];
+      result.splice(i + 1, 1);
+      continue;
+    }
+    if (i > 0) {
+      const combined = [...result[i - 1], ...result[i]];
+      const split = findValidSplit(combined);
+      if (split != null) {
+        result[i - 1] = combined.slice(0, split);
+        result[i] = combined.slice(split);
+        continue;
       }
     }
+    if (i < result.length - 1) {
+      const combined = [...result[i], ...result[i + 1]];
+      const split = findValidSplit(combined);
+      if (split != null) {
+        result[i] = combined.slice(0, split);
+        result[i + 1] = combined.slice(split);
+        continue;
+      }
+    }
+    break;
   }
 
-  return phases;
+  const sizes = result.map((p) => p.length);
+  if (result.some((p) => p.length < PHASE_MIN || p.length > PHASE_MAX)) {
+    throw new CliError(
+      'PHASE_SIZE_INVALID',
+      `Unable to rebalance phases into ${PHASE_MIN}–${PHASE_MAX} tasks each (got [${sizes.join(', ')}]).`,
+    );
+  }
+  return result;
+}
+
+function layoutFilesComplete(execPlanDir, phaseGroups, tasks) {
+  if (!existsSync(path.join(execPlanDir, 'index.md'))) return false;
+  if (phaseGroups.length > 1) {
+    for (let i = 0; i < phaseGroups.length; i++) {
+      if (!existsSync(path.join(execPlanDir, `phase-${i + 1}.md`))) return false;
+    }
+  }
+  for (const t of Object.values(tasks)) {
+    if (!existsSync(path.join(execPlanDir, 'tasks', t.filename))) return false;
+  }
+  return true;
+}
+
+function logHasExecutionProgress(logData) {
+  return (logData.phases || []).some((p) =>
+    p.status === 'DONE' ||
+    p.status === 'REVIEW' ||
+    p.status === 'BLOCKED' ||
+    (p.tasks || []).some((t) => t.status === 'DONE' || t.status === 'REVIEW' || t.status === 'BLOCKED' || t.done_sha) ||
+    (p.corrections && p.corrections.length > 0),
+  );
+}
+
+function buildLogPhases(phaseGroups, tasks) {
+  const totalPhases = phaseGroups.length;
+  return phaseGroups.map((ids, i) => {
+    const phaseNum = i + 1;
+    const file = totalPhases > 1 ? `execution-plan/phase-${phaseNum}.md` : 'execution-plan/index.md';
+    return {
+      order: phaseNum,
+      file,
+      status: 'WAITING',
+      tasks: ids.map((tid) => {
+        const t = tasks[tid];
+        const entry = {
+          id: tid,
+          name: t.name,
+          file: `execution-plan/tasks/${t.filename}`,
+          status: 'WAITING',
+        };
+        if (t.deps.length) entry.depends = t.deps.join(', ');
+        return entry;
+      }),
+    };
+  });
+}
+
+function rebuildExecutionLog(planDir, logJsonPath, phaseGroups, tasks, { reset, existing }) {
+  const phases = buildLogPhases(phaseGroups, tasks);
+  const planType = phases.length > 1 || phases[0].file.includes('phase') ? 'phased' : 'flat';
+  const planFile = 'execution-plan/index.md';
+
+  let log;
+  if (reset || !existing) {
+    log = {
+      header: {
+        plan_dir: planDir,
+        plan_type: planType,
+        status: 'IN_PROGRESS',
+        date_started: todayISO(),
+        date_completed: null,
+        baseline_sha: getGitSha(planDir),
+        pipeline: PIPELINE,
+      },
+      phases,
+    };
+  } else {
+    log = {
+      header: { ...existing.header, plan_type: planType, status: 'IN_PROGRESS' },
+      phases,
+    };
+  }
+  if (planFile !== phases[0].file) log.header.plan_file = planFile;
+  else delete log.header.plan_file;
+  writeLog(logJsonPath, log);
 }
 
 // ─── RENDERERS ──────────────────────────────────────────────────────────────
@@ -347,9 +467,9 @@ ${task.body}
 
 // ─── RUN ────────────────────────────────────────────────────────────────────
 
-function run({ planArg, dryRun, force }) {
+function run({ planArg, dryRun, force, reset }) {
   if (!planArg) {
-    throw new CliError('USAGE', 'Usage: pocketto-pi structure <execution-plan.md> [--dry-run] [--force]');
+    throw new CliError('USAGE', 'Usage: pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset]');
   }
 
   const planPath = path.resolve(planArg);
@@ -364,6 +484,19 @@ function run({ planArg, dryRun, force }) {
   const targetExecPlanDir = path.join(planDir, 'execution-plan');
   const indexFilePath = path.join(targetExecPlanDir, 'index.md');
 
+  if (count === 0) {
+    throw new CliError(
+      'NO_TASKS',
+      'no tasks parsed. Check that the plan uses ### Task N: name [annotation] headers.',
+    );
+  }
+
+  const depths = computeDepths(tasks);
+  const maxDepth = Math.max(...Object.values(depths));
+  const executionFlow = formatExecutionFlow(tasks, depths);
+  const phaseGroups = count < THRESHOLD ? [[...Object.keys(tasks)]] : splitPhases(tasks, depths);
+  const totalPhases = phaseGroups.length;
+
   // Check if source-sha256 and Source Plan basename match existing index.md
   let sourceChanged = true;
   if (existsSync(indexFilePath)) {
@@ -375,54 +508,55 @@ function run({ planArg, dryRun, force }) {
     }
   }
 
-  // Refusal policy for active execution log on source plan change
-  const logJsonPath = path.join(planDir, 'log.json');
-  if (sourceChanged && existsSync(logJsonPath)) {
-    try {
-      const logData = JSON.parse(readFileSync(logJsonPath, 'utf8'));
-      const hasProgress = (logData.phases || []).some((p) =>
-        p.status === 'DONE' ||
-        p.status === 'REVIEW' ||
-        p.status === 'BLOCKED' ||
-        (p.tasks || []).some((t) => t.status === 'DONE' || t.status === 'REVIEW' || t.status === 'BLOCKED' || t.done_sha) ||
-        (p.corrections && p.corrections.length > 0)
-      );
+  const layoutIncomplete = existsSync(targetExecPlanDir) && !layoutFilesComplete(targetExecPlanDir, phaseGroups, tasks);
 
-      if (hasProgress && !force) {
-        throw new CliError(
-          'ACTIVE_PLAN_PROGRESS_EXISTS',
-          `Source plan '${sourceBasename}' changed while execution progress exists in '${logJsonPath}' (tasks or phases are DONE/REVIEW/BLOCKED). ` +
-            `Regenerating layout is refused to prevent topology drift. Re-run with --force to override if intentional.`
-        );
-      } else if (logData.header && logData.header.status === 'IN_PROGRESS' && !force) {
-        throw new CliError(
-          'ACTIVE_PLAN_SOURCE_CHANGED',
-          `Source plan '${sourceBasename}' changed while execution log at '${logJsonPath}' is IN_PROGRESS. ` +
-            `Regenerating layout will alter task topology. Re-run with --force to override if intentional.`
-        );
-      }
-    } catch (err) {
-      if (err instanceof CliError) throw err;
-      // If log.json is invalid JSON, ignore and proceed
+  // Refusal policy for active execution log on source plan change.
+  // --force may regenerate when the log is IN_PROGRESS with no execution
+  // progress, and then rebuilds log.json to match the new topology.
+  // --force does NOT bypass progress: that requires an explicit --reset,
+  // which discards execution state and writes a fresh log.
+  const logJsonPath = path.join(planDir, 'log.json');
+  let existingLog = null;
+  let hasProgress = false;
+  if (existsSync(logJsonPath)) {
+    try {
+      existingLog = JSON.parse(readFileSync(logJsonPath, 'utf8'));
+      hasProgress = logHasExecutionProgress(existingLog);
+    } catch {
+      existingLog = null;
     }
   }
 
+  if (sourceChanged && existingLog && !reset) {
+    if (hasProgress) {
+      throw new CliError(
+        'ACTIVE_PLAN_PROGRESS_EXISTS',
+        `Source plan '${sourceBasename}' changed while execution progress exists in '${logJsonPath}' (tasks or phases are DONE/REVIEW/BLOCKED). ` +
+          `Regenerating layout is refused to prevent topology drift. Re-run with --reset to discard execution state and rebuild log.json to match the new layout.`,
+      );
+    }
+    if (existingLog.header && existingLog.header.status === 'IN_PROGRESS' && !force) {
+      throw new CliError(
+        'ACTIVE_PLAN_SOURCE_CHANGED',
+        `Source plan '${sourceBasename}' changed while execution log at '${logJsonPath}' is IN_PROGRESS. ` +
+          `Regenerating layout will alter task topology. Re-run with --force to rebuild the layout and reconcile log.json (all WAITING), or --reset to start a fresh execution log.`,
+      );
+    }
+  }
+
+  const shouldWriteLayout = reset || sourceChanged || layoutIncomplete;
+  let logRebuilt = false;
+
   const human = [`Plan: ${plan.feature}`, `Tasks found: ${count}`];
-  if (!sourceChanged) {
+  if (reset) {
+    human.push('Reset requested. Re-generating execution-plan layout and replacing log.json.');
+  } else if (!sourceChanged && layoutIncomplete) {
+    human.push('Source plan sha256 unchanged, but generated layout is incomplete. Repairing missing artifacts.');
+  } else if (!sourceChanged) {
     human.push('Source plan sha256 unchanged. Generated layout is up-to-date.');
   } else if (existsSync(indexFilePath)) {
     human.push('Source plan sha256 changed. Re-generating execution-plan layout.');
   }
-
-  if (count === 0) {
-    throw new CliError(
-      'NO_TASKS',
-      'no tasks parsed. Check that the plan uses ### Task N: name [annotation] headers.',
-    );
-  }
-
-  const depths = computeDepths(tasks);
-  const maxDepth = Math.max(...Object.values(depths));
 
   human.push('Depth table:');
   const depthTable = {};
@@ -436,12 +570,7 @@ function run({ planArg, dryRun, force }) {
     }
   }
   human.push('');
-
-  const executionFlow = formatExecutionFlow(tasks, depths);
   human.push(`Execution flow: ${executionFlow}`, '');
-
-  const phaseGroups = count < THRESHOLD ? [[...Object.keys(tasks)]] : splitPhases(tasks, depths);
-  const totalPhases = phaseGroups.length;
 
   const tempExecPlanDir = mkdtempSync(path.join(planDir, '.execution-plan-tmp-'));
 
@@ -478,7 +607,7 @@ function run({ planArg, dryRun, force }) {
   }
 
   if (!dryRun) {
-    if (!sourceChanged) {
+    if (!shouldWriteLayout) {
       rmSync(tempExecPlanDir, { recursive: true, force: true });
     } else {
       const backupDir = path.join(planDir, `.execution-plan-backup-${Date.now()}`);
@@ -510,6 +639,21 @@ function run({ planArg, dryRun, force }) {
         }
         throw new CliError('WRITE_FAILED', `Failed to atomically write execution-plan directory: ${err.message}`);
       }
+
+      // Keep generated topology and log.json aligned. Repair-only writes
+      // (unchanged source, missing files) leave execution state untouched.
+      if (existsSync(logJsonPath) && (reset || sourceChanged)) {
+        rebuildExecutionLog(planDir, logJsonPath, phaseGroups, tasks, {
+          reset: !!reset || !existingLog,
+          existing: reset || !existingLog ? null : existingLog,
+        });
+        logRebuilt = true;
+        human.push(
+          reset
+            ? 'Execution log reset to match generated layout (progress discarded).'
+            : 'Execution log rebuilt to match generated layout (all WAITING).',
+        );
+      }
     }
   } else {
     rmSync(tempExecPlanDir, { recursive: true, force: true });
@@ -536,8 +680,8 @@ function run({ planArg, dryRun, force }) {
     });
   }
 
-  if (!dryRun) human.push(`Files saved to: ${targetExecPlanDir}`);
-  human.push('', 'Ready to start with pocket-development?');
+  if (!dryRun && shouldWriteLayout) human.push(`Files saved to: ${targetExecPlanDir}`);
+  human.push('', 'Execution approval: Ready to start with pocket-development?');
 
   return {
     command: 'structure',
@@ -549,10 +693,14 @@ function run({ planArg, dryRun, force }) {
       spec: plan.spec,
       sha256: plan.sha256,
       sourceChanged,
+      layoutIncomplete,
       taskCount: count,
       threshold: THRESHOLD,
       action: totalPhases > 1 ? 'split' : 'single',
       dryRun: !!dryRun,
+      force: !!force,
+      reset: !!reset,
+      logRebuilt,
       executionFlow,
       phaseCount: totalPhases,
       depthTable,

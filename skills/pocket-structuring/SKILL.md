@@ -36,8 +36,13 @@ GATE 2: HARD OVERRIDE PROTOCOL.
         directly", or any verbal/written insistence. Only the exact
         override phrase unlocks the bypass.
 
-        If override is typed: log it, proceed to pocket-development,
-        document the skip in the plan file header.
+        If the exact override phrase is typed:
+        1. Log it in the plan file header (`**Override:** skip structuring`).
+        2. Do NOT run `pocketto-pi structure` — no `execution-plan/` directory is generated.
+        3. Invoke `pocket-development` with the flat source plan (`execution-plan.md`) as
+           Type A **legacy** input. Development reads the full source plan in context
+           (no per-task files). `log init` uses the legacy flat-plan fallback.
+        4. Accept the context-cost consequence: the whole plan sits in the development window.
 
 GATE 3: COMPLETE POCKET PACKETS PER TASK.
         Index and phase manifests reference task files, but every task file (execution-plan/tasks/T*-*.md)
@@ -87,12 +92,16 @@ If `ok == false`: report `error.message` to the user and do not proceed. A `CONT
 
 ---
 
-## Step 2: Present Summary + Get Approval
+## Step 2: Execution approval
+
+Planning already collected **plan approval** (authorize generation of derived
+execution artifacts). This gate is separate: **execution approval** authorizes
+implementation. Do not collapse the two.
 
 Present the script's summary output to the user, then ask:
 
 ```
-Ready to start with pocket-development?
+Execution approval: Ready to start with pocket-development?
 ```
 
 Do not start Phase 1 until the user says yes.
@@ -103,7 +112,7 @@ Do not start Phase 1 until the user says yes.
 
 1. User approves → invoke `pocket-development` with `execution-plan/index.md` (or `execution-plan/phase-1.md` if multi-phase)
 2. pocket-development completes Phase 1 → it runs its phase-level review pass and sets phase status to `REVIEW` (it never advances a phase beyond `REVIEW` on its own) → **wait for the phase status to reach `REVIEW`**
-3. On `REVIEW`, **halt** — do not invoke the next phase. Tell the user to run `/pocketto:pocket-closing <plan_dir>` themselves.
+3. On `REVIEW`, **halt** — do not invoke the next phase. Tell the user to run `/pocketto:pocket-closing <plan_dir>` themselves (directory mode targets the unique `REVIEW` phase).
 4. Wait for the user-triggered `pocket-closing` to run and advance the phase from `REVIEW` to `DONE`.
 5. Verify Phase N gate (phase status DONE, all tasks done, tests green, commits exist)
 6. Gate passes → invoke `pocket-development` with `execution-plan/phase-(N+1).md`

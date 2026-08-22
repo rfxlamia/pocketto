@@ -13,6 +13,7 @@ const {
 	readFileSync,
 	readdirSync,
 	existsSync,
+	unlinkSync,
 } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
@@ -944,18 +945,159 @@ test("structure refuses to re-generate layout for IN_PROGRESS plan when source p
 	run(["structure", plan]);
 	run(["log", "init", dir]);
 
-	// Modify source plan
-	writeFileSync(plan, NINE_TASK_PLAN + "\n<!-- modification -->\n");
+	writeFileSync(plan, NINE_TASK_PLAN.replace(
+		"### Task 9: Docs [depends: T8]\n\nDocs.",
+		"### Task 9: Docs [depends: T8]\n\nDocs.\n\n---\n\n### Task 10: Extra [depends: T9]\n\nExtra.",
+	));
 
-	// Running structure without --force should fail
 	const res = run(["structure", plan, "--json"], { expectFail: true });
 	const env = JSON.parse(res.stdout.trim());
 	assert.equal(env.ok, false);
 	assert.equal(env.error.code, "ACTIVE_PLAN_SOURCE_CHANGED");
 
-	// With --force it succeeds
 	const forceRes = json(["structure", plan, "--force", "--json"]);
 	assert.equal(forceRes.ok, true);
+	assert.equal(forceRes.data.logRebuilt, true);
+	assert.equal(forceRes.data.taskCount, 10);
+
+	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	const logTaskIds = log.phases.flatMap((p) => (p.tasks || []).map((t) => t.id));
+	assert.deepEqual(logTaskIds, forceRes.data.phases.flatMap((p) => p.tasks));
+	assert.ok(logTaskIds.includes("T10"));
+	assert.equal(log.phases.every((p) => p.status === "WAITING"), true);
+	assert.equal(
+		log.phases.every((p) => (p.tasks || []).every((t) => t.status === "WAITING")),
+		true,
+	);
+	for (const p of log.phases) {
+		assert.ok(existsSync(path.join(dir, p.file)), `missing ${p.file}`);
+		const sizes = log.phases.map((ph) => (ph.tasks || []).length);
+		if (log.phases.length > 1) {
+			assert.equal(sizes.every((n) => n >= 3 && n <= 6), true, `phase sizes ${sizes}`);
+		}
+	}
+});
+
+test("structure --force still refuses when execution progress exists; --reset rebuilds log", () => {
+	const dir = tmp();
+	const plan = writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", plan]);
+	run(["log", "init", dir]);
+	json(["log", "update", dir, "execution-plan/phase-1.md", "DONE", "--task", "T1", "--json"]);
+
+	writeFileSync(plan, NINE_TASK_PLAN.replace(
+		"### Task 9: Docs [depends: T8]\n\nDocs.",
+		"### Task 9: Docs [depends: T8]\n\nDocs.\n\n---\n\n### Task 10: Extra [depends: T9]\n\nExtra.",
+	));
+
+	const forceRes = run(["structure", plan, "--force", "--json"], { expectFail: true });
+	const forceEnv = JSON.parse(forceRes.stdout.trim());
+	assert.equal(forceEnv.ok, false);
+	assert.equal(forceEnv.error.code, "ACTIVE_PLAN_PROGRESS_EXISTS");
+
+	const before = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.equal(before.phases[0].tasks.find((t) => t.id === "T1").status, "DONE");
+
+	const resetRes = json(["structure", plan, "--reset", "--json"]);
+	assert.equal(resetRes.ok, true);
+	assert.equal(resetRes.data.reset, true);
+	assert.equal(resetRes.data.logRebuilt, true);
+	assert.equal(resetRes.data.taskCount, 10);
+
+	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	const logTaskIds = log.phases.flatMap((p) => (p.tasks || []).map((t) => t.id));
+	assert.deepEqual(logTaskIds, resetRes.data.phases.flatMap((p) => p.tasks));
+	assert.ok(logTaskIds.includes("T10"));
+	assert.equal(
+		log.phases.every((p) => (p.tasks || []).every((t) => t.status === "WAITING")),
+		true,
+	);
+});
+
+test("structure repairs missing generated files when source sha is unchanged", () => {
+	const dir = tmp();
+	const plan = writePlan(dir, SMALL_PLAN);
+	run(["structure", plan]);
+	const taskDir = path.join(dir, "execution-plan", "tasks");
+	const taskFile = readdirSync(taskDir).find((f) => f.startsWith("T2-"));
+	unlinkSync(path.join(taskDir, taskFile));
+
+	const env = json(["structure", plan, "--json"]);
+	assert.equal(env.ok, true);
+	assert.equal(env.data.sourceChanged, false);
+	assert.equal(env.data.layoutIncomplete, true);
+	assert.equal(env.data.logRebuilt, false);
+	assert.ok(existsSync(path.join(taskDir, taskFile)));
+});
+
+test("splitPhases rebalances a 1-task prerequisite plus 7 dependents (not [1,4,3])", () => {
+	const dir = tmp();
+	let packets = "### Task 1: Root [prereq]\nbody\n---\n";
+	for (let i = 2; i <= 8; i++) {
+		packets += `### Task ${i}: Child ${i} [depends: T1]\nbody\n---\n`;
+	}
+	const plan = writePlan(
+		dir,
+		`# EXECUTION PLAN — Fanout\n\n**Date:** 2026-08-22\n**Spec:** x.md\n\n## Pocket Packets\n\n---\n\n${packets}\n## Plan Summary\n`,
+	);
+	const env = json(["structure", plan, "--json"]);
+	assert.equal(env.ok, true);
+	assert.equal(env.data.taskCount, 8);
+	assert.ok(env.data.phaseCount >= 2);
+	const sizes = env.data.phases.map((p) => p.tasks.length);
+	assert.equal(
+		sizes.every((n) => n >= 3 && n <= 6),
+		true,
+		`expected 3–6 tasks per phase, got [${sizes.join(", ")}]`,
+	);
+	assert.notDeepEqual(sizes, [1, 4, 3]);
+});
+
+test("closing a plan_dir with Phase 1 REVIEW and Phase 2 WAITING advances only Phase 1", () => {
+	const dir = tmp();
+	const plan = writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", plan]);
+	run(["log", "init", dir]);
+
+	const logPath = path.join(dir, "log.json");
+	const seeded = JSON.parse(readFileSync(logPath, "utf8"));
+	assert.ok(seeded.phases.length >= 2, "fixture must be multi-phase");
+	for (const task of seeded.phases[0].tasks) task.status = "DONE";
+	seeded.phases[0].status = "REVIEW";
+	writeFileSync(logPath, JSON.stringify(seeded, null, 2) + "\n");
+
+	const reviewPhases = seeded.phases.filter((p) => p.status === "REVIEW");
+	assert.equal(reviewPhases.length, 1);
+
+	const advanced = json(["log", "update", dir, reviewPhases[0].file, "DONE", "--json"]);
+	assert.equal(advanced.ok, true);
+	assert.equal(advanced.data.level, "phase");
+	assert.equal(advanced.data.newStatus, "DONE");
+
+	const waiting = seeded.phases.find((p) => p.status === "WAITING");
+	const rejected = run(["log", "update", dir, waiting.file, "DONE", "--json"], { expectFail: true });
+	const rejectedEnv = JSON.parse(rejected.stdout.trim());
+	assert.equal(rejectedEnv.ok, false);
+	assert.equal(rejectedEnv.error.code, "INVALID_PHASE_TRANSITION");
+
+	const after = JSON.parse(readFileSync(logPath, "utf8"));
+	assert.equal(after.phases[0].status, "DONE");
+	assert.equal(after.phases[1].status, "WAITING");
+
+	const closeRes = run(["log", "close", dir, "--json"], { expectFail: true });
+	const closeEnv = JSON.parse(closeRes.stdout.trim());
+	assert.equal(closeEnv.ok, false);
+	assert.equal(closeEnv.error.code, "PHASES_NOT_DONE");
+});
+
+test("log init refuses multiple candidate source markdown files", () => {
+	const dir = tmp();
+	writeFileSync(path.join(dir, "alpha-plan.md"), SMALL_PLAN);
+	writeFileSync(path.join(dir, "beta-plan.md"), SMALL_PLAN);
+	const res = run(["log", "init", dir, "--json"], { expectFail: true });
+	const env = JSON.parse(res.stdout.trim());
+	assert.equal(env.ok, false);
+	assert.equal(env.error.code, "AMBIGUOUS_SOURCE_PLAN");
 });
 
 test("structure and log.js handle custom/non-default source plan basenames (auth-plan.md)", () => {
@@ -996,9 +1138,9 @@ test("structure exposes the depth-based execution flow for split plans", () => {
 	);
 });
 
-test("structure validates passthrough plans: a dangling dependency errors early", () => {
+test("structure validates single-phase plans: a dangling dependency errors early", () => {
 	const dir = tmp();
-	// 2 tasks (passthrough) but T2 depends on a task that does not exist.
+	// 2 tasks (single-phase) but T2 depends on a task that does not exist.
 	const broken = `# EXECUTION PLAN — Broken
 
 **Date:** 2026-06-01
