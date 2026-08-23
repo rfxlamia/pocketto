@@ -339,7 +339,10 @@ function rebuildExecutionLog(planDir, logJsonPath, phaseGroups, tasks, { reset, 
     };
   } else {
     log = {
-      header: { ...existing.header, plan_type: planType, status: 'IN_PROGRESS' },
+      // A rebuilt layout is by definition on the current pipeline generation —
+      // an existing log stamped with a lower PIPELINE must be refreshed here,
+      // or later log commands will reject it as too old for the new layout.
+      header: { ...existing.header, plan_type: planType, status: 'IN_PROGRESS', pipeline: PIPELINE },
       phases,
     };
   }
@@ -518,13 +521,25 @@ function run({ planArg, dryRun, force, reset }) {
   const logJsonPath = path.join(planDir, 'log.json');
   let existingLog = null;
   let hasProgress = false;
+  let logUnreadable = false;
   if (existsSync(logJsonPath)) {
     try {
       existingLog = JSON.parse(readFileSync(logJsonPath, 'utf8'));
       hasProgress = logHasExecutionProgress(existingLog);
     } catch {
-      existingLog = null;
+      logUnreadable = true;
     }
+  }
+
+  // A parse failure is NOT equivalent to "no log exists" — it may be hiding
+  // real execution progress. Refuse until the user fixes it or explicitly
+  // opts into discarding it with --reset.
+  if (logUnreadable && !reset) {
+    throw new CliError(
+      'LOG_JSON_UNPARSEABLE',
+      `Execution log at '${logJsonPath}' exists but is not valid JSON, so execution progress cannot be verified. ` +
+        `Fix the file manually, or re-run with --reset to discard it and start a fresh execution log.`,
+    );
   }
 
   if (sourceChanged && existingLog && !reset) {

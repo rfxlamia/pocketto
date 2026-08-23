@@ -1014,6 +1014,73 @@ test("structure --force still refuses when execution progress exists; --reset re
 	);
 });
 
+test("structure refuses an unparseable log.json instead of treating it as absent; --reset recovers", () => {
+	const dir = tmp();
+	const plan = writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", plan]);
+	run(["log", "init", dir]);
+	json(["log", "update", dir, "execution-plan/phase-1.md", "DONE", "--task", "T1", "--json"]);
+
+	const logPath = path.join(dir, "log.json");
+	const beforeCorrupt = readFileSync(logPath, "utf8");
+	writeFileSync(logPath, "{not valid json");
+
+	// Even with no source change, a corrupt log must be refused, not silently ignored.
+	const noopRes = run(["structure", plan, "--json"], { expectFail: true });
+	const noopEnv = JSON.parse(noopRes.stdout.trim());
+	assert.equal(noopEnv.ok, false);
+	assert.equal(noopEnv.error.code, "LOG_JSON_UNPARSEABLE");
+	assert.equal(readFileSync(logPath, "utf8"), "{not valid json");
+
+	// And with a source change, plain structure must not silently rebuild it either.
+	writeFileSync(plan, NINE_TASK_PLAN.replace(
+		"### Task 9: Docs [depends: T8]\n\nDocs.",
+		"### Task 9: Docs [depends: T8]\n\nDocs.\n\n---\n\n### Task 10: Extra [depends: T9]\n\nExtra.",
+	));
+	const changedRes = run(["structure", plan, "--json"], { expectFail: true });
+	const changedEnv = JSON.parse(changedRes.stdout.trim());
+	assert.equal(changedEnv.ok, false);
+	assert.equal(changedEnv.error.code, "LOG_JSON_UNPARSEABLE");
+	assert.equal(readFileSync(logPath, "utf8"), "{not valid json");
+
+	// --reset is the explicit opt-in that discards the unreadable log.
+	const resetRes = json(["structure", plan, "--reset", "--json"]);
+	assert.equal(resetRes.ok, true);
+	assert.equal(resetRes.data.logRebuilt, true);
+	const rebuilt = JSON.parse(readFileSync(logPath, "utf8"));
+	assert.equal(rebuilt.phases.every((p) => (p.tasks || []).every((t) => t.status === "WAITING")), true);
+	assert.notEqual(readFileSync(logPath, "utf8"), beforeCorrupt);
+});
+
+test("structure --force refreshes a stale pipeline marker to the current PIPELINE", () => {
+	const dir = tmp();
+	const plan = writePlan(dir, NINE_TASK_PLAN);
+	run(["structure", plan]);
+	run(["log", "init", dir]);
+
+	const logPath = path.join(dir, "log.json");
+	const log = JSON.parse(readFileSync(logPath, "utf8"));
+	assert.equal(log.header.pipeline, version.PIPELINE);
+	log.header.pipeline = version.PIPELINE - 1; // simulate a plan initialized under an older pipeline
+	writeFileSync(logPath, JSON.stringify(log, null, 2) + "\n");
+
+	writeFileSync(plan, NINE_TASK_PLAN.replace(
+		"### Task 9: Docs [depends: T8]\n\nDocs.",
+		"### Task 9: Docs [depends: T8]\n\nDocs.\n\n---\n\n### Task 10: Extra [depends: T9]\n\nExtra.",
+	));
+
+	const forceRes = json(["structure", plan, "--force", "--json"]);
+	assert.equal(forceRes.ok, true);
+	assert.equal(forceRes.data.logRebuilt, true);
+
+	const rebuilt = JSON.parse(readFileSync(logPath, "utf8"));
+	assert.equal(rebuilt.header.pipeline, version.PIPELINE);
+
+	// The rebuilt log must not then be rejected by the pipeline floor check.
+	const updRes = json(["log", "update", dir, rebuilt.phases[0].file, "REVIEW", "--json"]);
+	assert.equal(updRes.ok, true);
+});
+
 test("structure repairs missing generated files when source sha is unchanged", () => {
 	const dir = tmp();
 	const plan = writePlan(dir, SMALL_PLAN);
@@ -1828,7 +1895,7 @@ test("log update refuses a marker-less log.json without writing a byte", () => {
 	assert.equal(env.ok, false);
 	assert.equal(env.error.code, "PIPELINE_TOO_OLD");
 	assert.match(env.error.message, /absent/i); // names the detected version
-	assert.match(env.error.message, /pocketto-pi@2\.4\.4/); // names the recovery step
+	assert.match(env.error.message, new RegExp(`pocketto-pi@${version.MARKERLESS_FLOOR_CLI.replace(/\./g, "\\.")}`)); // names the recovery step
 
 	// Zero bytes written on the refusal path.
 	assert.deepEqual(readFileSync(logPath), before);

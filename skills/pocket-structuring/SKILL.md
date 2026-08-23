@@ -71,7 +71,7 @@ No install step or PATH setup — `npx` resolves the cross-platform binary. Use 
 The CLI prints a JSON envelope to stdout:
 
 ```json
-{ "ok": true, "command": "structure", "cliVersion": "3.0.0", "contract": 2,
+{ "ok": true, "command": "structure", "cliVersion": "3.1.0", "contract": 2,
   "data": {
     "feature": "...",
     "sha256": "...",

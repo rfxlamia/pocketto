@@ -215,11 +215,19 @@ Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contra
 
 ## 3.1.0
 
-`pocket-structuring` now decomposes every plan into `execution-plan/index.md` + per-task files (phase manifests only when `phaseCount > 1`), instead of passthrough below 7 tasks. `structure` gains `--reset` to rebuild layout and replace `log.json` when execution progress exists (explicit, discards state); `--force` now only rebuilds + reconciles when there is no execution progress, refusing otherwise.
+`pocket-structuring` now decomposes every plan into `execution-plan/index.md` + per-task files (phase manifests only when `phaseCount > 1`), instead of passthrough below 7 tasks. `structure` gains `--reset` to rebuild layout and replace `log.json` when execution progress exists (explicit, discards state); `--force` now only rebuilds + reconciles when there is no execution progress, refusing otherwise, and always refreshes the log's pipeline marker when it rebuilds. A `log.json` that exists but fails to parse is now refused (`LOG_JSON_UNPARSEABLE`) instead of being silently treated as absent — `--reset` is the explicit way to discard it. See "Migrating to 3.1.0" below if you have an in-flight plan.
 
 ## 3.0.1
 
 Removes lingering references to deprecated skills.
+
+## Migrating to 3.1.0
+
+This release bumps the pipeline generation (`PIPELINE` 3 → 4): `pocket-structuring` now always writes `execution-plan/index.md` + per-task files, where before it only split into phases at 7+ tasks. Plans that already have a `log.json` are unaffected until you next run `structure` against them — a plain run repairs/no-ops without touching state; a source-plan change with execution progress still requires `--force` or `--reset` as before.
+
+**If you interrupt `structure` while it's writing `execution-plan/` or `log.json`** (killed process, crashed machine), re-run `structure --reset` on that plan before continuing — it rebuilds both from scratch and is the only way to guarantee they're back in sync. Don't hand-edit `log.json` to try to fix a partial write.
+
+If a plan's `log.json` reports `PIPELINE_TOO_OLD` with a numeric (not absent) pipeline marker, pin `npx -y pocketto-pi@3.0.1` to finish it under the old pipeline, then update once it's closed — same recovery pattern as 3.0.0's migration below, but for this newer boundary.
 
 ## Migrating to 3.0.0
 

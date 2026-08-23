@@ -2,7 +2,7 @@
 
 const { readFileSync, writeFileSync } = require('node:fs');
 const { CliError } = require('./envelope');
-const { PIPELINE, PIPELINE_FLOOR_CLI } = require('./version');
+const { PIPELINE, PIPELINE_FLOOR_CLI, MARKERLESS_FLOOR_CLI } = require('./version');
 
 // log.json is written with 2-space indent + trailing newline to match the
 // previous Python writer byte-for-byte (json.dumps(..., indent=2) + "\n").
@@ -17,10 +17,14 @@ function assertPipeline(log, logPath) {
   const valid = Number.isInteger(detected);
   if (!valid || detected < PIPELINE) {
     const named = detected == null ? 'absent' : valid ? detected : 'invalid';
+    // An absent/invalid marker predates the whole pipeline system (fixed
+    // floor); a present-but-lower marker is a plan stranded by the most
+    // recent PIPELINE bump (floor moves with it) — the two need different pins.
+    const floor = detected == null ? MARKERLESS_FLOOR_CLI : PIPELINE_FLOOR_CLI;
     throw new CliError(
       'PIPELINE_TOO_OLD',
       `${logPath}: pipeline marker is ${named} (current is ${PIPELINE}). ` +
-        `Pin the CLI with npx -y pocketto-pi@${PIPELINE_FLOOR_CLI} and close the plan under the old pipeline before updating.`,
+        `Pin the CLI with npx -y pocketto-pi@${floor} and close the plan under the old pipeline before updating.`,
     );
   }
 }
