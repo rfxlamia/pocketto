@@ -44,7 +44,7 @@ This record SHALL live at:
 <plan_dir>/reviews/phase-pass-<phase_key>.json
 ```
 
-`<phase_key>` uses the same derivation `pocket-closing` uses for its own phase-scoped keys: `execution-plan-phase-N.md` → `phase-N`; a flat single-file plan → `phase-1`.
+`<phase_key>` is canonical from `log.json`: resolve the phase entry, then `phase_file = phase.file` and `phase_key = phase-${phase.order}`. Do not derive identity from a legacy filename.
 
 This path is chosen deliberately to satisfy two constraints at once:
 

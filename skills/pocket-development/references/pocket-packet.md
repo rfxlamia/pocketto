@@ -1,6 +1,6 @@
 # Pocket Packet Construction Guide
 
-The Pocket Packet is the contract between controller and subagent.
+The Pocket Packet is the contract between controller and subagent. **7 mandatory fields; WORKTREE is an 8th field only for PARALLEL GROUP.**
 
 ## Packet vs Regular Prompt
 

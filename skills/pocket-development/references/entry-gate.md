@@ -11,7 +11,7 @@ The Entry Gate is a mandatory 6-question checkpoint before any subagent spawn.
    └── Stop conditions known? (when to stop, what uncertainty looks like)
 
 2. PACKET CONSTRUCTIBLE?
-   ├── Can write 8-field packet without leaving fields vague?
+   ├── Can write 7-field packet (WORKTREE as 8th field only for PARALLEL GROUP) without leaving fields vague?
    ├── Not using forbidden verbs? (handle, fix, debug, improve, review)
    └── Can provide verification checklist?
 

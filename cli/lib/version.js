@@ -26,6 +26,6 @@ try {
 module.exports = {
   CLI_VERSION: version,
   CONTRACT: 2,
-  PIPELINE: 3,
+  PIPELINE: 4,
   PIPELINE_FLOOR_CLI: '2.4.4',
 };

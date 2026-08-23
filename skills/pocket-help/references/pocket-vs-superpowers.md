@@ -18,7 +18,7 @@ Neither is "better" everywhere. Match the tool to the work.
 | **Multi-step builds** | pocket-planning decomposes into bounded tasks; pocket-development executes each under a contract. No single mega-prompt trying to hold the whole feature at once. |
 | **BDD/TDD discipline** | Acceptance criteria are Given-When-Then; every Pocket Packet is failing-test → minimal code → commit. Test-first is structural, not aspirational. |
 | **Subagent delegation** | Each delegation is a Pocket Packet (explicit objective, verification, stop conditions). Iron law: no packet, no spawn — subagents don't fill gaps with guesses. |
-| **Phase gates** | pocket-structuring splits ≥7-task plans into phases handed off one at a time; a phase must pass its gate before the next begins. |
+| **Phase gates** | pocket-structuring generates an index + per-task files for all plans, and phase files when `phaseCount > 1`; a phase must pass its gate before the next begins. |
 | **Context preservation** | Phasing + per-stage summaries keep the working set small. The whole reason pocket-help exists is to avoid loading everything at once. |
 | **Auditable execution** | Every task leaves evidence: commits, green tests, a quick audit, and parallel review reports in `reviews/`. You can reconstruct *why* each change happened. |
 

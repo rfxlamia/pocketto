@@ -30,8 +30,7 @@ pocket-closing is always invoked **directly** by the user (`/pocketto:pocket-clo
 Examples:
 ```text
 /pocketto:pocket-closing docs/pocket/plans/2026-06-03-typing-dna/
-/pocketto:pocket-closing docs/pocket/plans/2026-05-28-auth/execution-plan.md
-/pocketto:pocket-closing docs/pocket/plans/2026-05-28-auth/execution-plan-phase-2.md
+/pocketto:pocket-closing docs/pocket/plans/2026-05-28-auth/execution-plan/phase-2.md
 ```
 
 ## Main Agent Role (HARDENED)
@@ -51,12 +50,39 @@ Main agent = **Reconciler + Closer only**. Does NOT review code.
 
 Run ALL steps before changing any state. Failure in steps 1–3 → `CLOSE_BLOCKED` immediately.
 
-### Step 1: Resolve plan_dir and target phases
+### Step 1: Resolve plan_dir and the unique REVIEW target
+
+Canonical phase identity (always from `log.json`, never from a legacy filename):
 
 ```text
-If invoked with a file path → plan_dir = parent dir, target = that phase file
-If invoked with a dir path  → plan_dir = dir, target = every phase in log.json
+phase_file = phase.file
+phase_key  = phase-${phase.order}
 ```
+
+Resolve the target phase:
+
+```text
+If invoked with a file path:
+  if parent dir is 'execution-plan', plan_dir = grandparent dir; else plan_dir = parent dir
+  Read log.json
+  Resolve the file to the unique log.phases[] entry (exact phase.file, else basename)
+  Require that phase.status == REVIEW
+    else CLOSE_BLOCKED: "Phase <file> is <status>, not REVIEW."
+  target = that phase
+  Never target WAITING, BLOCKED, or already-DONE phases for advancement
+
+If invoked with a dir path:
+  if dir ends with 'execution-plan', plan_dir = parent dir; else plan_dir = dir
+  Read log.json
+  targets = phases where status == REVIEW
+  0 matches  → CLOSE_BLOCKED: "No phase in REVIEW. Run pocket-development's phase-level pass first."
+  >1 matches → CLOSE_BLOCKED: "Multiple phases in REVIEW: <files>. Re-run with an explicit phase file."
+  1 match    → target = that phase
+```
+
+Directory input therefore advances only the current REVIEW phase. For a normal
+multi-phase plan (Phase 1 `REVIEW`, Phase 2 `WAITING`), `/pocketto:pocket-closing <plan_dir>`
+targets Phase 1, yields `PHASE_ADVANCED`, and leaves Phase 2 untouched.
 
 Also derive `spec_dir` (used by the enterprise reads in E2 and E5), mirroring create-pr:
 
@@ -135,7 +161,7 @@ Runs **after** the verdict gate passes and **before** any `log.json` mutation (A
    npx -y pocketto-pi mode --json --contract 2
    ```
    If `ok: false`, or `data.enterprise` is not `true`, or `data.require_approval` is not `true` → **skip this gate entirely** (proceed to Advance State). Non-enterprise runs and enterprise runs without `require_approval` are byte-identical to today.
-2. Discover the target phase's PR — same derivation as Step E5 below: `phase_key` from the phase file name, then
+2. Discover the target phase's PR — `phase_key = phase-${target.order}` from `log.json`, then
    ```bash
    npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
    ```
@@ -157,7 +183,7 @@ The gate reads GitHub; it never writes. Re-running pocket-closing after approval
 
 ## Advance State
 
-For each phase that **passed the gate**, advance it `REVIEW → DONE` at the phase level only:
+Advance the **target** phase `REVIEW → DONE` at the phase level only (`<phase_file>` = `target.file` from `log.json`):
 
 ```bash
 npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --json --contract 2
@@ -169,7 +195,7 @@ Parse the envelope, confirm `ok: true` and `data.newStatus == "DONE"` before con
 
 ## Close
 
-Attempt the close once all passed phases are `DONE`:
+Attempt the close once the target phase is `DONE`:
 
 ```bash
 npx -y pocketto-pi log close <plan_dir> --json --contract 2
@@ -180,7 +206,7 @@ npx -y pocketto-pi log close <plan_dir> --json --contract 2
 | Result | Meaning | pocket-closing output |
 |--------|---------|----------------------|
 | `ok: true`, `data.status == "DONE"` | All phases DONE → header set to `DONE` + `date_completed` | `CLOSED` — write closeout.md, emit final report |
-| `ok: false`, code `PHASES_NOT_DONE` | Other phases still `WAITING`/`REVIEW` (Type B, plan not finished) | `PHASE_ADVANCED` — the reviewed phase is DONE; name the next phase to run. Do NOT treat the non-zero exit as an error. |
+| `ok: false`, code `PHASES_NOT_DONE` | Other phases still `WAITING`/`REVIEW` (multi-phase plan not finished) | `PHASE_ADVANCED` — the REVIEW target is DONE; name the next phase to run. Do NOT treat the non-zero exit as an error. |
 
 `PHASE_ADVANCED` is the normal mid-pipeline state for phased plans: you advanced one phase, the plan continues. Point the user back to pocket-development for the next phase.
 
@@ -240,7 +266,7 @@ Parse `data.bodyFile` and `data.marker` (`<!-- pocket-tasklist -->`), then upser
 
 ### Step E5: Discover linking PR number
 
-Derive `<phase_key>` from the target phase file name, mirroring create-pr: `phase-N` from the phase file name (`execution-plan-phase-N.md` → `phase-N`); flat single-file plan → `phase-1`. The PR number is written by create-pr at the phase-nested path, so read it there:
+Canonical identity from the target `log.json` phase: `phase_file = target.file`, `phase_key = phase-${target.order}`. The PR number is written by create-pr at the phase-nested path, so read it there:
 
 ```bash
 npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
@@ -342,7 +368,7 @@ Closeout: <plan_dir>/closeout.md
   "phases": [
     {
       "order": 1,
-      "file": "execution-plan.md",
+      "file": "execution-plan/index.md",
       "status": "REVIEW",
       "tasks": [
         { "id": "T1", "name": "Capture keystroke timing", "status": "DONE", "done_sha": "bcd2345" },
@@ -368,7 +394,7 @@ reviews/T1-review.json → `REVIEW_PASS`, reviews/T2-review.json → `REVIEW_PAS
     "baseline_sha": "abc1234"
   },
   "phases": [
-    { "order": 1, "file": "execution-plan.md", "status": "DONE", "tasks": [ /* unchanged */ ] }
+    { "order": 1, "file": "execution-plan/index.md", "status": "DONE", "tasks": [ /* unchanged */ ] }
   ]
 }
 ```

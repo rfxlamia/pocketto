@@ -7,7 +7,7 @@ description: Use when executing multi-task implementation plans. Trigger on exec
 
 Precise subagent delegation for task-by-task development execution. POCKET ensures every delegation has a complete contract (Pocket Packet) that specifies exactly what must be done, how to verify it, and when to escalate.
 
-**Core principle:** Every delegation is a contract. The packet is the contract. No packet, no spawn.
+**Core principle:** Every delegation is a contract. The packet is the contract. No packet, no spawn. Read `execution-plan/index.md` once to understand execution flow and dependencies, then open individual task files (`execution-plan/tasks/T*-*.md`) on demand when a task is ready to execute.
 
 ## Startup: Initialize Execution Log
 
@@ -17,7 +17,7 @@ Precise subagent delegation for task-by-task development execution. POCKET ensur
 npx -y pocketto-pi log init "<plan_dir>" --json --contract 2
 ```
 
-No install step, PATH setup, or shell-specific guard — `npx` resolves the cross-platform binary and `log init` is idempotent, so this is safe to run unconditionally every session. Replace `<plan_dir>` with the folder containing your `execution-plan.md` or `execution-plan-phase-N.md` file (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`).
+No install step, PATH setup, or shell-specific guard — `npx` resolves the cross-platform binary and `log init` is idempotent, so this is safe to run unconditionally every session. Replace `<plan_dir>` with the folder containing your execution plan (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`).
 
 - No `log.json` yet → creates it from the plan files in that directory
 - `log.json` exists but tasks missing → migrates tasks into existing phases (status preserved)
@@ -51,14 +51,16 @@ Have implementation plan?
 
 pocket-development receives two distinct input formats. Identify which type before proceeding.
 
-**Type A — Flat plan** (`execution-plan.md`)
-- Produced by pocket-planning directly (≤6 tasks) or pocket-structuring pass-through
-- No phase metadata in header
+**Type A — Index manifest / Flat plan** (`execution-plan/index.md` or, on `OVERRIDE: skip structuring`, the legacy source `execution-plan.md`)
+- Produced by pocket-planning / pocket-structuring (single-phase), or by the structuring override (flat source, no `execution-plan/` directory)
+- Canonical path: read `execution-plan/index.md` once for summary, then open `execution-plan/tasks/T*-*.md` when starting each task
+- Override/legacy path: read the flat source plan in full (context-cost accepted) — no per-task files
 - Proceed normally through Entry Gate
 
-**Type B — Phase file** (`execution-plan-phase-N.md`)
-- Produced by pocket-structuring for plans with ≥7 tasks
+**Type B — Phase file** (`execution-plan/phase-N.md` or legacy `execution-plan-phase-N.md`)
+- Produced by pocket-structuring for plans with multiple phases
 - Header contains: `Phase N of M`, `Prerequisite`, `Contains tasks`, `Unlocks next`, `## Phase Completion Gate`
+- Reads `execution-plan/phase-N.md` for phase bounds, then opens `execution-plan/tasks/T*-*.md` on demand for each task
 - **Before any task execution:**
   1. Extract phase metadata from header: Phase N of M, prerequisite status, task list
   2. Confirm `**Prerequisite:** Phase N-1 must be COMPLETE` is satisfied
@@ -75,6 +77,7 @@ Main agent = **Delegator + Auditor only**. This is non-negotiable. Auditor here 
 | Initialize and update pocket log | Write, edit, or create implementation code |
 | Construct Pocket Packets and dispatch subagents | Invoke a separate per-task review workflow — dispatch the in-loop auditor instead |
 | Run the mechanical gate, then dispatch the read-only auditor | Judge code quality or spec compliance itself |
+| Read task file `execution-plan/tasks/T*-*.md` on demand per task | Read full plan / all task files upfront (avoid context blowout) |
 | Emit PHASE_COMPLETE handoff | Take over a task because "it's faster to do it myself" |
 
 **Per-task review is the in-loop cycle (see [Review](#review)): mechanical gate, then a read-only auditor subagent. The main agent never judges code — every criterion is executed by that auditor. Cite `references/two-stage-review.md`.**
@@ -121,51 +124,18 @@ These are non-negotiable. Violating any iron law leads to degraded delegation qu
 
 ## Entry Gate Checklist
 
-Before dispatching any subagent, ALL items must pass.
+Run the normative Entry Gate Checklist verbatim from `references/entry-gate.md`.
 
-**Phase File Pre-Gate** (Type B input only — fires before items 1–6):
-```
-0. PHASE FILE CHECK
-   - Input is execution-plan-phase-N.md?
-   - If YES: phase metadata extracted? (N of M, prerequisite, task list, Completion Gate)
-   - Prerequisite phase confirmed COMPLETE?
-   FAIL → STOP. Emit PHASE_BLOCKED with prerequisite reason. Do not proceed to item 1.
-```
+**Summary of Pre-Gate & Items:**
+0. **PHASE FILE CHECK** (Type B input only) — Phase metadata extracted and prerequisite phase confirmed COMPLETE?
+1. **TASK BOUNDED?** — Read task file `execution-plan/tasks/TN-*.md` on demand when starting TN.
+2. **PACKET CONSTRUCTIBLE?** — Can write precise 7-field packet (or 8-field with WORKTREE for PARALLEL GROUP)?
+3. **TASK TYPE CLEAR?** — Implementation vs review/audit.
+4. **PROMPT SANDWICH?** — Critical instruction at START, constraint at END.
+5. **PARALLEL CLASSIFICATION** — Classify as Foundation, Solo, or Parallel Group.
+6. **VERIFICATION DEFINED?** — Exact criteria for "done".
 
-```
-1. TASK BOUNDED?
-   - Scope clear? Deliverables defined? Stop conditions known?
-   - NOT: "implement auth" but "Extract auth layer to auth_service.py"
-   FAIL → KEEP LOCAL with reason
-
-2. REFERENCES LOADED?
-   - Relevant reference files read and cited in packet?
-   - Packet includes REFERENCES LOADED section?
-   FAIL → LOAD REFERENCES first, then reconstruct packet
-
-3. PACKET CONSTRUCTIBLE?
-   - Can you write a precise 7-field packet?
-   - Must have: specific objective, exact verification criteria
-   FAIL → KEEP LOCAL until task is clearer
-
-4. TASK TYPE CLEAR?
-   - Task = implementation → proceed with packet construction
-   - Task = review/audit → route to review workflow
-   UNCLEAR → Clarify task type before proceeding
-
-5. PROMPT SANDWICH?
-   - Critical instruction at START?
-   - Key constraint at END?
-   - Middle section free of filler/padding?
-   FAIL → Restructure before spawn
-
-6. VERIFICATION DEFINED?
-   - Know exact criteria for "done"?
-   - Can write 3-5 verification checklist items?
-   FAIL → Define before spawn
-
-ANY "NO" → KEEP LOCAL with reason written in task notes
-```
+ANY "NO" → KEEP LOCAL with reason written in task notes.
 
 ## Mandatory Reference Preloading
 
@@ -245,7 +215,7 @@ Move: login(), logout(), verify_token(), refresh_token() functions.
 Update imports in user_service.py to use auth_service.
 
 ## REFERENCES LOADED
-references/pocket-packet.md — 9-field packet structure, must include REFERENCES LOADED section
+references/pocket-packet.md — 7 mandatory fields; WORKTREE is an 8th field only for PARALLEL GROUP
 references/sandwich-prompt.md — Critical constraint in FIRST LINE, repeat near END for long outputs
 [CRITICAL: Without REFERENCES LOADED, packet is incomplete]
 
@@ -319,7 +289,7 @@ Match execution approach to task complexity:
 digraph pocket_process {
     rankdir=TB;
 
-    "Read plan, extract task N" -> "Run Entry Gate Checklist";
+    "Read plan index, extract task N" -> "Run Entry Gate Checklist";
     "Run Entry Gate Checklist" -> { "KEEP LOCAL" "Classify task" };
     "Classify task" -> { "FOUNDATION / SOLO" "PARALLEL GROUP" };
     "FOUNDATION / SOLO" -> "Construct Pocket Packet";
@@ -732,7 +702,7 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns 
 
 ## Phase Completion Protocol
 
-Activates **only for Type B input** (execution-plan-phase-N.md). Runs after all tasks reach DONE/DONE_WITH_CONCERNS and their per-task in-loop audits pass.
+Activates **only for Type B input** (execution-plan/phase-N.md). Runs after all tasks reach DONE/DONE_WITH_CONCERNS and their per-task in-loop audits pass.
 
 **Ordering is fixed: dispatch the phase-level pass → record its result → set phase status `REVIEW` → run enterprise reporting (`references/enterprise-reporting.md`).** `PHASE_COMPLETE` may be emitted only after the phase-level pass has recorded its result.
 
@@ -801,6 +771,7 @@ When delegation pressure threatens to bypass structure:
 
 **Main agent role violations (HARDENED — see [Main Agent Role](#main-agent-role-hardened) section):**
 - Implement code yourself instead of delegating to a subagent
+- Read full plan upfront instead of opening individual task files `execution-plan/tasks/T*-*.md` on demand
 - Invoke a separate per-task review workflow — per-task review is the in-loop auditor (see `references/two-stage-review.md`)
 - Mark task DONE in the log without a passing in-loop audit (mechanical gate + read-only auditor)
 - Mark a task DONE without passing `--sha <audited_head>`

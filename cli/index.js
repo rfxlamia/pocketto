@@ -3,7 +3,7 @@
 
 // pocketto-pi — cross-platform CLI for the pocket-* development skills.
 //
-//   pocketto-pi structure <execution-plan.md> [--dry-run] [--json]
+//   pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset] [--json]
 //   pocketto-pi log init   <plan_dir>                      [--json]
 //   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
 //   pocketto-pi log close  <plan_dir>                      [--json]
@@ -38,6 +38,8 @@ function parseArgs(argv) {
   const flags = {
     json: false,
     dryRun: false,
+    force: false,
+    reset: false,
     task: null,
     contract: null,
     version: false,
@@ -73,6 +75,8 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--json') flags.json = true;
     else if (a === '--dry-run') flags.dryRun = true;
+    else if (a === '--force') flags.force = true;
+    else if (a === '--reset') flags.reset = true;
     else if (a === '--version' || a === '-v') flags.version = true;
     else if (a === '--help' || a === '-h') flags.help = true;
     else if (a === '--task') flags.task = requireValue(argv[++i], '--task');
@@ -139,7 +143,7 @@ function checkContract(requested) {
 const HELP = `pocketto-pi — CLI for the pocket-* development skills
 
 Usage:
-  pocketto-pi structure <execution-plan.md> [--dry-run] [--json]
+  pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset] [--json]
   pocketto-pi log init   <plan_dir>                       [--json]
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
   pocketto-pi log update <plan_dir> <phase_file> --correction <sha> [--for-task TN] [--json]
@@ -161,6 +165,9 @@ Flags:
   --json            Emit the stable JSON envelope to stdout
   --contract <N>    Assert the expected output contract (version handshake)
   --dry-run         (structure) compute + summarize without writing files
+  --force           (structure) rebuild layout + reconcile log.json when source changed with no execution progress
+  --reset           (structure) rebuild layout and replace log.json even if execution progress exists
+                    (discards WAITING/REVIEW/DONE/BLOCKED state; explicit restart)
   --task <id>       (log update) update a task within a phase, e.g. --task T1
   --correction <sha> (log update) record a correction commit on a phase
   --for-task <id>   (log update) task a correction is primarily for, e.g. --for-task T1
@@ -224,7 +231,7 @@ function main() {
   try {
     checkContract(flags.contract);
     if (command === 'structure') {
-      const result = structure.run({ planArg: positionals[1], dryRun: flags.dryRun });
+      const result = structure.run({ planArg: positionals[1], dryRun: flags.dryRun, force: flags.force, reset: flags.reset });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'log') {
       const result = log.run({
