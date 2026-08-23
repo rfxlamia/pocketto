@@ -213,34 +213,9 @@ Status flow: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
 
 Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contract, data, error }` — that skills parse instead of scraping text. Add `--contract <N>` for a version handshake that fails loudly on mismatch rather than emitting output an older skill can't read.
 
-## 3.1.0
+## Changelog
 
-`pocket-structuring` now decomposes every plan into `execution-plan/index.md` + per-task files (phase manifests only when `phaseCount > 1`), instead of passthrough below 7 tasks. `structure` gains `--reset` to rebuild layout and replace `log.json` when execution progress exists (explicit, discards state); `--force` now only rebuilds + reconciles when there is no execution progress, refusing otherwise, and always refreshes the log's pipeline marker when it rebuilds. A `log.json` that exists but fails to parse is now refused (`LOG_JSON_UNPARSEABLE`) instead of being silently treated as absent — `--reset` is the explicit way to discard it. `index.md`'s Task Index table now renders in phase-group (execution) order instead of numeric task ID, matching `phase-N.md`; for single-phase plans this is also the order `log init` uses to seed dispatch state, so a plan authored out of numeric sequence now dispatches in the order it's written, not by ID. See "Migrating to 3.1.0" below if you have an in-flight plan.
-
-## 3.0.1
-
-Removes lingering references to deprecated skills.
-
-## Migrating to 3.1.0
-
-This release bumps the pipeline generation (`PIPELINE` 3 → 4): `pocket-structuring` now always writes `execution-plan/index.md` + per-task files, where before it only split into phases at 7+ tasks. Plans that already have a `log.json` are unaffected until you next run `structure` against them — a plain run repairs/no-ops without touching state; a source-plan change with execution progress still requires `--force` or `--reset` as before.
-
-**If you interrupt `structure` while it's writing `execution-plan/` or `log.json`** (killed process, crashed machine), re-run `structure --reset` on that plan before continuing — it rebuilds both from scratch and is the only way to guarantee they're back in sync. Don't hand-edit `log.json` to try to fix a partial write.
-
-If a plan's `log.json` reports `PIPELINE_TOO_OLD` with a numeric (not absent) pipeline marker, pin `npx -y pocketto-pi@3.0.1` to finish it under the old pipeline, then update once it's closed — same recovery pattern as 3.0.0's migration below, but for this newer boundary.
-
-## Migrating to 3.0.0
-
-Pocketto 3.0.0 introduces the in-loop build cycle: `pocket-development` now runs an audit per task and a phase-level pass before handoff, and — as part of that — **plans started under an older pipeline are refused, not repaired**. `log.json` gains a pipeline-version marker; a log without one (or with a lower one) makes any state-changing CLI command exit non-zero rather than silently continuing on stale assumptions.
-
-**Before updating, close any in-flight plan.** A plan that has an open `log.json` from before 3.0.0 will be refused by the new CLI the next time a state-changing command runs against it — the refusal writes nothing, so nothing is lost, but the plan is stuck until you act.
-
-If you're already updated and stuck mid-plan, recover by pinning:
-
-- **CLI:** run the plan out with `npx -y pocketto-pi@2.4.4 …` instead of an unpinned `npx -y pocketto-pi …` until the plan closes.
-- **Plugin (Claude Code):** the marketplace entry installs via `source: url` with no version field, so it always tracks the latest commit — there is no version to roll back to. Do not run `/plugin update` (or reinstall) until the in-flight plan closes; simply leave the currently installed plugin in place.
-
-Once the plan is closed under the pinned CLI, drop the pin and update normally — new plans initialize with the current pipeline marker and are unaffected.
+See [CHANGELOG.md](CHANGELOG.md) for the full version history, including migration notes for breaking changes (3.0.0, 3.1.0).
 
 ## License
 
