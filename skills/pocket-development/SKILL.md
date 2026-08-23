@@ -204,6 +204,26 @@ Every subagent spawn requires this 7-field structure (plus an 8th `WORKTREE` fie
 [Done when X | Uncertain when Y | Escalate when Z]
 ```
 
+### Behavioral Tasks: Preserve the Test Intent
+
+Plans carry **test intent, not test source code** — planning owns the intent, development owns
+the implementation. A behavioral task arrives with a test file, level, GWT intent, boundary to
+exercise, test doubles, an `Expected RED` reason, and an exact command. Do not expect runnable
+test code in the task file, and never treat its absence as an incomplete packet.
+
+When constructing the implementer packet for a behavioral task:
+
+1. **Copy the task's test intent into OBJECTIVE unchanged** — all seven fields. Do not
+   summarize it, and do not substitute your own test design.
+2. **The implementer writes the RED test from that intent**, at the specified file and level.
+3. **RED is verified before any production code:** run the exact command, confirm it FAILS, and
+   confirm the failure matches `Expected RED`. A pass — or a failure for a different reason —
+   means the test does not prove the behavior; fix the test first.
+4. Then GREEN (minimum to pass) → refactor while green → commit.
+
+Field-by-field guidance → `references/pocket-packet.md`. Tasks marked
+`[no-tdd — structural task]` are exempt from steps 2–4.
+
 ## Worked Example: User Service Refactoring
 
 **Task:** Extract authentication layer from monolithic user_service.py

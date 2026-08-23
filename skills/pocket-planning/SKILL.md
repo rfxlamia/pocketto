@@ -5,7 +5,7 @@ description: Converts a pocket-grinding spec into a TDD-structured execution pla
 
 # Pocket Planning
 
-Bridges pocket-grinding spec and pocket-development execution. Scans codebase context, maps file structure, decomposes acceptance criteria into TDD-structured tasks, generates Pocket Packets with test-first steps and commits, then runs a spec reviewer subagent — plus a conditional test strategy audit when a task carries test risk — before handoff.
+Bridges pocket-grinding spec and pocket-development execution. Scans codebase context, maps file structure, decomposes acceptance criteria into TDD-structured tasks, generates Pocket Packets with test-first steps and commits, then runs a spec reviewer subagent — plus a conditional test strategy audit when any Phase 6 trigger fires (cross-unit GWT scenario, ambiguous test level, persistence/concurrency/network/external-service behavior, or a `[test-risk]` task) — before handoff.
 
 **Core principle:** Every task is red → green → refactor → commit. Steps live inside the task. Pocket enforces execution order and parallelism.
 
@@ -49,7 +49,8 @@ GATE 3: Design Decision section must be present in spec.
 GATE 4: Spec Reviewer must APPROVE before the plan is presented at the Phase 7
         approval gate.
         Issues Found → fix plan, re-run reviewer. Do not skip.
-        (Phase 6 is conditional — an APPROVE is required whether or not it runs.)
+        (Phase 6 is conditional — an APPROVE is required whether or not it runs.
+         If Phase 6 changes the plan, it is re-reviewed before Phase 7.)
 
 GATE 5: User must approve the final plan before ANY downstream handoff.
         All plans hand off to pocket-structuring (which generates the execution-plan/ index and task files).
@@ -283,7 +284,7 @@ For advanced patterns (shared interfaces, event-driven, phased rollouts):
 
 ### Test Intent, Not Test Code
 
-Every behavioral task's Step 1 carries seven fields — **test file, level, GWT test intent, boundary to exercise, test doubles, expected RED reason, exact command** — laid out in the template below.
+Every behavioral task carries seven fields across the RED cycle — **test file, level, GWT test intent, boundary to exercise, test doubles, expected RED reason** in Step 1, and the **exact command** in Step 2 where the test is actually run. Both steps are laid out in the template below; the command is defined once, in Step 2.
 
 Do **not** write test source code into the plan. The implementation does not exist yet, so code here is false precision: it pins imports, signatures, and fixture shapes that may legitimately change while still satisfying the spec. The implementer writes the test during the RED step, against the API that exists by then. The seven fields are what let them do that without guessing.
 
@@ -516,7 +517,10 @@ Return: FINDINGS ONLY — missing behavior/edge case, wrong test level,
         TDD ordering violation. No test code. No rewritten plan.
 ```
 
-Apply findings by editing affected tasks in place. If that adds an integration-test task → re-run the Phase 3 circular dependency check before Phase 7.
+Apply findings by editing affected tasks in place. Then, before Phase 7:
+
+- Task added → re-run the Phase 3 circular dependency check, refresh the Phase 2 file map, and update `**Total tasks:**` plus the Plan Summary table.
+- **Re-dispatch the Spec Reviewer on the changed tasks.** Gate 4 covers the plan the user actually sees, so audit-applied edits must not reach Phase 7 unreviewed. This is a **single confirmation cycle, independent of Phase 5's 2-cycle budget**: Issues Found → fix inline, re-dispatch once → still Issues Found → `REVIEW BLOCKED`, stop. It runs only on triggered plans.
 
 ---
 

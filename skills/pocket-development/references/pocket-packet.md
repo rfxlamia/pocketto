@@ -70,6 +70,37 @@ Fix the auth issues
 Improve the auth layer
 ```
 
+#### Behavioral tasks: carry the planner's test intent verbatim
+
+A task file from `pocket-structuring` carries **test intent, not test source code** — planning
+owns the intent, development owns the implementation. Do not expect runnable test code in the
+task, and do not drop the intent when you rewrite the task into an implementer packet.
+
+Copy these fields into OBJECTIVE unchanged:
+
+| From the task | Into the packet |
+|---|---|
+| Test file, level (`unit`/`integration`/`E2E`) | Where the RED test goes and at what level |
+| GWT test intent (Given / When / Then) | The behavior the test must prove |
+| Exercise through | The boundary to drive — never internals |
+| Test doubles (and what must NOT be mocked) | Mock boundary |
+| Expected RED | The failure the implementer must see before writing production code |
+| Exact command (task Step 2) | The command to run |
+
+Then state the RED gate in OBJECTIVE explicitly:
+
+```
+1. Write the test at <test file> from the test intent above. Do not write production code yet.
+2. Run `<exact command>`. Confirm it FAILS, and that the failure matches Expected RED.
+   Passing here, or failing for a different reason (import error, typo, wrong fixture),
+   means the test does not prove the behavior — fix the test before continuing.
+3. Only then implement the minimum to make it pass, run the command again — PASS.
+4. Refactor while green, re-run the command, commit.
+```
+
+Omitting the RED verification turns TDD into test-after: the implementer writes production
+code first and a test that cannot fail. A task marked `[no-tdd — structural task]` is exempt.
+
 ### WHY THIS APPROACH
 
 **Purpose:** Justify task scope and complexity assessment.

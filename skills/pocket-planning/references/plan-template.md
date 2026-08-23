@@ -4,14 +4,22 @@ Load this during Phase 7 when writing the final execution plan document.
 
 ## Contents
 - [Full Execution Plan Template](#full-execution-plan-template)
-- [Compact Plan Template](#compact-plan-template-for-small-specs)
 - [Save Path Convention](#save-path-convention)
 
 ---
 
 ## Full Execution Plan Template
 
-Use this for specs with 3+ tasks. Copy, fill in, remove unused sections.
+Canonical execution-plan format for **all** `pocket-planning` output, regardless of task count. Copy, fill in, remove unused sections.
+
+Task count does not select a schema. `pocketto-pi structure` parses only this shape — a
+`# EXECUTION PLAN — <name>` title, a `## Pocket Packets` section, and
+`### Task N: <name> [annotation]` headings — and the Phase 7 dry-run is mandatory, so any
+other shape fails with `NO_TASKS`. Every behavioral task carries the full test-intent
+contract here too; there is no reduced form of it.
+
+Work small and clear enough that a full Pocket Packet feels like overkill belongs in the
+`hotfix` skill, not in a second planning schema.
 
 ````markdown
 # EXECUTION PLAN — <feature name>
@@ -145,25 +153,6 @@ Escalate when: <constraint violated>
 | T2 | <name> | T1 | standard | <GWT 1-liner> |
 | T3 | <name> | T1 | lightweight | <GWT 1-liner> |
 
-````
-
----
-
-## Compact Plan Template (for small specs)
-
-Use for 1–2 task plans where full template is overkill.
-
-````markdown
-# PLAN — <feature name>
-Spec: <path> | Date: YYYY-MM-DD | Tasks: N
-
-## Task 1: <name> [prereq]
-Objective: <what must be done>
-Steps: (1) <step> (2) <step>
-Complexity: lightweight | standard | deep
-Verification: Given <...>, When <...>, Then <...>
-Must-not: <out-of-scope item>
-Done when: verification passes, no out-of-scope files modified
 ````
 
 ---

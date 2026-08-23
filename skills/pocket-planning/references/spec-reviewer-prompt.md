@@ -34,7 +34,7 @@ Prompt:
   | GWT traceability | Every task's DELIVERABLE contains GWT scenarios from the spec |
   | Out-of-scope | No task touches items listed in spec Out-of-Scope section |
   | File map | Every file mentioned in tasks was listed in Phase 2 File Structure Map |
-  | Test intent present | Every behavioral task's Step 1 carries all seven fields: test file, level, GWT test intent, boundary to exercise, test doubles, expected RED reason, exact command |
+  | Test intent present | Every behavioral task carries all seven fields across its RED cycle: test file, level, GWT test intent, boundary to exercise, test doubles, expected RED reason (Step 1), and the exact command (Step 2). A command defined in Step 2 only is correct — do not flag it as missing from Step 1 |
   | Test level sane | The stated level (unit / integration / E2E) can actually observe the behavior being proved — not a unit test for a cross-boundary outcome |
   | Mock boundary sane | Test doubles do not mock the unit under test, and external services / network / clock are doubled rather than hit for real |
   | Cross-unit coverage | Every GWT scenario needing 2+ units collaborating has integration verification — an integration-test task, or an explicit extra TDD cycle inside the owning task |
