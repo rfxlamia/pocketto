@@ -939,6 +939,91 @@ body
 	assert.deepEqual(env.data.phases.map(p => p.tasks.length), [4, 3]);
 });
 
+test("index.md Task Index table follows phase-group order, not numeric task ID, for multi-phase plans", () => {
+	const dir = tmp();
+	const DIVERGENT_MULTI_PHASE = `# EXECUTION PLAN — Divergent Multi Phase
+
+**Date:** 2026-08-20
+**Spec:** x.md
+
+## Pocket Packets
+
+---
+
+### Task 1: T1 [prereq]
+body
+---
+### Task 2: T2 [depends: T1]
+body
+---
+### Task 3: T3 [prereq]
+body
+---
+### Task 4: T4 [prereq]
+body
+---
+### Task 5: T5 [prereq]
+body
+---
+### Task 6: T6 [prereq]
+body
+---
+### Task 7: T7 [prereq]
+body
+
+## Plan Summary
+`;
+	const plan = writePlan(dir, DIVERGENT_MULTI_PHASE);
+	const env = json(["structure", plan, "--json"]);
+	assert.equal(env.ok, true);
+	assert.equal(env.data.phaseCount, 2);
+	assert.deepEqual(env.data.phases.map((p) => p.tasks), [["T1", "T3", "T4"], ["T5", "T6", "T7", "T2"]]);
+
+	const indexContent = readFileSync(path.join(dir, "execution-plan", "index.md"), "utf8");
+	const rows = [...indexContent.matchAll(/^\| (T\d+) \| (.+?) \| Phase (\d+) \| \[([^\]]+)\]\(tasks\/([^)]+)\) \| (.+?) \|$/gm)];
+	assert.deepEqual(rows.map((m) => m[1]), ["T1", "T3", "T4", "T5", "T6", "T7", "T2"]);
+
+	// T2 moved from row 2 (numeric order) to the last row (phase-group order) —
+	// confirm its Phase/Task File/Annotation columns moved WITH it, not just its ID.
+	const t2Row = rows.find((m) => m[1] === "T2");
+	assert.equal(t2Row[3], "2", "T2's Phase column must read 2, not the numeric-order phase");
+	assert.equal(t2Row[4], "T2-t2.md");
+	assert.equal(t2Row[5], "T2-t2.md");
+	assert.equal(t2Row[6], "[depends: T1]");
+});
+
+test("single-phase index.md order (and log init dispatch order) follows document order, not numeric ID", () => {
+	const dir = tmp();
+	const OUT_OF_ORDER_PLAN = `# EXECUTION PLAN — Out Of Order
+
+**Date:** 2026-08-20
+**Spec:** x.md
+
+## Pocket Packets
+
+---
+
+### Task 2: B [prereq]
+body
+---
+### Task 1: A [prereq]
+body
+
+## Plan Summary
+`;
+	const plan = writePlan(dir, OUT_OF_ORDER_PLAN);
+	run(["structure", plan]);
+
+	const indexContent = readFileSync(path.join(dir, "execution-plan", "index.md"), "utf8");
+	const rowIds = [...indexContent.matchAll(/^\| (T\d+) \|/gm)].map((m) => m[1]);
+	assert.deepEqual(rowIds, ["T2", "T1"]);
+
+	const logEnv = json(["log", "init", dir, "--json"]);
+	assert.equal(logEnv.ok, true);
+	const log = JSON.parse(readFileSync(path.join(dir, "log.json"), "utf8"));
+	assert.deepEqual(log.phases[0].tasks.map((t) => t.id), ["T2", "T1"]);
+});
+
 test("structure refuses to re-generate layout for IN_PROGRESS plan when source plan changed without --force", () => {
 	const dir = tmp();
 	const plan = writePlan(dir, NINE_TASK_PLAN);

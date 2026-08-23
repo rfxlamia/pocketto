@@ -128,7 +128,12 @@ function collectPlanFiles(planDir) {
         }),
       };
     } else {
-      // Single phase in execution-plan/ (index.md + tasks/*)
+      // Single phase in execution-plan/ (index.md + tasks/*).
+      // Row order here becomes `tasks[]` order below, which becomes
+      // log.phases[0].tasks — the dispatch/merge order pocket-development
+      // treats as authoritative. index.md's Task Index table is rendered in
+      // phaseGroups order (see structure.js:renderIndexFile), so this is not
+      // an arbitrary read — reordering that table changes dispatch order.
       const tasks = [];
       const re = /^\| (T\d+) \| (.+?) \| Phase \d+ \| \[([^\]]+)\]\(tasks\/([^\)]+)\) \|/gm;
       let m;

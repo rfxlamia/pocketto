@@ -367,12 +367,16 @@ function renderIndexFile(plan, tasks, phaseGroups, executionFlow, sourceBasename
     phaseSummarySection = `## Phase Summary\n\n${phaseSummaryLines}\n\n---\n\n`;
   }
 
-  const taskTableRows = Object.values(tasks)
-    .sort((a, b) => a.num - b.num)
-    .map((t) => {
-      const phaseNum = phaseGroups.findIndex((ids) => ids.includes(t.id)) + 1;
-      return `| ${t.id} | ${t.name} | Phase ${phaseNum} | [${t.filename}](tasks/${t.filename}) | ${t.annotation} |`;
-    })
+  // Row order follows phaseGroups (the same execution/dependency order
+  // phase-N.md uses), not numeric task ID — a numeric sort here would show
+  // tasks in an order that disagrees with the actual execution flow above
+  // whenever parallel/dependent tasks aren't authored in ID sequence. For a
+  // single-phase plan, this order is also what `log init` uses as the
+  // dispatch/merge order (cli/commands/log.js reads this table directly),
+  // so this list is authoritative, not just cosmetic.
+  const taskTableRows = phaseGroups
+    .flatMap((ids, idx) => ids.map((tid) => ({ t: tasks[tid], phaseNum: idx + 1 })))
+    .map(({ t, phaseNum }) => `| ${t.id} | ${t.name} | Phase ${phaseNum} | [${t.filename}](tasks/${t.filename}) | ${t.annotation} |`)
     .join('\n');
 
   return `# ${plan.feature} — Execution Index
