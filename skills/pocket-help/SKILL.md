@@ -104,7 +104,7 @@ clear problem
    │  pocket-grinding        BDD discovery → spec + GWT acceptance       [auto-invokes planning]
    ▼
 approved spec
-   │  pocket-planning        TDD plan → Pocket Packets, tests designed   [validates, routes to structuring]
+   │  pocket-planning        TDD plan → Pocket Packets + test intent    [validates, routes to structuring]
    ▼
 execution plan
    │  pocket-structuring     decomposes into index + per-task files      [hands phases one at a time]

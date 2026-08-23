@@ -4,7 +4,7 @@ Load this during Phase 5 to dispatch the spec reviewer subagent.
 
 **Purpose:** Verify the execution plan covers the spec completely, carries usable test intent, and has no placeholder failures.
 
-**When:** After all Pocket Packets are generated. Before Phase 6's conditional test strategy audit, and before the plan is saved for approval.
+**When:** After all Pocket Packets are generated. Before Phase 6's conditional test strategy audit, and before the plan is presented for approval.
 
 ---
 
@@ -90,7 +90,7 @@ Prompt:
 REVIEW BLOCKED — <N> unresolved issues after 2 cycles:
 <reviewer's Issues list verbatim>
 
-Please resolve the above before the plan can be saved for approval.
+Please resolve the above before the plan can be presented for approval.
 ```
 
 Do not summarize or paraphrase the issues. Do not auto-advance to Phase 6 or Phase 7. Wait for user input.

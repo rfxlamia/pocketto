@@ -46,8 +46,8 @@ GATE 3: Design Decision section must be present in spec.
         Missing → STOP. "Design Decision not found. Return to pocket-grinding
         or provide the decision manually." Do not proceed to Phase 2.
 
-GATE 4: Spec Reviewer must APPROVE before the plan is saved and presented at the
-        Phase 7 approval gate.
+GATE 4: Spec Reviewer must APPROVE before the plan is presented at the Phase 7
+        approval gate.
         Issues Found → fix plan, re-run reviewer. Do not skip.
         (Phase 6 is conditional — an APPROVE is required whether or not it runs.)
 
@@ -485,7 +485,7 @@ Return: Status (Approved | Issues Found) + specific issues with task:step refere
   REVIEW BLOCKED — <N> unresolved issues after 2 cycles:
   <reviewer's Issues list verbatim>
   ```
-  Ask user: "Please resolve the above before the plan can be saved for approval."
+  Ask user: "Please resolve the above before the plan can be presented for approval."
   Do not auto-advance to Phase 6 or Phase 7.
 - Full reviewer dispatch protocol → `references/spec-reviewer-prompt.md`
 
@@ -559,7 +559,7 @@ It does **not** authorize implementation. Structuring will ask separately for
 Present the result, showing the execution flow:
 
 > "Plan complete — N tasks, TDD-structured, spec-reviewed, test intent defined.
-> Test strategy audit: skipped (no trigger) | run on <tasks>.
+> Test strategy audit: skipped (no trigger) | run on <tasks> — <N> findings applied.
 > Saved to docs/pocket/plans/…
 > Execution flow: {data.executionFlow}
 > Plan approval: Ready to hand off to pocket-structuring for execution index generation?"
