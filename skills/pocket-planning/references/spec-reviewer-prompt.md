@@ -37,6 +37,7 @@ Prompt:
   | Test intent present | Every behavioral task carries all seven fields across its RED cycle: test file, level, GWT test intent, boundary to exercise, test doubles, expected RED reason (Step 1), and the exact command (Step 2). A command defined in Step 2 only is correct — do not flag it as missing from Step 1 |
   | Test level sane | The stated level (unit / integration / E2E) can actually observe the behavior being proved — not a unit test for a cross-boundary outcome |
   | Mock boundary sane | Test doubles do not mock the unit under test, and external services / network / clock are doubled rather than hit for real |
+  | GWT → cycle mapping | Every GWT scenario in a task's DELIVERABLE maps to its own RED cycle with its own exact command. Two scenarios sharing one cycle is a finding — the second is never independently proved, and the mechanical gate has no command to run for it |
   | Cross-unit coverage | Every GWT scenario needing 2+ units collaborating has integration verification — an integration-test task, or an explicit extra TDD cycle inside the owning task |
   | TDD ordering | Order is RED → GREEN → refactor → commit, and "Expected RED" states why the test fails **today** (not a vacuous pass) |
   | `[test-risk]` usage | The marker is appended after a dependency annotation, never used alone (alone it parses as depth 0 and reorders execution) |

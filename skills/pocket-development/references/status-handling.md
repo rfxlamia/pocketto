@@ -7,7 +7,7 @@ Controller responses to each subagent status.
 | Status | Meaning | Controller Action |
 |--------|---------|-------------------|
 | **DONE** | Task complete, ready for review | Mechanical gate, then the read-only auditor — see references/two-stage-review.md |
-| **DONE_WITH_CONCERNS** | Complete but flagged doubts | Read concerns, assess risk |
+| **DONE_WITH_CONCERNS** | Complete but flagged doubts | Attach concerns to auditor input; auditor classifies |
 | **NEEDS_CONTEXT** | Cannot proceed, needs info | Provide context, re-dispatch |
 | **BLOCKED** | Cannot complete task | Categorize blocker, fix, re-dispatch |
 
@@ -26,25 +26,25 @@ DONE handling — the mechanical gate, the read-only auditor dispatch, severity 
 
 **Controller Action:**
 ```
-1. Read concerns carefully
-2. Assess risk:
-   - Correctness concern? → Address before review
-   - Observation? → Note, proceed to review
-3. If correctness risk:
-   - Provide guidance or clarification
-   - Re-dispatch to address
-4. If observation only:
-   - Note for later
-   - Proceed to the mechanical gate, then the auditor
+1. Record the concerns verbatim — do not classify them.
+2. Run the normal mechanical gate (references/two-stage-review.md).
+3. Dispatch the auditor with the concerns attached as audit input.
+4. Read the resulting labels from the verdict artifact and route as for any DONE.
 ```
 
-**Decision Matrix:**
+The controller SHALL NOT decide whether a concern is a correctness risk or a mere
+observation. That decision requires judging the implementation, and the main agent is
+Delegator + Auditor only — it SHALL NOT judge code, grade findings, or decide spec
+compliance (`two-stage-review.md` § Auditor identity). Classifying concerns itself would
+be a shadow review with a second judgement authority.
 
-| Concern Type | Action |
-|-------------|--------|
-| Correctness risk | Address first, then review |
-| Observation (e.g., "file large") | Note, proceed |
-| Uncertainty about scope | Clarify, possibly adjust task |
+The auditor is the single judgement authority: it receives the concerns alongside the diff
+and reports each as actionable or not in `stage_1`/`stage_2`.
+
+**Exception — concerns that are not code judgements at all.** A concern naming a missing
+architectural decision, an out-of-scope requirement, or absent context is a scope/context
+blocker, not a quality opinion. Handle it as `NEEDS_CONTEXT` and escalate; no code reading
+is involved.
 
 ## Status: NEEDS_CONTEXT
 

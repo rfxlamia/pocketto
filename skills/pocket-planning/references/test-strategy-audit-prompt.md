@@ -23,8 +23,17 @@ The audit does **not**:
 - prescribe imports, function signatures, fixture shapes, or implementation detail
 - return a rewritten execution plan
 - restate coverage the Spec Reviewer already checked (placeholders, commit steps, file map)
+- rescan the whole plan for completeness — spec coverage, GWT traceability, and per-task test
+  intent presence are already owned by the Spec Reviewer, which ran and approved before this
 
-It reviews the seven test-intent fields already present in each behavioral task's RED cycle (Steps 1–2) and reports where they are wrong or missing. Nothing else.
+**Scope.** The audit inspects **only the tasks and seams that fired a Phase 6 trigger**, plus
+the direct dependencies of those tasks where the seam actually spans them. Tasks that fired no
+trigger are out of scope even if they look improvable. This is what keeps the audit a
+risk-focused second opinion rather than a competing source of truth — and what preserves the
+token saving the conditional dispatch exists for.
+
+Within that scope it reviews the seven test-intent fields already present in each task's RED
+cycles (Steps 1–2) and reports where they are wrong or missing. Nothing else.
 
 ---
 
@@ -47,14 +56,18 @@ Prompt:
   Codebase info:  [PREFLIGHT_SUMMARY — test framework, conventions, existing patterns]
   Triggered by:   [WHICH TRIGGERS FIRED, AND FOR WHICH TASKS]
 
-  Your job is to find defects in the test strategy. Report findings. Do NOT write
-  test code, do NOT prescribe implementation detail, and do NOT return a rewritten
-  plan. Return only the findings block described under Output Format.
+  Your job is to find defects in the test strategy **of the triggered tasks and seams
+  listed above**, plus their direct dependencies where a seam spans them. Do not review
+  untriggered tasks, and do not re-audit whole-plan spec coverage — a Spec Reviewer
+  already approved this plan for that. Report findings. Do NOT write test code, do NOT
+  prescribe implementation detail, and do NOT return a rewritten plan. Return only the
+  findings block described under Output Format.
 
   ## Finding Categories (the only things you may report)
 
-  1. MISSING BEHAVIOR — a spec GWT scenario, edge case, or negative rule that no
-     task's test intent proves.
+  1. MISSING BEHAVIOR — a scenario, edge case, or negative rule *relevant to the triggered
+     seams* that no task's test intent proves. Scoped to those seams: whole-plan spec
+     coverage is the Spec Reviewer's, and it already approved this plan.
   2. WRONG TEST LEVEL — a behavior asserted at unit level that can only be observed
      across a boundary, or an E2E test used where a unit test would prove the same
      thing faster and more precisely.

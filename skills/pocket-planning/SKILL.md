@@ -568,7 +568,29 @@ Present the result, showing the execution flow:
 > Execution flow: {data.executionFlow}
 > Plan approval: Ready to hand off to pocket-structuring for execution index generation?"
 
-Wait for confirmation. Apply any changes requested (re-run Step 2 if the plan changed).
+Wait for confirmation.
+
+### Step 3b: Revalidate user-requested edits
+
+`structure --dry-run` validates parsing and dependency topology only. It says nothing about
+spec coverage, test intent, mock boundaries, GWT coverage, or audit triggers — so an edit
+requested *at* the approval gate can otherwise reach handoff without Gate 4 covering the
+version that actually executes. Classify each requested edit by its **largest** applicable
+tier and re-run that tier's checks:
+
+| Edit | Revalidation |
+|---|---|
+| Cosmetic / metadata only — prose wording, section order, typos, summary text | Step 2 dry-run |
+| Semantic packet edit — merge or split tasks, change a dependency, change a GWT behavior, add or remove a behavioral step, change files in scope | Step 2 dry-run + re-dispatch Spec Reviewer on the changed tasks |
+| Test-strategy or topology edit — change a test level or mock boundary, introduce a new cross-unit seam, restructure dependencies | Step 2 dry-run + re-run the Phase 6 trigger check + re-dispatch Spec Reviewer on the changed tasks |
+
+Then return to Step 3 and present the revalidated plan. **Only a version that has passed the
+tier its edits require may be approved or handed off.**
+
+The Phase 5 cycle budget applies to *reviewer disagreement inside one edit round* — Issues
+Found → fix → re-dispatch once → still Issues Found → `REVIEW BLOCKED` — and **not** to how
+many rounds of edits the user asks for. A user may iterate as many times as they want; each
+round is revalidated at its own tier.
 
 ### Step 4: Route to pocket-structuring (MANDATORY)
 

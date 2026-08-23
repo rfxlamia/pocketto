@@ -87,6 +87,15 @@ Steps:
 2. Run test — verify FAIL: `<exact command>`
 3. <implement → verify PASS → refactor while green → commit>
 
+<!-- One RED cycle per GWT scenario this task covers. Repeat steps 1-3 for each
+     additional scenario, numbering onward (4, 5, 6 ...). Each cycle carries its OWN
+     seven fields, including its own exact command in its own Step 2 — the mechanical
+     gate enumerates those commands and runs every one of them. A second scenario folded
+     into the first cycle has no command of its own and is never independently proved. -->
+
+4. Write failing test for: <second GWT scenario name>   ← repeat the Step 1 block in full
+...
+
 > Test **intent** only — never test source code. The implementer writes the test
 > during the RED step, against the API that exists by then.
 

@@ -33,8 +33,9 @@ The main agent SHALL run the mechanical gate first, before any auditor dispatch.
 The gate SHALL check, in order:
 
 1. A commit exists for the work the implementer reported.
-2. The plan's test command is green.
-3. For a `[no-tdd]` structural task, the packet's validation command is the mechanical gate (in place of the test command).
+2. **Every distinct exact command the task specifies is green.** A behavioral task carries one RED cycle per GWT scenario it covers, and each cycle names its own exact command in its Step 2. The gate SHALL enumerate every such command in the task and run all of them; a task with three RED cycles is green only when all three commands pass. Running one command and inferring the rest is a gate failure, not a shortcut — it is how a task ships two unproved GWT scenarios.
+   Commands SHALL be executed with the task's working tree as cwd. In a parallel group that is the worktree — `( cd "$WT" && <command> )` — never `git -C $WT <command>`, which asks git to run the command as a git subcommand and fails even when the test passes.
+3. For a `[no-tdd — structural task]` structural task, the packet's validation command(s) are the mechanical gate (in place of the test commands).
 4. If the plan specifies no command at all (neither a test command nor a validation command), the main agent SHALL skip every command check and proceed straight to the auditor.
 
 On any mechanical failure the main agent SHALL re-dispatch the implementer with the failure reason (for example, "tests failing" or "no commit") and SHALL NOT dispatch the auditor. A mechanical failure consumes no round: `loop_info` is unchanged.

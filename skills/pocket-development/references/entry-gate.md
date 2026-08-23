@@ -47,12 +47,12 @@ The Entry Gate is a mandatory 6-question checkpoint before any subagent spawn.
 
 | Any "NO" | Action |
 |---------|--------|
-| 1. TASK BOUNDED = NO | Redefine scope or KEEP LOCAL |
-| 2. PACKET CONSTRUCTIBLE = NO | Cannot delegate precisely → KEEP LOCAL |
+| 1. TASK BOUNDED = NO | Redefine scope, then re-run the gate → else HOLD LOCAL |
+| 2. PACKET CONSTRUCTIBLE = NO | Cannot delegate precisely → HOLD LOCAL |
 | 3. TASK TYPE UNCLEAR = NO | Clarify task type before proceeding |
-| 4. PROMPT SANDWICH = NO | Restructure prompt or KEEP LOCAL |
+| 4. PROMPT SANDWICH = NO | Restructure prompt, then re-run the gate → else HOLD LOCAL |
 | 5. PARALLEL CLASSIFICATION = unclear | Re-read plan annotations; if still unclear, escalate to user |
-| 6. VERIFICATION DEFINED = NO | Define verification or KEEP LOCAL |
+| 6. VERIFICATION DEFINED = NO | Define verification, then re-run the gate → else HOLD LOCAL |
 
 ## Bounded vs Unbounded Tasks
 
@@ -136,14 +136,18 @@ The Entry Gate already gatekeeps "should I delegate?" — classification is "HOW
 
 A misclassified task = a foundation task accidentally worktreed (wasted setup, branch noise) or a parallel group accidentally serialized (lost time, and silent collisions if ever re-parallelized).
 
-## KEEP LOCAL Triggers
+## HOLD LOCAL Triggers
 
-When gate fails, use KEEP LOCAL:
+When the gate fails, the task is **not delegatable yet**. `HOLD LOCAL` records that state — it
+does not hand the task to the main agent. The main agent remains Delegator + Auditor only and
+SHALL NOT write, edit, or create implementation code (see `two-stage-review.md` § Auditor
+identity). Permitted next actions: repair the packet or the missing context, then re-run the
+Entry Gate; or escalate `NEEDS_CONTEXT` / `BLOCKED` when the task cannot be made delegatable.
 
 ```
-KEEP LOCAL: [specific failure reason]
+HOLD LOCAL: [specific failure reason]
 WHY UNSAFE: [what could go wrong]
-NEXT ACTION: [concrete local step to make progress]
+NEXT ACTION: [packet/context repair, then re-run Entry Gate — or the escalation]
 ```
 
 ## Gate vs Packet Relationship

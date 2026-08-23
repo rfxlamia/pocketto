@@ -28,6 +28,36 @@ The pass SHALL look only for what a per-task audit cannot see, because a per-tas
 
 The pass SHALL NOT re-litigate anything a per-task audit already judged (QUALITY BAR, spec compliance, code quality, or refactor heuristics scoped to one task's own diff — see `two-stage-review.md`). Re-raising a single-task finding at phase level is out of scope for this pass.
 
+### Single-task phase fast path
+
+Every item in the scope above is defined *across* tasks. In a phase containing exactly one task there is no second task to duplicate, mismatch, or regress against, so that domain is structurally empty and dispatching a reviewer buys nothing.
+
+The main agent SHALL take the fast path when **all** hold:
+
+1. The phase contains exactly one task.
+2. That task is `DONE` and its verdict artifact's `overall` is `REVIEW_PASS`.
+3. That artifact's `reviewed_sha` equals the task's `done_sha` in `log.json` — an exact SHA match, never a timestamp or recency comparison. A stale or placeholder timestamp SHALL NOT be accepted as evidence of freshness.
+4. No explicit phase-level risk is recorded for the phase (for example a correction already appended to `phase.corrections`, or a `[test-risk]`-style phase note).
+
+Any condition failing → dispatch the pass normally.
+
+On the fast path the main agent SHALL write the terminal artifact itself, without spawning a reviewer, to `reviews/phase-pass-<phase_key>.json`:
+
+```json
+{
+  "phase_key": "<phase_key>",
+  "phase_file": "<phase_file>",
+  "timestamp": "<UTC ISO 8601 now>",
+  "reviewer_mode": "main-agent",
+  "findings": [],
+  "loop_info": { "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0 },
+  "skip_reason": "single_task_phase",
+  "status": "PHASE_PASS_CLEAN"
+}
+```
+
+`reviewer_mode` is `main-agent`, not `read-only`, because no reviewer subagent ran — the same attribution rule the empty-diff skip stub follows in `two-stage-review.md` § SHA pinning. `max_cycles` is `1`: a skip has no fix rounds to spend. Everything downstream is unchanged — the phase advances to `REVIEW` on this terminal result exactly as it would on a dispatched clean pass, and no per-task verdict artifact is touched.
+
 ## Dispatch
 
 The phase-level pass SHALL be dispatched as a read-only subagent. The main agent SHALL NOT perform the pass itself — it does not read implementation files to judge cross-task coherence, exactly as it does not judge single-task code (see `two-stage-review.md` § Auditor identity).

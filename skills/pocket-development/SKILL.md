@@ -146,7 +146,13 @@ Run the normative Entry Gate Checklist verbatim from `references/entry-gate.md`.
 5. **PARALLEL CLASSIFICATION** — Classify as Foundation, Solo, or Parallel Group.
 6. **VERIFICATION DEFINED?** — Exact criteria for "done".
 
-ANY "NO" → KEEP LOCAL with reason written in task notes.
+ANY "NO" → **HOLD LOCAL** with reason written in task notes.
+
+`HOLD LOCAL` means *this task is not delegatable yet* — never "the main agent implements it".
+The hardened role stands: repair the packet or the missing context locally, then re-run the
+Entry Gate. If the task cannot be made delegatable, report `NEEDS_CONTEXT` or `BLOCKED` and
+escalate. Controller bookkeeping (reading a task file, computing a SHA, fixing the packet) is
+local work; writing, editing, or creating implementation code never is.
 
 ## Mandatory Reference Preloading
 
@@ -327,14 +333,14 @@ digraph pocket_process {
     rankdir=TB;
 
     "Read plan index, extract task N" -> "Run Entry Gate Checklist";
-    "Run Entry Gate Checklist" -> { "KEEP LOCAL" "Classify task" };
+    "Run Entry Gate Checklist" -> { "HOLD LOCAL" "Classify task" };
     "Classify task" -> { "FOUNDATION / SOLO" "PARALLEL GROUP" };
     "FOUNDATION / SOLO" -> "Construct Pocket Packet";
     "PARALLEL GROUP" -> "Run Parallel Group Execution";
     "Run Parallel Group Execution" -> "Construct Pocket Packets (incl. WORKTREE)";
     "Construct Pocket Packets (incl. WORKTREE)" -> "Spawn implementers (parallel batch)";
     "Spawn implementers (parallel batch)" -> "Wait for status";
-    "KEEP LOCAL" -> "Handle locally, skip subagent";
+    "HOLD LOCAL" -> "Repair packet/context -> re-run Entry Gate, or escalate NEEDS_CONTEXT/BLOCKED";
     "Construct Pocket Packet" -> "Spawn implementer";
     "Spawn implementer" -> "Wait for status";
 
@@ -353,7 +359,7 @@ digraph pocket_process {
 
     "NEEDS_CONTEXT" -> "Provide context -> Re-dispatch (no work)";
     "BLOCKED" -> "Categorize blocker -> Fix -> Re-dispatch";
-    "DONE_WITH_CONCERNS" -> "Assess concerns -> Correctness risk? -> Address first or proceed to mechanical gate";
+    "DONE_WITH_CONCERNS" -> "Attach concerns to auditor input -> mechanical gate -> auditor classifies";
 
     "Mark task DONE in log (--sha audited_head)" -> "More tasks?";
     "More tasks?" -> "Extract task N+1" [label="yes"];
@@ -377,18 +383,48 @@ Activates when Entry Gate item 5 classifies tasks as PARALLEL GROUP. Subagents a
 
 ### Worktree Setup (main agent, before dispatch)
 
+Worktrees are **retained** on BLOCKED for diagnosis, so setup SHALL be resumable: a later
+session must be able to re-enter a group without tripping over its own retained state.
+
 ```bash
 parent_sha=$(git rev-parse HEAD)        # latest merged task or baseline
 
-# One-time per repo (idempotent):
-grep -qxF '.worktree/' .gitignore || echo '.worktree/' >> .gitignore
+# One-time per repo (idempotent). Local execution metadata belongs in the repo's private
+# exclude file, NOT in tracked .gitignore — mutating a tracked file leaves the main tree
+# dirty for the whole run, collides with any task that also edits .gitignore, and survives
+# cleanup.
+grep -qxF '.worktree/' .git/info/exclude || echo '.worktree/' >> .git/info/exclude
 
-# Per task in the group:
+# Clear metadata for worktrees whose directory was deleted out from under git.
+git worktree prune
+
+# Per task in the group — resume before create:
 for task in group:
-    git worktree add .worktree/<task_id> -b task/<task_id> $parent_sha
+    if git worktree list --porcelain | grep -qx "worktree $(pwd)/.worktree/<task_id>"; then
+        # Registered. Reuse only if it is this task's branch AND still based on the parent.
+        [[ $(git -C .worktree/<task_id> branch --show-current) == "task/<task_id>" ]] \
+            || BLOCKED: worktree_branch_mismatch
+        git -C .worktree/<task_id> merge-base --is-ancestor $parent_sha HEAD \
+            || BLOCKED: worktree_stale_parent
+        REUSE
+    elif git show-ref --verify --quiet refs/heads/task/<task_id>; then
+        # Branch survived, directory did not — reattach, do not re-create the branch.
+        git worktree add .worktree/<task_id> task/<task_id>
+    elif [[ -e .worktree/<task_id> ]]; then
+        # Path on disk but unregistered even after prune — foreign directory.
+        BLOCKED: worktree_path_occupied
+    else
+        git worktree add .worktree/<task_id> -b task/<task_id> $parent_sha
+    fi
 ```
 
-Path: `<cwd>/.worktree/<task_id>` — conventional location, auto-added to `.gitignore` of main branch on first parallel run.
+`worktree_stale_parent` means a task merged after this worktree was created, so its base no
+longer matches the group's parent. Recovery is explicit, never silent reuse: merge or discard
+the retained branch, remove the worktree (`git worktree remove`), then re-run setup. Same for
+`worktree_branch_mismatch` and `worktree_path_occupied` — report the category and stop.
+
+Path: `<cwd>/.worktree/<task_id>` — conventional location, excluded via `.git/info/exclude` on
+first parallel run so the main working tree stays clean.
 
 ### Pocket Packet — WORKTREE Field (parallel tasks only)
 
@@ -435,12 +471,9 @@ WT=.worktree/<task_id>
 # 2. At least one commit ahead of parent
 [[ $(git -C $WT rev-list $parent_sha..HEAD --count) -gt 0 ]] || AUDIT FAIL
 
-# 3. Tests (if plan specifies a test command) — inside worktree
-# NOTE: run the plan's command with $WT as cwd. Do NOT prepend `git -C` here as in
-# checks 1-2: those are git subcommands, this is an arbitrary shell command, and
-# `git -C $WT pnpm vitest ...` asks git to run `pnpm` as a git subcommand and fails
-# even when the test passes.
-( cd "$WT" && <test_command> )
+# 3. Commands — enumerated and executed per `references/two-stage-review.md` § Mechanical gate,
+#    with $WT as cwd. That file is normative: every distinct exact command the task's RED
+#    cycles specify must be green, not just the first.
 ```
 
 Mechanical fail → re-dispatch implementer with same WORKTREE field. Do not dispatch the auditor. Worktree RETAINED.
@@ -507,7 +540,7 @@ If ANY task in the group is BLOCKED → NO cleanup of any worktree in that group
 |------|------------|
 | Subagent ignores `cd` instruction | Audit Step 1 verifies `branch --show-current` = `task/<task_id>`. Wrong branch = AUDIT FAIL — no human-trust gap |
 | Lockfile / build artifact race | Each worktree builds independently. Shared caches (pnpm store, cargo target) are project-specific — handle in plan, not skill |
-| `.worktree/` polluting repo | Auto-added to `.gitignore` on first parallel run, auto-removed after merge |
+| `.worktree/` polluting repo | Excluded via `.git/info/exclude` on first parallel run (untracked, leaves the working tree clean), auto-removed after merge |
 | Conflict mid-merge | Sequential merge in plan order + `--abort` + structured BLOCKED with file list |
 | log.json schema drift | `done_sha = merge_sha` keeps log linear; phase-level pass diff ranges and pocket-closing's owner-map attribution stay intact |
 | Misclassified parallel/sequential | Caught at Entry Gate item 5 (classification), not here |
@@ -522,7 +555,7 @@ Plan: T5, T6, T7 — parallel group after T4
 2. Entry Gate items 1-4 pass for each task individually.
    Item 5 classifies all three as PARALLEL GROUP.
 
-3. Worktree setup:
+3. Worktree setup (resume-before-create per task — see Worktree Setup):
    git worktree add .worktree/T5 -b task/T5 parent
    git worktree add .worktree/T6 -b task/T6 parent
    git worktree add .worktree/T7 -b task/T7 parent
@@ -607,7 +640,7 @@ When the implementer reports DONE, run the in-loop cycle. Cite `references/two-s
 
 On `audit-failed` or `auditor-unavailable`, mark the task BLOCKED (see `references/two-stage-review.md`). Do not start the next task.
 
-**DONE_WITH_CONCERNS:** Assess concerns first. If correctness risk → address before the mechanical gate. If observation only → proceed with the in-loop cycle.
+**DONE_WITH_CONCERNS:** Record the concerns verbatim, run the mechanical gate, and attach them to the auditor dispatch — the auditor classifies them, not the main agent (`references/two-stage-review.md` § Auditor identity). A concern naming a missing architectural decision or absent context is a scope blocker, not a code judgement: escalate it as NEEDS_CONTEXT.
 
 ### End-of-Execution Handoff (after all tasks done)
 
@@ -667,7 +700,7 @@ Run: /pocketto:pocket-closing <plan_dir>/<phase_file>
 | Status | Controller Action |
 |--------|-------------------|
 | **DONE** | Mechanical gate, then dispatch the read-only auditor (`references/two-stage-review.md`). On pass: `log update --task TN DONE --sha <audited_head>`. On gate fail: re-dispatch implementer. |
-| **DONE_WITH_CONCERNS** | Assess concerns → correctness risk: address first; observation only: proceed to mechanical gate then auditor |
+| **DONE_WITH_CONCERNS** | Attach concerns verbatim to the auditor input → mechanical gate → auditor classifies them. Scope/context blockers escalate as NEEDS_CONTEXT |
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
 | **BLOCKED** | Categorize blocker type. In-loop categories `audit-failed` and `auditor-unavailable`: persist and halt (see `references/two-stage-review.md`). Other categories: Fix → Re-dispatch |
 | **REVIEW_FAIL** (task verdict artifact) | Not a subagent return status — a verdict inside `reviews/<task_id>-review.json`. Fix it through the correction path in `references/phase-level-pass.md`: dispatch an implementer subagent for the fix (you stay Delegator + Auditor — never write the fix yourself), record it as an append-only correction, and refresh the affected tasks' verdict artifacts per its fan-out. `done_sha` NEVER moves. |
@@ -806,7 +839,7 @@ When delegation pressure threatens to bypass structure:
 | **TIME** | Cut niceties, not structure. Packet still required. |
 | **SUNK COST** | Rewrite packet anyway. Bad packets must be rewritten. |
 | **AUTHORITY** | Keep the law, not the shortcut. Process protects quality. |
-| **EXHAUSTION** | Refuse delegation if packet cannot stay legible. KEEP LOCAL. |
+| **EXHAUSTION** | Refuse delegation if packet cannot stay legible. Stop and resume later — this is an operator condition, not a task defect, so it is not `HOLD LOCAL` and never authorizes implementing the task yourself. |
 
 ## Red Flags
 
@@ -845,7 +878,7 @@ Load these reference files when SKILL.md says "see reference for details" or whe
 | Reference | When to Load | What You'll Learn |
 |-----------|--------------|-------------------|
 | `references/iron-laws.md` | Iron laws enforcement details or pressure countermeasure specifics | Full text of 6 iron laws with enforcement examples |
-| `references/entry-gate.md` | Gate checklist fails, need decision matrix or KEEP LOCAL examples, OR plan has `[parallel: TX]` annotations | Decision tree for gate pass/fail; Foundation/Parallel-Group/Solo classification rules |
+| `references/entry-gate.md` | Gate checklist fails, need decision matrix or HOLD LOCAL examples, OR plan has `[parallel: TX]` annotations | Decision tree for gate pass/fail; Foundation/Parallel-Group/Solo classification rules |
 | `references/pocket-packet.md` | Packet construction unclear, need field-by-field guide | Complete field definitions with examples |
 | `references/sandwich-prompt.md` | Need attention mechanic details or method selection | Sandwich structure variations |
 | `references/two-stage-review.md` | After implementer reports DONE; mechanical gate, auditor dispatch, fix/refactor, SHA pinning | Normative in-loop audit contract. Cite it; do not restate it. |
