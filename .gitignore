@@ -7,3 +7,5 @@ __pycache__/
 CLAUDE.md
 docs/pocket/
 .worktree/
+graphify-out
+.commandcode

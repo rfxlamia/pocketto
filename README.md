@@ -213,6 +213,10 @@ Status flow: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
 
 Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contract, data, error }` — that skills parse instead of scraping text. Add `--contract <N>` for a version handshake that fails loudly on mismatch rather than emitting output an older skill can't read.
 
+## 3.1.0
+
+`pocket-structuring` now decomposes every plan into `execution-plan/index.md` + per-task files (phase manifests only when `phaseCount > 1`), instead of passthrough below 7 tasks. `structure` gains `--reset` to rebuild layout and replace `log.json` when execution progress exists (explicit, discards state); `--force` now only rebuilds + reconciles when there is no execution progress, refusing otherwise.
+
 ## 3.0.1
 
 Removes lingering references to deprecated skills.
