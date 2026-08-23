@@ -4,14 +4,22 @@ Load this during Phase 7 when writing the final execution plan document.
 
 ## Contents
 - [Full Execution Plan Template](#full-execution-plan-template)
-- [Compact Plan Template](#compact-plan-template-for-small-specs)
 - [Save Path Convention](#save-path-convention)
 
 ---
 
 ## Full Execution Plan Template
 
-Use this for specs with 3+ tasks. Copy, fill in, remove unused sections.
+Canonical execution-plan format for **all** `pocket-planning` output, regardless of task count. Copy, fill in, remove unused sections.
+
+Task count does not select a schema. `pocketto-pi structure` parses only this shape — a
+`# EXECUTION PLAN — <name>` title, a `## Pocket Packets` section, and
+`### Task N: <name> [annotation]` headings — and the Phase 7 dry-run is mandatory, so any
+other shape fails with `NO_TASKS`. Every behavioral task carries the full test-intent
+contract here too; there is no reduced form of it.
+
+Work small and clear enough that a full Pocket Packet feels like overkill belongs in the
+`hotfix` skill, not in a second planning schema.
 
 ````markdown
 # EXECUTION PLAN — <feature name>
@@ -55,7 +63,7 @@ Rule: <rule name>
   Test:   tests/exact/path/test.ext
 ```
 
-Note: `(created by: T<N>)` annotations help test-architect avoid importing from files that don't exist yet at test-write time.
+Note: `(created by: T<N>)` annotations mark files that do not exist until T<N> runs. The implementer writing a RED test must not import from a file a later task creates — the test would fail on an import error instead of the behavior it is meant to prove.
 
 ---
 
@@ -69,8 +77,27 @@ Note: `(created by: T<N>)` annotations help test-architect avoid importing from 
 <what must be done>
 
 Steps:
-1. <step>
-2. <step>
+1. Write failing test for: <GWT scenario name>
+   Test file: `tests/exact/path/test.ext`
+   Level: unit | integration | E2E
+   Test intent: Given <precondition> / When <action> / Then <observable outcomes>
+   Exercise through: <public boundary>
+   Test doubles: <mock these; do NOT mock the unit under test>
+   Expected RED: <why it fails today>
+2. Run test — verify FAIL: `<exact command>`
+3. <implement → verify PASS → refactor while green → commit>
+
+<!-- One RED cycle per GWT scenario this task covers. Repeat steps 1-3 for each
+     additional scenario, numbering onward (4, 5, 6 ...). Each cycle carries its OWN
+     seven fields, including its own exact command in its own Step 2 — the mechanical
+     gate enumerates those commands and runs every one of them. A second scenario folded
+     into the first cycle has no command of its own and is never independently proved. -->
+
+4. Write failing test for: <second GWT scenario name>   ← repeat the Step 1 block in full
+...
+
+> Test **intent** only — never test source code. The implementer writes the test
+> during the RED step, against the API that exists by then.
 
 ## REFERENCES LOADED
 <spec path> — rule: <name>, GWT scenarios used as verification
@@ -135,25 +162,6 @@ Escalate when: <constraint violated>
 | T2 | <name> | T1 | standard | <GWT 1-liner> |
 | T3 | <name> | T1 | lightweight | <GWT 1-liner> |
 
-````
-
----
-
-## Compact Plan Template (for small specs)
-
-Use for 1–2 task plans where full template is overkill.
-
-````markdown
-# PLAN — <feature name>
-Spec: <path> | Date: YYYY-MM-DD | Tasks: N
-
-## Task 1: <name> [prereq]
-Objective: <what must be done>
-Steps: (1) <step> (2) <step>
-Complexity: lightweight | standard | deep
-Verification: Given <...>, When <...>, Then <...>
-Must-not: <out-of-scope item>
-Done when: verification passes, no out-of-scope files modified
 ````
 
 ---

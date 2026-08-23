@@ -30,8 +30,8 @@ Scan context → lock scope → question from three lenses (Business / Developer
 - **Next:** **Auto-invokes `pocket-planning`** once the user approves the spec (mandatory — grinding isn't "done" at "spec written").
 
 ### 3. pocket-planning — plan (TDD)
-Preflight the codebase → parse the spec → map files → decompose into bounded tasks → write 7-field Pocket Packets (each: failing test → minimal code → commit) → run a spec-reviewer subagent, then a test-architect subagent.
-- **Gates:** Handoff inputs verified; spec-reviewer must APPROVE before test-architect runs; user gives **plan approval** (authorize derived artifacts — not implementation).
+Preflight the codebase → parse the spec → map files → decompose into bounded tasks → write 7-field Pocket Packets (each: failing test → minimal code → commit, with test intent instead of test code) → run a spec-reviewer subagent, then a conditional test strategy audit — dispatched only when a trigger fires (cross-unit GWT scenario, ambiguous test level, persistence/concurrency/network/external-service behavior that materially changes how the task must be tested, or a `[test-risk]` task), and skipped otherwise.
+- **Gates:** Handoff inputs verified; spec-reviewer must APPROVE before the plan is saved for approval; user gives **plan approval** (authorize derived artifacts — not implementation).
 - **Produces:** `docs/pocket/plans/<date>-<slug>/execution-plan.md`.
 - **Next:** After plan approval, validates the plan with `structure --dry-run` and routes **all plans** to `pocket-structuring` (`planning → structuring for all plans`).
 
@@ -58,7 +58,7 @@ Always invoked directly by the user: `/pocketto:pocket-closing <plan_dir>`, afte
 
 1. **Idea is fuzzy** ("auth feels fragile, maybe refresh tokens?") → `pocket-pitching`. Explores directions (rotate vs sliding-window vs short-lived access). User picks "rotating refresh tokens" → chooses to start grinding.
 2. **`pocket-grinding`** locks scope (in: refresh endpoint + rotation; out: SSO), questions the three lenses, writes GWT scenarios ("Given an expired access token and valid refresh token, When /refresh is called, Then a new pair is issued and the old refresh token is revoked"), validates architecture. User approves → grinding **auto-invokes** planning.
-3. **`pocket-planning`** preflights the auth module, maps files, decomposes into 8 tasks (schema, endpoint, rotation logic, revocation, tests, etc.), writes Pocket Packets, runs spec-reviewer + test-architect. User approves → validates via `structure --dry-run` → 8 tasks (≥7) → routes to **structuring**.
+3. **`pocket-planning`** preflights the auth module, maps files, decomposes into 8 tasks (schema, endpoint, rotation logic, revocation, tests, etc.), writes Pocket Packets, runs spec-reviewer (the test strategy audit skips — no trigger fired). User approves → validates via `structure --dry-run` → 8 tasks (≥7) → routes to **structuring**.
 4. **`pocket-structuring`** runs the CLI → 8 tasks ⇒ **split** into Phase 1 (schema + scaffolding) and Phase 2 (endpoint + rotation + revocation). Hands Phase 1 to development.
 5. **`pocket-development`** executes Phase 1 task-by-task (packet → spawn → in-loop audit → log DONE). Once every task is DONE, it dispatches the phase-level pass over Phase 1, sets the phase to `REVIEW`, and emits `PHASE_COMPLETE`.
 6. Phase-level pass is clean → development sets Phase 1 to `REVIEW` and emits `PHASE_COMPLETE` → user runs `/pocketto:pocket-closing <plan_dir>` → closing selects the unique REVIEW phase, reports `PHASE_ADVANCED`, and marks Phase 1 `DONE` → structuring proceeds to Phase 2.

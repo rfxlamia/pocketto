@@ -33,8 +33,8 @@ Filters what deserves delegation. Many tasks should stay local but get delegated
 
 **Enforcement:**
 - Run all 6 gate questions
-- Any "no" triggers KEEP LOCAL
-- Document reason for KEEP LOCAL
+- Any "no" triggers HOLD LOCAL
+- Document reason for HOLD LOCAL
 
 ### Law 3: NO TRUST WITHOUT EVIDENCE
 
@@ -107,7 +107,7 @@ Without citation, decision quality cannot be audited. Agents that skip reference
 | TIME | Cut niceties, not structure. Packet still required. |
 | SUNK COST | Rewrite packet anyway. Bad packets must be rewritten, not patched. |
 | AUTHORITY | Keep the law, not the shortcut. "Process protects quality" is the response. |
-| EXHAUSTION | Refuse delegation if packet cannot stay legible. KEEP LOCAL until rested. |
+| EXHAUSTION | Refuse delegation if packet cannot stay legible. Stop and resume when rested — an operator condition, not a task defect. Never implement the task yourself instead. |
 
 ## Red Flag Phrases
 
@@ -122,20 +122,23 @@ These phrases indicate iron law violation:
 | "I'm stuck" | Law 5: Silent escalation |
 | "No REFERENCES LOADED section" | Law 6: Silent reference |
 
-## KEEP LOCAL Format
+## HOLD LOCAL Format
 
-When any iron law fails and delegation is inappropriate:
+When a gate question fails, the task is **not delegatable yet**. `HOLD LOCAL` records that
+state; it never authorizes the main agent to implement the task. The permitted next actions
+are: repair the packet or the missing context locally and re-run the Entry Gate, or escalate
+`NEEDS_CONTEXT` / `BLOCKED`.
 
 ```
-KEEP LOCAL: [reason why delegation unsafe]
+HOLD LOCAL: [reason the task is not delegatable yet]
 WHY UNSAFE: [specific concern]
-NEXT ACTION: [what to do instead, locally]
+NEXT ACTION: [packet/context repair to run, then re-run Entry Gate — or the escalation]
 ```
 
 Example:
 ```
-KEEP LOCAL: Cannot construct reviewable packet while fatigued.
+HOLD LOCAL: Cannot construct reviewable packet — task scope spans two modules.
 WHY UNSAFE: Critical constraints may be forgotten mid-prompt.
-NEXT ACTION: Will do initial file survey locally, then revisit
-             delegation when scope is bounded and attention fresh.
+NEXT ACTION: Re-read the task file and the plan's file map to bound scope, rewrite
+             the packet, then re-run the Entry Gate. Still unbounded → BLOCKED.
 ```

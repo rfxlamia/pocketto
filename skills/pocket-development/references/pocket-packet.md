@@ -70,6 +70,12 @@ Fix the auth issues
 Improve the auth layer
 ```
 
+#### Behavioral tasks
+
+OBJECTIVE states WHAT must be proved and in what order, not how to implement it. For a
+behavioral task that means carrying the planner's test intent and the RED gate — see
+[Test Intent and the RED Gate](#test-intent-and-the-red-gate) below for the field mapping.
+
 ### WHY THIS APPROACH
 
 **Purpose:** Justify task scope and complexity assessment.
@@ -229,3 +235,49 @@ WHY: ...
 CONTEXT: ...
 (Using "handle" - must be more specific)
 ```
+
+---
+
+## Test Intent and the RED Gate
+
+Applies to every behavioral task. Structural tasks marked `[no-tdd — structural task]` are exempt.
+
+A task file from `pocket-structuring` carries **test intent, not test source code** — planning
+owns the intent, development owns the implementation. Do not expect runnable test code in the
+task, never treat its absence as an incomplete packet, and do not drop the intent when you
+rewrite the task into an implementer packet.
+
+A task may contain **more than one RED cycle**: planning adds an extra
+test → implement → refactor → commit cycle for each additional GWT scenario the task covers.
+**For every cycle in the source task, copy its complete seven-field test intent verbatim and
+preserve cycle order. Never collapse or omit a cycle** — each one dropped is a GWT scenario
+that silently loses coverage in the planning → development rewrite.
+
+### Where each field lands
+
+| From the task (per RED cycle) | Into the packet |
+|---|---|
+| Test file, level (`unit`/`integration`/`E2E`) | OBJECTIVE — where the RED test goes and at what level |
+| GWT test intent (Given / When / Then) | OBJECTIVE — the behavior the test must prove |
+| Exercise through | OBJECTIVE — the boundary to drive, never internals |
+| Test doubles (and what must NOT be mocked) | OBJECTIVE — the mock boundary |
+| Expected RED | OBJECTIVE — the failure to see before writing production code |
+| Exact command (task Step 2) | OBJECTIVE — the command to run; also the verification command in DELIVERABLE |
+| — | QUALITY BAR must-not: implementing before the test fails for the stated reason |
+
+### The RED gate
+
+State the ordering explicitly in OBJECTIVE, once per cycle:
+
+```
+1. Write the test at <test file> from the test intent above. Do not write production code yet.
+2. Run `<exact command>`. Confirm it FAILS, and that the failure matches Expected RED.
+   Passing here, or failing for a different reason (import error, typo, wrong fixture),
+   means the test does not prove the behavior — fix the test before continuing.
+3. Only then implement the minimum to make it pass, run the command again — PASS.
+4. Refactor while green, re-run the command, commit.
+5. Repeat for the next RED cycle, in order.
+```
+
+Omitting the RED verification turns TDD into test-after: the implementer writes production
+code first and a test that cannot fail.
