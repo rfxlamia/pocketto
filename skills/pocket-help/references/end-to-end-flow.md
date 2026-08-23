@@ -30,7 +30,7 @@ Scan context → lock scope → question from three lenses (Business / Developer
 - **Next:** **Auto-invokes `pocket-planning`** once the user approves the spec (mandatory — grinding isn't "done" at "spec written").
 
 ### 3. pocket-planning — plan (TDD)
-Preflight the codebase → parse the spec → map files → decompose into bounded tasks → write 7-field Pocket Packets (each: failing test → minimal code → commit, with test intent instead of test code) → run a spec-reviewer subagent, then a conditional test strategy audit — dispatched only when a trigger fires (cross-unit GWT scenario, ambiguous test level, persistence/concurrency/network/external-service behavior, or a `[test-risk]` task), and skipped otherwise.
+Preflight the codebase → parse the spec → map files → decompose into bounded tasks → write 7-field Pocket Packets (each: failing test → minimal code → commit, with test intent instead of test code) → run a spec-reviewer subagent, then a conditional test strategy audit — dispatched only when a trigger fires (cross-unit GWT scenario, ambiguous test level, persistence/concurrency/network/external-service behavior that materially changes how the task must be tested, or a `[test-risk]` task), and skipped otherwise.
 - **Gates:** Handoff inputs verified; spec-reviewer must APPROVE before the plan is saved for approval; user gives **plan approval** (authorize derived artifacts — not implementation).
 - **Produces:** `docs/pocket/plans/<date>-<slug>/execution-plan.md`.
 - **Next:** After plan approval, validates the plan with `structure --dry-run` and routes **all plans** to `pocket-structuring` (`planning → structuring for all plans`).

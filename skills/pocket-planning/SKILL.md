@@ -5,7 +5,7 @@ description: Converts a pocket-grinding spec into a TDD-structured execution pla
 
 # Pocket Planning
 
-Bridges pocket-grinding spec and pocket-development execution. Scans codebase context, maps file structure, decomposes acceptance criteria into TDD-structured tasks, generates Pocket Packets with test-first steps and commits, then runs a spec reviewer subagent — plus a conditional test strategy audit when any Phase 6 trigger fires (cross-unit GWT scenario, ambiguous test level, persistence/concurrency/network/external-service behavior, or a `[test-risk]` task) — before handoff.
+Bridges pocket-grinding spec and pocket-development execution. Scans codebase context, maps file structure, decomposes acceptance criteria into TDD-structured tasks, generates Pocket Packets with test-first steps and commits, then runs a spec reviewer subagent — plus a conditional test strategy audit when any Phase 6 trigger fires (cross-unit GWT scenario, ambiguous test level, persistence/concurrency/network/external-service behavior that materially changes how the task must be tested, or a `[test-risk]` task) — before handoff.
 
 **Core principle:** Every task is red → green → refactor → commit. Steps live inside the task. Pocket enforces execution order and parallelism.
 
@@ -519,8 +519,8 @@ Return: FINDINGS ONLY — missing behavior/edge case, wrong test level,
 
 Apply findings by editing affected tasks in place. Then, before Phase 7:
 
-- Task added → re-run the Phase 3 circular dependency check, refresh the Phase 2 file map, and update `**Total tasks:**` plus the Plan Summary table.
-- **Re-dispatch the Spec Reviewer on the changed tasks.** Gate 4 covers the plan the user actually sees, so audit-applied edits must not reach Phase 7 unreviewed. This is a **single confirmation cycle, independent of Phase 5's 2-cycle budget**: Issues Found → fix inline, re-dispatch once → still Issues Found → `REVIEW BLOCKED`, stop. It runs only on triggered plans.
+- Task added → re-run the Phase 3 circular dependency check, refresh the Phase 2 file map, and update `**Total tasks:**`, the `Recommended Order` and `Parallelizable Groups` blocks, and the Plan Summary table. A new task changes the topology; stale overview blocks contradict the packets.
+- **The confirmation review is triggered by mutation, not by the audit having run.** `Clean` → nothing changed → skip it → Phase 7. `Findings` applied → re-dispatch the Spec Reviewer on the changed tasks, since Gate 4 covers the plan the user actually sees. When it runs it is a **single confirmation cycle, independent of Phase 5's 2-cycle budget**: Issues Found → fix inline, re-dispatch once → still Issues Found → `REVIEW BLOCKED`, stop.
 
 ---
 
@@ -563,7 +563,7 @@ It does **not** authorize implementation. Structuring will ask separately for
 Present the result, showing the execution flow:
 
 > "Plan complete — N tasks, TDD-structured, spec-reviewed, test intent defined.
-> Test strategy audit: skipped (no trigger) | run on <tasks> — <N> findings applied.
+> Test strategy audit: skipped (no trigger) | run on <tasks> — Clean, no findings | run on <tasks> — <N> findings applied, changed tasks re-reviewed.
 > Saved to docs/pocket/plans/…
 > Execution flow: {data.executionFlow}
 > Plan approval: Ready to hand off to pocket-structuring for execution index generation?"

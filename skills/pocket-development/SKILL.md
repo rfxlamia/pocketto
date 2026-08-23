@@ -1,6 +1,6 @@
 ---
 name: pocket-development
-description: Use when executing multi-task implementation plans. Trigger on execute plan, delegate tasks, dispatch subagents. Combines delegate handoff discipline with prompt-engineering attention mechanics.
+description: Use when executing implementation plans of one or more tasks. Trigger on execute plan, delegate tasks, dispatch subagents. Combines delegate handoff discipline with prompt-engineering attention mechanics.
 ---
 
 # Pocket Development
@@ -30,13 +30,24 @@ Full command reference and update/close commands: see **Execution Log** section 
 ## When to Use
 
 Use POCKET when ALL conditions are met:
-- You have an implementation plan with 2+ independent tasks
+- You have an implementation plan with 1+ tasks
 - Tasks can be executed one-by-one (not requiring tight coupling)
 - You need to delegate work to subagents
+
+Task count does not gate eligibility. `pocket-planning` routes **every** plan through
+`pocket-structuring`, which accepts any task count, so a one-task plan reaches here as a
+legitimate Pocket plan. It is simply the degenerate case of `SOLO` — a group resolved to
+size 1 — and runs the normal Entry Gate, packet, audit, and phase-pass path. Do not bounce
+it to `hotfix`: `hotfix` is an entry-routing choice for small, clear work, not an escape
+hatch once a full spec and plan already exist.
 
 **Decision flow:**
 ```
 Have implementation plan?
+    │
+    ├── Exactly one task?
+    │       │
+    │       └── YES → Use POCKET (this skill) — the task is SOLO
     │
     ├── Tasks mostly independent?
     │       │
@@ -211,18 +222,24 @@ the implementation. A behavioral task arrives with a test file, level, GWT inten
 exercise, test doubles, an `Expected RED` reason, and an exact command. Do not expect runnable
 test code in the task file, and never treat its absence as an incomplete packet.
 
+A task may contain **more than one RED cycle** — planning adds an extra
+test → implement → refactor → commit cycle for each additional GWT scenario a task covers.
+
 When constructing the implementer packet for a behavioral task:
 
-1. **Copy the task's test intent into OBJECTIVE unchanged** — all seven fields. Do not
-   summarize it, and do not substitute your own test design.
+1. **Copy every RED cycle's test intent into OBJECTIVE verbatim, in source order** — all seven
+   fields per cycle. Never collapse two cycles into one, never drop a later cycle, and never
+   substitute your own test design. Each dropped cycle is a GWT scenario that silently loses
+   its coverage in the planning → development rewrite.
 2. **The implementer writes the RED test from that intent**, at the specified file and level.
 3. **RED is verified before any production code:** run the exact command, confirm it FAILS, and
    confirm the failure matches `Expected RED`. A pass — or a failure for a different reason —
    means the test does not prove the behavior; fix the test first.
 4. Then GREEN (minimum to pass) → refactor while green → commit.
+5. Repeat 2–4 for each remaining cycle, in order.
 
 Field-by-field guidance → `references/pocket-packet.md`. Tasks marked
-`[no-tdd — structural task]` are exempt from steps 2–4.
+`[no-tdd — structural task]` are exempt from steps 2–5.
 
 ## Worked Example: User Service Refactoring
 
@@ -419,7 +436,11 @@ WT=.worktree/<task_id>
 [[ $(git -C $WT rev-list $parent_sha..HEAD --count) -gt 0 ]] || AUDIT FAIL
 
 # 3. Tests (if plan specifies a test command) — inside worktree
-git -C $WT <test_command>
+# NOTE: run the plan's command with $WT as cwd. Do NOT prepend `git -C` here as in
+# checks 1-2: those are git subcommands, this is an arbitrary shell command, and
+# `git -C $WT pnpm vitest ...` asks git to run `pnpm` as a git subcommand and fails
+# even when the test passes.
+( cd "$WT" && <test_command> )
 ```
 
 Mechanical fail → re-dispatch implementer with same WORKTREE field. Do not dispatch the auditor. Worktree RETAINED.

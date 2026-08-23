@@ -124,19 +124,30 @@ Prompt:
    - otherwise → extra TDD cycle inside the owning task
 4. **If any task was added**, before Phase 7: re-run the Phase 3 circular dependency check on
    the full task list, refresh the Phase 2 file map with the new task's files, and update the
-   plan's `**Total tasks:**` count and Plan Summary table.
-5. **Re-dispatch the Spec Reviewer on the changed tasks** (Phase 5 protocol, scoped to the tasks
-   the audit touched plus — if a task was added — the file map and task count). Gate 4 covers the
-   plan the user actually sees, so audit-applied edits must not reach Phase 7 unreviewed.
+   plan's `**Total tasks:**` count, the `Recommended Order` and `Parallelizable Groups` blocks
+   in Execution Overview, and the Plan Summary table. A new task changes the topology — leaving
+   those stale ships a plan whose overview contradicts its packets.
+5. **The confirmation review is triggered by mutation, not by the audit having run:**
 
-   This is a **single confirmation cycle, independent of Phase 5's 2-cycle budget**:
-   Issues Found → fix inline, re-dispatch once → still Issues Found → output `REVIEW BLOCKED`
-   and stop. It runs only on triggered plans, so it is rare by construction and does not restore
-   the per-plan cost the conditional audit removed.
-6. Record the outcome for the Phase 7 approval message: `Test strategy audit: run on <tasks> — <N> findings applied`.
+   - `Clean` → nothing changed → **skip the confirmation review** → Phase 7.
+   - `Findings` applied → **re-dispatch the Spec Reviewer on the changed tasks** (Phase 5
+     protocol, scoped to the tasks the audit touched plus — if a task was added — the file map,
+     task count, and the refreshed overview blocks).
+
+   Gate 4 covers the plan the user actually sees, so audit-applied *edits* must not reach
+   Phase 7 unreviewed. A `Clean` audit edits nothing, so re-reviewing it would be a whole-plan
+   pass with no changed input — exactly the cost this phase exists to avoid.
+
+   When it does run, it is a **single confirmation cycle, independent of Phase 5's 2-cycle
+   budget**: Issues Found → fix inline, re-dispatch once → still Issues Found → output
+   `REVIEW BLOCKED` and stop.
+6. Record the outcome for the Phase 7 approval message — one of:
+   - `Test strategy audit: skipped — no trigger fired`
+   - `Test strategy audit: run on <tasks> — Clean, no findings`
+   - `Test strategy audit: run on <tasks> — <N> findings applied, changed tasks re-reviewed`
 
 **If the audit returns BLOCKED or NEEDS_CONTEXT:**
 
 - Common cause: test framework not identified in preflight → confirm the framework with the user, update Preflight Summary, re-dispatch once
 - Common cause: a task's OBJECTIVE is too vague to judge its test level → fix that OBJECTIVE, re-dispatch once
-- **Maximum 1 retry.** Blocked again → escalate: "Test strategy audit blocked on task `<task name>`. OBJECTIVE text: `<text>`. Please clarify scope or confirm the task is non-testable `[no-tdd — structural]`."
+- **Maximum 1 retry.** Blocked again → escalate: "Test strategy audit blocked on task `<task name>`. OBJECTIVE text: `<text>`. Please clarify scope or confirm the task is non-testable `[no-tdd — structural task]`."
