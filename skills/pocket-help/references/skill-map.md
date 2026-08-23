@@ -30,9 +30,9 @@ Two kinds of skills:
 - **Skip when:** Trivial single-line fixes, or work that already has an approved spec.
 
 ### pocket-planning
-- **What:** Converts a spec into a TDD-structured execution plan. Scans codebase, maps files, decomposes acceptance criteria into bounded tasks, writes full 7-field Pocket Packets (red → green → refactor → commit), then runs a spec-reviewer and a test-architect subagent.
+- **What:** Converts a spec into a TDD-structured execution plan. Scans codebase, maps files, decomposes acceptance criteria into bounded tasks, writes full 7-field Pocket Packets (red → green → refactor → commit) carrying test *intent* rather than test code, then runs a spec-reviewer subagent — plus a conditional test strategy audit when a task carries test risk.
 - **Input:** A completed pocket-grinding spec (path + acceptance criteria + architecture constraints + design decision).
-- **Output:** An execution plan of Pocket Packets with tests designed (`docs/pocket/plans/<date>-<slug>/execution-plan.md`).
+- **Output:** An execution plan of Pocket Packets with test intent defined — test file, level, GWT behavior, boundary, doubles, expected RED, command (`docs/pocket/plans/<date>-<slug>/execution-plan.md`). The implementer writes the actual test during development's RED step.
 - **Handoff:** After **plan approval**, validates the plan with `structure --dry-run` and routes **all plans** to `pocket-structuring` (`planning → structuring for all plans`). `data.action` is `"single"` | `"split"` (informational; routing does not branch on it).
 - **Use when:** A spec exists and needs to become executable tasks; "create plan", "build plan".
 - **Skip when:** No spec yet (→ pocket-grinding), or re-running a task already in execution (→ pocket-development directly).

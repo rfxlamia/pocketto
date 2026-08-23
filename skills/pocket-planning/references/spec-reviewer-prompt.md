@@ -2,9 +2,9 @@
 
 Load this during Phase 5 to dispatch the spec reviewer subagent.
 
-**Purpose:** Verify the execution plan covers the spec completely and has no placeholder failures before test-architect runs.
+**Purpose:** Verify the execution plan covers the spec completely, carries usable test intent, and has no placeholder failures.
 
-**When:** After all Pocket Packets are generated. Before test-architect.
+**When:** After all Pocket Packets are generated. Before Phase 6's conditional test strategy audit, and before the plan is saved for approval.
 
 ---
 
@@ -34,6 +34,14 @@ Prompt:
   | GWT traceability | Every task's DELIVERABLE contains GWT scenarios from the spec |
   | Out-of-scope | No task touches items listed in spec Out-of-Scope section |
   | File map | Every file mentioned in tasks was listed in Phase 2 File Structure Map |
+  | Test intent present | Every behavioral task's Step 1 carries all seven fields: test file, level, GWT test intent, boundary to exercise, test doubles, expected RED reason, exact command |
+  | Test level sane | The stated level (unit / integration / E2E) can actually observe the behavior being proved — not a unit test for a cross-boundary outcome |
+  | Mock boundary sane | Test doubles do not mock the unit under test, and external services / network / clock are doubled rather than hit for real |
+  | Cross-unit coverage | Every GWT scenario needing 2+ units collaborating has integration verification — an integration-test task, or an explicit extra TDD cycle inside the owning task |
+  | TDD ordering | Order is RED → GREEN → refactor → commit, and "Expected RED" states why the test fails **today** (not a vacuous pass) |
+  | `[test-risk]` usage | The marker is appended after a dependency annotation, never used alone (alone it parses as depth 0 and reorders execution) |
+
+  The plan must contain **no test source code**. Test code in a plan is a finding, not a bonus — the implementer writes the RED test during execution.
 
   ## Calibration
 
@@ -42,6 +50,10 @@ Prompt:
   - A task with placeholder content → MUST flag
   - A task missing the TDD steps (test before implement) → MUST flag
   - A task missing the commit step → MUST flag
+  - A behavioral task with no test intent, or missing test file / level / expected RED → MUST flag
+  - A cross-unit GWT scenario with no integration verification anywhere → MUST flag
+  - Test source code written into the plan → MUST flag
+  - Preferring a different-but-equivalent test level or double → do NOT flag
   - Minor wording or style → do NOT flag
   - "Nice to have" suggestions → do NOT flag (use Recommendations)
 
@@ -67,10 +79,10 @@ Prompt:
 
 | Reviewer Status | Action |
 |-----------------|--------|
-| Approved | Proceed to Phase 6 (Test-Architect) |
+| Approved | Proceed to Phase 6 and run its trigger check (the audit itself is conditional) |
 | Issues Found | Fix each issue inline in the execution plan, re-dispatch reviewer |
 
-**Fix loop:** Fix → re-dispatch → repeat until Approved. Do not proceed to Phase 6 with open issues.
+**Fix loop:** Fix → re-dispatch → repeat until Approved. Do not proceed past Phase 5 with open issues.
 
 **Maximum 2 review cycles.** If cycle 2 still returns Issues Found, output exactly:
 
@@ -78,7 +90,7 @@ Prompt:
 REVIEW BLOCKED — <N> unresolved issues after 2 cycles:
 <reviewer's Issues list verbatim>
 
-Please resolve the above before proceeding to Test-Architect.
+Please resolve the above before the plan can be saved for approval.
 ```
 
-Do not summarize or paraphrase the issues. Do not auto-advance to Phase 6. Wait for user input.
+Do not summarize or paraphrase the issues. Do not auto-advance to Phase 6 or Phase 7. Wait for user input.

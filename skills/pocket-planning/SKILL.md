@@ -5,9 +5,11 @@ description: Converts a pocket-grinding spec into a TDD-structured execution pla
 
 # Pocket Planning
 
-Bridges pocket-grinding spec and pocket-development execution. Scans codebase context, maps file structure, decomposes acceptance criteria into TDD-structured tasks, generates Pocket Packets with test-first steps and commits, then runs spec reviewer and test-architect subagents before handoff.
+Bridges pocket-grinding spec and pocket-development execution. Scans codebase context, maps file structure, decomposes acceptance criteria into TDD-structured tasks, generates Pocket Packets with test-first steps and commits, then runs a spec reviewer subagent — plus a conditional test strategy audit when a task carries test risk — before handoff.
 
 **Core principle:** Every task is red → green → refactor → commit. Steps live inside the task. Pocket enforces execution order and parallelism.
+
+**Test boundary:** Planning owns test *intent*. Development owns test *implementation*. Packets carry test intent — never test source code (Phase 4).
 
 ## When to Use
 
@@ -44,8 +46,10 @@ GATE 3: Design Decision section must be present in spec.
         Missing → STOP. "Design Decision not found. Return to pocket-grinding
         or provide the decision manually." Do not proceed to Phase 2.
 
-GATE 4: Spec Reviewer must APPROVE before Test-Architect runs.
+GATE 4: Spec Reviewer must APPROVE before the plan is saved and presented at the
+        Phase 7 approval gate.
         Issues Found → fix plan, re-run reviewer. Do not skip.
+        (Phase 6 is conditional — an APPROVE is required whether or not it runs.)
 
 GATE 5: User must approve the final plan before ANY downstream handoff.
         All plans hand off to pocket-structuring (which generates the execution-plan/ index and task files).
@@ -211,6 +215,14 @@ For cross-layer patterns → `references/task-decomposition.md`
 **Rule 5 — Task scope must be explicit**
 Name files, modules, functions in scope. "Implement streaming" is invalid. Infer from file map if spec doesn't specify.
 
+**Rule 6 — Cross-unit scenarios get explicit integration verification**
+A GWT scenario that only holds when 2+ units collaborate (service + repository, producer + consumer, API + client) gets its verification decided here, not discovered mid-execution.
+
+> Independently useful and runnable once its dependencies complete?
+> YES → own integration-test task, `[depends: T_a, T_b]`. NO → extra TDD cycle inside the owning task.
+
+Either way it lands in some task's Step 1 test intent — a cross-unit scenario verified nowhere is a defect the Spec Reviewer flags.
+
 ### Rule 2 vs Rule 4 Tiebreaker
 > Is the second piece verifiable and useful without the first?
 > YES → two tasks. NO → one task with sequential steps.
@@ -226,9 +238,12 @@ Name files, modules, functions in scope. "Implement streaming" is invalid. Infer
 [depends: T1]      — must wait for T1 to complete
 [depends: T1, T2]  — must wait for both
 [parallel: T3]     — can run concurrently with T3
+[test-risk]        — marker: this task's test strategy is non-obvious (Phase 6 trigger)
 ```
 
 Dependency annotations are **recommended order** — pocket-development enforces actual sequencing. Communicate this to user in Phase 7.
+
+`[test-risk]` is a marker, not a dependency — always append it **after** a dependency annotation (`### Task 4: Sync worker retry policy [depends: T2] [test-risk]`). Used alone it carries no dependency and parses into the depth-0 prereq tier, silently reordering execution.
 
 ### Circular Dependency Check
 Walk each task's dependency chain before presenting. If any chain leads back to itself → resolve by removing artificial dependency or extracting a `[prereq]` task.
@@ -266,6 +281,12 @@ For advanced patterns (shared interfaces, event-driven, phased rollouts):
 - "Similar to Task N" (repeat the content — agents may execute tasks out of order)
 - Code steps without code
 
+### Test Intent, Not Test Code
+
+Every behavioral task's Step 1 carries seven fields — **test file, level, GWT test intent, boundary to exercise, test doubles, expected RED reason, exact command** — laid out in the template below.
+
+Do **not** write test source code into the plan. The implementation does not exist yet, so code here is false precision: it pins imports, signatures, and fixture shapes that may legitimately change while still satisfying the spec. The implementer writes the test during the RED step, against the API that exists by then. The seven fields are what let them do that without guessing.
+
 ### Spec → Pocket Packet Mapping
 
 | Pocket Field | Source |
@@ -295,9 +316,25 @@ Files:
 
 Steps:
 1. Write failing test for: <acceptance criteria rule / GWT scenario name>
-   File: `tests/exact/path/test.ext`
-   Test verifies: Given <precondition>, When <action>, Then <outcome>
-   [Test-Architect will add code here — see Phase 6]
+   Test file: `tests/exact/path/test.ext`
+   Level: unit | integration | E2E
+
+   Test intent:
+   Given <precondition>
+   When <action>
+   Then:
+   - <observable outcome>
+   - <observable outcome>
+
+   Exercise through:
+   - <public entry point / boundary — not internals>
+
+   Test doubles:
+   - mock/fake: <external dep>
+   - do NOT mock: <the unit under test>
+
+   Expected RED:
+   - <why it fails today — missing function, or behavior currently allowed>
 
 2. Run test — verify FAIL:
    `<exact command with flags>`
@@ -427,7 +464,7 @@ Do NOT fill with style preferences or naming conventions.
 
 ## Phase 5: Spec Reviewer
 
-**Goal:** Verify plan covers the spec completely and has no placeholder failures. Dispatch subagent, wait for result before continuing.
+**Goal:** Verify plan covers the spec completely, carries usable test intent, and has no placeholder failures. Dispatch subagent, wait for result before continuing.
 
 → Load `references/spec-reviewer-prompt.md` for the full dispatch prompt.
 
@@ -441,36 +478,45 @@ Return: Status (Approved | Issues Found) + specific issues with task:step refere
 ```
 
 **Gate 4 enforcement (maximum 2 review cycles):**
-- Status = Approved → proceed to Phase 6
+- Status = Approved → proceed to Phase 6 (run its trigger check)
 - Status = Issues Found → fix issues inline, re-dispatch reviewer (cycle 2)
 - Cycle 2 still Issues Found → STOP. Output:
   ```
   REVIEW BLOCKED — <N> unresolved issues after 2 cycles:
   <reviewer's Issues list verbatim>
   ```
-  Ask user: "Please resolve the above before proceeding to Test-Architect."
-  Do not auto-advance to Phase 6.
+  Ask user: "Please resolve the above before the plan can be saved for approval."
+  Do not auto-advance to Phase 6 or Phase 7.
 - Full reviewer dispatch protocol → `references/spec-reviewer-prompt.md`
 
 ---
 
-## Phase 6: Test-Architect
+## Phase 6: Test Strategy Audit (conditional — skipped by default)
 
-**Goal:** Enrich every Pocket Packet with specific test code. Spawn subagent that reads the plan, inserts test implementations into Step 1 of each task, and validates TDD ordering.
+**Goal:** Catch test-strategy mistakes the Spec Reviewer cannot see. Never generates test code, never rewrites the plan. **Default is SKIP.**
 
-→ Load `references/test-architect-prompt.md` for the full dispatch prompt.
+### Trigger Check (always run — it is free)
 
-Quick dispatch format:
+Dispatch only if one or more holds:
+
+1. A GWT scenario spans 2+ implementation units (Rule 6 fired in Phase 3)
+2. The unit vs integration vs E2E boundary is genuinely ambiguous for some task
+3. Persistence, concurrency, networking, or an external service materially changes how a task must be tested
+4. A task carries the `[test-risk]` marker
+
+No trigger → record `TEST STRATEGY AUDIT: skipped — no trigger fired`, go to Phase 7, do not load the reference.
+
+Trigger fires → load `references/test-strategy-audit-prompt.md`.
 
 ```
-Dispatch: Subagent test-architect | Standard complexity
-Input: approved execution plan + spec + preflight codebase findings
-Return: updated plan with test code inserted in each task's Step 1,
-        integration test tasks added where GWT spans multiple units,
-        TDD order validated (test before implement in every task)
+Dispatch: Subagent test-strategy-audit | Read-only review
+Input: plan draft + spec + preflight findings + which triggers fired, on which tasks
+Return: FINDINGS ONLY — missing behavior/edge case, wrong test level,
+        wrong mock/fake boundary, missing integration verification,
+        TDD ordering violation. No test code. No rewritten plan.
 ```
 
-Apply test-architect's changes to the plan before Phase 7.
+Apply findings by editing affected tasks in place. If that adds an integration-test task → re-run the Phase 3 circular dependency check before Phase 7.
 
 ---
 
@@ -512,7 +558,8 @@ It does **not** authorize implementation. Structuring will ask separately for
 
 Present the result, showing the execution flow:
 
-> "Plan complete — N tasks, TDD-structured, spec-reviewed, tests designed.
+> "Plan complete — N tasks, TDD-structured, spec-reviewed, test intent defined.
+> Test strategy audit: skipped (no trigger) | run on <tasks>.
 > Saved to docs/pocket/plans/…
 > Execution flow: {data.executionFlow}
 > Plan approval: Ready to hand off to pocket-structuring for execution index generation?"
@@ -537,4 +584,4 @@ pocket-structuring re-parses the plan from disk and decomposes it into `executio
 | `references/task-decomposition.md` | Phase 3: **mandatory if 4+ tasks** — run Over-Split/Under-Split. Also: shared interfaces, event-driven, phased rollouts |
 | `references/plan-template.md` | Phase 7: writing full execution plan document |
 | `references/spec-reviewer-prompt.md` | Phase 5: dispatching spec reviewer subagent |
-| `references/test-architect-prompt.md` | Phase 6: dispatching test-architect subagent |
+| `references/test-strategy-audit-prompt.md` | Phase 6: **only when a trigger fires** — dispatching the conditional test strategy audit |

@@ -55,7 +55,7 @@ Rule: <rule name>
   Test:   tests/exact/path/test.ext
 ```
 
-Note: `(created by: T<N>)` annotations help test-architect avoid importing from files that don't exist yet at test-write time.
+Note: `(created by: T<N>)` annotations mark files that do not exist until T<N> runs. The implementer writing a RED test must not import from a file a later task creates — the test would fail on an import error instead of the behavior it is meant to prove.
 
 ---
 
@@ -69,8 +69,18 @@ Note: `(created by: T<N>)` annotations help test-architect avoid importing from 
 <what must be done>
 
 Steps:
-1. <step>
-2. <step>
+1. Write failing test for: <GWT scenario name>
+   Test file: `tests/exact/path/test.ext`
+   Level: unit | integration | E2E
+   Test intent: Given <precondition> / When <action> / Then <observable outcomes>
+   Exercise through: <public boundary>
+   Test doubles: <mock these; do NOT mock the unit under test>
+   Expected RED: <why it fails today>
+2. Run test — verify FAIL: `<exact command>`
+3. <implement → verify PASS → refactor while green → commit>
+
+> Test **intent** only — never test source code. The implementer writes the test
+> during the RED step, against the API that exists by then.
 
 ## REFERENCES LOADED
 <spec path> — rule: <name>, GWT scenarios used as verification

@@ -5,6 +5,7 @@ Load this during Phase 3 when: a rule is ambiguous to decompose, tasks share an 
 ## Contents
 - [Shared Interface Pattern](#shared-interface-pattern)
 - [Shared Helper Pattern](#shared-helper-pattern)
+- [Cross-Unit Verification Decision](#cross-unit-verification-decision)
 - [Event-Driven Decomposition](#event-driven-decomposition)
 - [Phased Rollout Decomposition](#phased-rollout-decomposition)
 - [Over-Split vs Under-Split Detection](#over-split-vs-under-split-detection)
@@ -56,6 +57,45 @@ T3: Feature B, imports helper                      [depends: T1] [parallel: T2]
 **In Pocket Packets:**
 - T1's DELIVERABLE: unit-tested helper API (its own GWT scenarios)
 - T2/T3's QUALITY BAR must-not: reimplementing the helper locally instead of importing it
+
+---
+
+## Cross-Unit Verification Decision
+
+**Problem:** A GWT scenario in the spec is only true when two or more implementation units
+collaborate. Unit tests on each side can all pass while the collaboration is still broken.
+
+**Solution:** Decide the integration verification during planning (Phase 3 Rule 6), not during
+execution. Two shapes, one question.
+
+```
+Is the integration verification independently useful AND runnable
+once its dependencies complete?
+  YES → own integration-test task:  T_n: Integration test: <scenario> [depends: T_a, T_b]
+  NO  → extra TDD cycle inside the owning task
+```
+
+**Own task — when:**
+- The scenario is a named acceptance criteria rule in its own right
+- It exercises a seam other work will keep depending on (producer → consumer, API → client)
+- It needs its own fixture, harness, or test file (`tests/integration/…`)
+
+**Inline cycle — when:**
+- The collaboration is an implementation detail of one task's deliverable
+- The second unit is a thin adapter the owning task also creates
+- Splitting it out would produce a task that cannot fail independently of its parent
+
+**In Pocket Packets, either way:**
+- The test intent names the level explicitly: `Level: integration`
+- `Exercise through:` names the outer boundary — the entry point a caller actually uses,
+  not either unit's internals
+- `Test doubles:` doubles only what is outside the collaboration (network, clock, third-party
+  service). Never mock a unit whose behavior the scenario is meant to prove
+- `Expected RED:` states the collaboration failure, not a missing symbol
+
+Tasks whose test level is arguable — could plausibly be unit or integration — get the
+`[test-risk]` marker appended after their dependency annotation. That marker is a Phase 6
+trigger.
 
 ---
 
