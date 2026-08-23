@@ -1,6 +1,6 @@
 {
   "name": "pocketto-pi",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows for Pi.",
   "keywords": [
     "pi-package",
