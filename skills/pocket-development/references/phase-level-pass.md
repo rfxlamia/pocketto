@@ -125,7 +125,13 @@ The phase-level pass has the same fix-round budget as a task: **2 rounds**. The 
 - **Round 1:** pass runs, findings recorded (or `findings: []` and done — no round needed).
 - If findings exist: fixes are dispatched, one correction commit per fix (see [Correction recording](#correction-recording)), then the pass **re-runs** to confirm the findings are resolved. This re-run consumes round 1.
 - If findings remain after round 1's re-run: round 2 repeats the same fix → correction → re-run cycle.
-- If findings remain after round 2's re-run: the phase-level pass ends. The phase is marked `PHASE_BLOCKED` — `reviews/phase-pass-<phase_key>.json` records `status: "PHASE_BLOCKED"` with `blocked_category: "phase-audit-failed"` and the outstanding `findings` attached. The main agent reports `PHASE_BLOCKED` with those findings. Phase status SHALL NOT advance to `REVIEW`.
+- If findings remain after round 2's re-run: the phase-level pass ends with a bounded auto-recovery attempt before declaring PHASE_BLOCKED:
+  1. Route the outstanding findings through the existing `REVIEW_FAIL` correction path for one extra bounded cycle
+  2. Dispatch an implementer subagent for the fix (the main agent stays Delegator + Auditor — never writes the fix itself)
+  3. Record it as an append-only correction per [Correction recording](#correction-recording)
+  4. Refresh the affected tasks' verdict artifacts per [Verdict refresh](#verdict-refresh-fan-out)
+  5. Re-run the phase-level pass to confirm the findings are resolved
+  - If findings remain after this bounded attempt: the phase is marked `PHASE_BLOCKED` — `reviews/phase-pass-<phase_key>.json` records `status: "PHASE_BLOCKED"` with `blocked_category: "phase-audit-failed"` and the outstanding `findings` attached. The main agent reports `PHASE_BLOCKED` with those findings and names the correction command as the first unblocking action. Phase status SHALL NOT advance to `REVIEW`.
 
 A clean pass (zero findings on round 1, or zero findings remaining after a fix round's re-run) writes `status: "PHASE_PASS_CLEAN"` (never entered a fix round) or `status: "PHASE_PASS_RESOLVED"` (entered at least one fix round and resolved), and phase status then advances to `REVIEW` per [Ordering](#ordering-review-only-after-the-pass-records-a-result).
 
