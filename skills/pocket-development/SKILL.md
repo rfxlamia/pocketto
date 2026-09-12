@@ -328,6 +328,8 @@ Match execution approach to task complexity:
 
 ## The Process
 
+**Non-normative summary.** For the authoritative in-loop audit contract, cite `references/two-stage-review.md`. For the phase-level pass contract, cite `references/phase-level-pass.md`.
+
 ```dot
 digraph pocket_process {
     rankdir=TB;
@@ -346,22 +348,14 @@ digraph pocket_process {
 
     "Wait for status" -> { "DONE" "NEEDS_CONTEXT" "BLOCKED" "DONE_WITH_CONCERNS" };
 
-    "DONE" -> "Mechanical gate";
-    "Mechanical gate" -> { "Gate pass" "Gate fail" };
-    "Gate fail" -> "Re-dispatch implementer with failure reason";
-    "Re-dispatch implementer with failure reason" -> "Wait for status";
-    "Gate pass" -> "Dispatch read-only auditor";
-    "Dispatch read-only auditor" -> { "Audit pass" "Fix/refactor round" "audit-failed" "auditor-unavailable" };
-    "Fix/refactor round" -> "Re-dispatch implementer with failure reason";
-    "Audit pass" -> "Mark task DONE in log (--sha audited_head)";
-    "audit-failed" -> "Mark task BLOCKED";
-    "auditor-unavailable" -> "Mark task BLOCKED";
+    "DONE" -> "In-loop audit cycle (cite references/two-stage-review.md)";
+    "In-loop audit cycle (cite references/two-stage-review.md)" -> { "Audit pass" "BLOCKED" };
 
     "NEEDS_CONTEXT" -> "Provide context -> Re-dispatch (no work)";
     "BLOCKED" -> "Categorize blocker -> Fix -> Re-dispatch";
     "DONE_WITH_CONCERNS" -> "Attach concerns to auditor input -> mechanical gate -> auditor classifies";
 
-    "Mark task DONE in log (--sha audited_head)" -> "More tasks?";
+    "Audit pass" -> "More tasks?";
     "More tasks?" -> "Extract task N+1" [label="yes"];
     "More tasks?" -> "Dispatch phase-level pass" [label="no"];
     "Dispatch phase-level pass" -> "Record pass result";
@@ -458,28 +452,13 @@ Dispatch ALL tasks in the group in ONE batch — single message containing N par
 
 ### Per-Worktree Quick Audit (main agent)
 
-When a subagent reports DONE, run the in-loop cycle against ITS worktree. Cite `references/two-stage-review.md` for every rule — do not restate them here. The main agent never judges code; every criterion is executed by a read-only auditor subagent.
+**Normative contract:** `references/two-stage-review.md` — cite it; do not restate its rules here.
 
-1. **Mechanical gate** (main agent) — command-and-commit evidence only, inside the worktree:
+When a subagent reports DONE, run the in-loop cycle against ITS worktree per the contract. The main agent never judges code; every criterion is executed by a read-only auditor subagent.
 
-```bash
-WT=.worktree/<task_id>
-
-# 1. CWD discipline — catches "subagent ignored cd"
-[[ $(git -C $WT branch --show-current) == "task/<task_id>" ]] || AUDIT FAIL
-
-# 2. At least one commit ahead of parent
-[[ $(git -C $WT rev-list $parent_sha..HEAD --count) -gt 0 ]] || AUDIT FAIL
-
-# 3. Commands — enumerated and executed per `references/two-stage-review.md` § Mechanical gate,
-#    with $WT as cwd. That file is normative: every distinct exact command the task's RED
-#    cycles specify must be green, not just the first.
-```
-
-Mechanical fail → re-dispatch implementer with same WORKTREE field. Do not dispatch the auditor. Worktree RETAINED.
-
-2. **Deep audit** — dispatch a read-only auditor subagent against the worktree tip (see `references/two-stage-review.md`). The auditor writes the verdict artifact. The main agent reads labels from that artifact; it does not assess code.
-3. **Fix/refactor round** — when the artifact requires a round, re-dispatch the implementer with the same WORKTREE field, then re-run the mechanical gate, then re-dispatch the auditor.
+1. **Mechanical gate** (main agent) — command-and-commit evidence only, inside the worktree. Cite `references/two-stage-review.md` § Mechanical gate.
+2. **Deep audit** — dispatch a read-only auditor subagent against the worktree tip per `references/two-stage-review.md`.
+3. **Fix/refactor round** — when the artifact requires a round, re-dispatch the implementer with the same WORKTREE field, then re-run the mechanical gate, then re-dispatch the auditor per `references/two-stage-review.md`.
 4. **Re-audit** — same auditor path as step 2, against the new worktree tip.
 
 On `audit-failed` or `auditor-unavailable`, halt the group — no merge (see `references/two-stage-review.md`). Worktrees RETAINED.
@@ -630,17 +609,9 @@ Two distinct review phases. Do NOT conflate them.
 
 ### Per-Task In-Loop Audit (during execution)
 
-When the implementer reports DONE, run the in-loop cycle. Cite `references/two-stage-review.md` for every rule — do not restate them here. The main agent never judges code; every criterion is executed by a read-only auditor subagent.
+**Normative contract:** `references/two-stage-review.md` — cite it; do not restate its rules here.
 
-1. **Mechanical gate** (main agent) — command-and-commit evidence only. On failure, re-dispatch the implementer; do not dispatch the auditor.
-2. **Deep audit** — dispatch a read-only auditor subagent. The auditor writes the verdict artifact. The main agent reads labels from that artifact; it does not assess code.
-3. **Fix/refactor round** — when the artifact requires a round, re-dispatch the implementer, then re-run the mechanical gate, then re-dispatch the auditor.
-4. **Re-audit** — same auditor path as step 2, against the new HEAD.
-5. **DONE** — after a passing audit, `log update --task TN DONE --sha <audited_head>`.
-
-On `audit-failed` or `auditor-unavailable`, mark the task BLOCKED (see `references/two-stage-review.md`). Do not start the next task.
-
-**DONE_WITH_CONCERNS:** Record the concerns verbatim, run the mechanical gate, and attach them to the auditor dispatch — the auditor classifies them, not the main agent (`references/two-stage-review.md` § Auditor identity). A concern naming a missing architectural decision or absent context is a scope blocker, not a code judgement: escalate it as NEEDS_CONTEXT.
+When the implementer reports DONE, run the in-loop cycle per the contract. The main agent never judges code; every criterion is executed by a read-only auditor subagent.
 
 ### End-of-Execution Handoff (after all tasks done)
 
@@ -697,15 +668,15 @@ Run: /pocketto:pocket-closing <plan_dir>/<phase_file>
 
 ## Status Handling
 
+**Non-normative summary.** For the authoritative in-loop audit contract, cite `references/two-stage-review.md`. For the phase-level pass contract, cite `references/phase-level-pass.md`.
+
 | Status | Controller Action |
 |--------|-------------------|
-| **DONE** | Mechanical gate, then dispatch the read-only auditor (`references/two-stage-review.md`). On pass: `log update --task TN DONE --sha <audited_head>`. On gate fail: re-dispatch implementer. |
-| **DONE_WITH_CONCERNS** | Attach concerns verbatim to the auditor input → mechanical gate → auditor classifies them. Scope/context blockers escalate as NEEDS_CONTEXT |
+| **DONE** | Run the in-loop audit cycle per `references/two-stage-review.md`. |
+| **DONE_WITH_CONCERNS** | Attach concerns verbatim to the auditor input per `references/two-stage-review.md` § Auditor identity. |
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
-| **BLOCKED** | Categorize blocker type. In-loop categories `audit-failed` and `auditor-unavailable`: persist and halt (see `references/two-stage-review.md`). Other categories: Fix → Re-dispatch |
-| **REVIEW_FAIL** (task verdict artifact) | Not a subagent return status — a verdict inside `reviews/<task_id>-review.json`. Fix it through the correction path in `references/phase-level-pass.md`: dispatch an implementer subagent for the fix (you stay Delegator + Auditor — never write the fix yourself), record it as an append-only correction, and refresh the affected tasks' verdict artifacts per its fan-out. `done_sha` NEVER moves. |
-
-`REVIEW_FAIL` corrections are append-only and never touch `done_sha` (`references/phase-level-pass.md`). A fix made before a task's `done_sha` is pinned is an in-loop fix round (`references/two-stage-review.md`), not a correction.
+| **BLOCKED** | Categorize blocker type per `references/two-stage-review.md` § BLOCKED categories. |
+| **REVIEW_FAIL** (task verdict artifact) | Fix through the correction path in `references/phase-level-pass.md`. `done_sha` NEVER moves. |
 
 **After ALL tasks DONE:** dispatch the phase-level pass, record its result, set the phase to `REVIEW`, then emit the PHASE_COMPLETE handoff naming `/pocketto:pocket-closing <plan_dir>/<phase_file>` as the user-triggered next step (see [End-of-Execution Handoff](#end-of-execution-handoff-after-all-tasks-done)). In enterprise mode, enterprise reporting (`references/enterprise-reporting.md`) and the task checklist sync run at that same point, after `REVIEW` is set.
 
