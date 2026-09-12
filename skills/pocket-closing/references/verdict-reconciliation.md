@@ -90,6 +90,10 @@ A phase passes only when **every** reviewable task in it is `REVIEW_PASS`.
 
 A `REVIEW_BLOCKED` **stub** may also appear when the phase-level pass's subagent could not run at all. Treat any `overall == REVIEW_BLOCKED` identically: block and print its `fix_instructions`.
 
+**Distinguishing infra stubs from genuine escalations:**
+- `blocked_category: "auditor-unavailable"` — infra failure (subagent died/timed out). The bounded retry ladder was exhausted. This is NOT a quality signal. `pocket-closing` SHALL NOT treat this as a genuine `ESCALATE:` verdict. A flaky auditor subagent cannot `CLOSE_BLOCKED` a phase.
+- `blocked_category: "audit-failed"` or `fix_instructions` starts with `ESCALATE:` — genuine quality escalation. This needs a human decision.
+
 ## Carried-forward observations (PASS only)
 
 When all verdicts pass, collect non-blocking signal for `closeout.md` so it is not lost:

@@ -104,7 +104,14 @@ The finding and the fix/refactor it triggers are one consuming event, not two. A
 - a Minor-only or fully clean PASS
 - **auditor infrastructure failure** (subagent dies, times out, or returns unparseable output)
 
-Auditor infrastructure failure does not consume a round. It yields exactly one separate retry. After two consecutive infrastructure failures the task is BLOCKED with category `auditor-unavailable`. The round count in `loop_info` stays unchanged through both the retry and the BLOCKED write.
+Auditor infrastructure failure does not consume a round. It yields a bounded retry ladder before escalating to BLOCKED. The round count in `loop_info` stays unchanged through all retries and the BLOCKED write.
+
+**Retry ladder for auditor-unavailable:**
+1. First infrastructure failure → retry immediately (no round consumed)
+2. Second consecutive infrastructure failure → retry with backoff (no round consumed)
+3. Third consecutive infrastructure failure → task is BLOCKED with category `auditor-unavailable`
+
+The main agent SHALL attempt up to 3 retries before declaring BLOCKED. Each retry dispatches a fresh read-only auditor subagent. Retries MUST NOT consume a fix round (`loop_info` unchanged). The persisted `blocked_category` is preserved when the ladder is exhausted.
 
 On a clean first PASS (no consumed round), the artifact SHALL record `loop_info.current_cycle: 1`, `max_cycles: 2`, and `cycles_remaining: 2`.
 
@@ -117,7 +124,7 @@ Two categories exist. Both SHALL be persisted in the verdict artifact (field `bl
 | `blocked_category` | When |
 |--------------------|------|
 | `audit-failed` | The round budget is spent (`cycles_remaining: 0` after a consuming event) and Critical or Important findings remain. |
-| `auditor-unavailable` | Two consecutive auditor infrastructure failures. Round count unchanged. |
+| `auditor-unavailable` | Three consecutive auditor infrastructure failures (bounded retry ladder exhausted). Round count unchanged. |
 
 The artifact SHALL also keep the findings (`stage_1.issues`, `stage_2.issues`) and `fix_instructions` so a later session can see why the task blocked.
 
@@ -193,6 +200,6 @@ A task already DONE whose artifact's `reviewed_sha` equals its `done_sha` SHALL 
 
 For any task that is not yet DONE, the round count SHALL be read from that task's `loop_info` (`current_cycle`, `max_cycles`, `cycles_remaining`) and SHALL NOT be reset.
 
-A BLOCKED task (`overall: REVIEW_BLOCKED` with `blocked_category` set) SHALL keep the phase halted. The main agent SHALL NOT start the next task and SHALL NOT retry the auditor except as a new user-triggered session that already sees the persisted category.
+A BLOCKED task (`overall: REVIEW_BLOCKED` with `blocked_category` set) SHALL keep the phase halted. The main agent SHALL NOT start the next task. For `auditor-unavailable`, the main agent SHALL retry the bounded retry ladder (up to 3 attempts) before escalating to the user. For `audit-failed`, the main agent SHALL NOT retry the auditor except as a new user-triggered session that already sees the persisted category.
 
 [RESTATE: This file is the single source of truth. Downstream tasks cite it rather than paraphrasing it. The main agent never judges code — every criterion is executed by a read-only subagent. All audit state lives in `<plan_dir>/reviews/<task_id>-review.json`.]

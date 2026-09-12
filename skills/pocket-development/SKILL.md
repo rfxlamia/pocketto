@@ -476,7 +476,15 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
 
     # On conflict:
     #   git merge --abort
-    #   → BLOCKED: category=parallel-conflict
+    #   → Bounded auto-recovery attempt before escalating:
+    #     1. Dispatch one implementer round against the retained worktrees
+    #        with the conflicting file list and both tasks' packets
+    #        (same WORKTREE-field dispatch as a fix round)
+    #     2. Run the mechanical gate
+    #     3. Re-dispatch the auditor
+    #     4. Consume one round from the existing per-task budget
+    #   → If conflict survives after bounded attempt:
+    #     BLOCKED: category=parallel-conflict
     #       Reason:   <task_id> conflicts with already-merged <prev_task>
     #       Files:    <conflicting files>
     #       Unblock:  User decides resolution strategy
