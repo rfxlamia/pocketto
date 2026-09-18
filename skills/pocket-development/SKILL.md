@@ -476,13 +476,17 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
 
     # On conflict:
     #   git merge --abort
-    #   → Bounded auto-recovery attempt before escalating:
-    #     1. Dispatch one implementer round against the retained worktrees
+    #   → Bounded merge-recovery attempt before escalating (separate from
+    #     per-task audit fix rounds — does NOT decrement cycles_remaining):
+    #     1. If loop_info.merge_recovery_consumed is true for the task,
+    #        skip recovery → parallel-conflict BLOCKED immediately
+    #     2. Dispatch one implementer round against the retained worktrees
     #        with the conflicting file list and both tasks' packets
     #        (same WORKTREE-field dispatch as a fix round)
-    #     2. Run the mechanical gate
-    #     3. Re-dispatch the auditor
-    #     4. Consume one round from the existing per-task budget
+    #     3. Run the mechanical gate
+    #     4. Re-dispatch the auditor
+    #     5. Persist merge_recovery_consumed: true on the task verdict
+    #        artifact (audit loop_info unchanged)
     #   → If conflict survives after bounded attempt:
     #     BLOCKED: category=parallel-conflict
     #       Reason:   <task_id> conflicts with already-merged <prev_task>
@@ -683,7 +687,7 @@ Run: /pocketto:pocket-closing <plan_dir>/<phase_file>
 | **DONE** | Run the in-loop audit cycle per `references/two-stage-review.md`. |
 | **DONE_WITH_CONCERNS** | Attach concerns verbatim to the auditor input per `references/two-stage-review.md` § Auditor identity. |
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
-| **BLOCKED** | Categorize blocker type per `references/two-stage-review.md` § BLOCKED categories. |
+| **BLOCKED** | Categorize blocker type per [BLOCKED Categorization](#blocked-categorization) below; for audit-driven blocks also cite `references/two-stage-review.md` § BLOCKED categories (`audit-failed`, `auditor-unavailable`). |
 | **REVIEW_FAIL** (task verdict artifact) | Fix through the correction path in `references/phase-level-pass.md`. `done_sha` NEVER moves. |
 
 **After ALL tasks DONE:** dispatch the phase-level pass, record its result, set the phase to `REVIEW`, then emit the PHASE_COMPLETE handoff naming `/pocketto:pocket-closing <plan_dir>/<phase_file>` as the user-triggered next step (see [End-of-Execution Handoff](#end-of-execution-handoff-after-all-tasks-done)). In enterprise mode, enterprise reporting (`references/enterprise-reporting.md`) and the task checklist sync run at that same point, after `REVIEW` is set.

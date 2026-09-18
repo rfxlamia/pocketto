@@ -2,7 +2,7 @@
 
 # Rebuild .skill archives from source directories
 
-set -e
+set -eo pipefail
 
 SKILLS_DIR="skills"
 
@@ -18,7 +18,9 @@ for skill_dir in "$SKILLS_DIR"/*/; do
     # Create new archive from skill directory contents (no directory entries)
     # Include .skillkit-mode files
     cd "$skill_dir"
-    find . -type f ! -name "*.skill" ! -name ".*" ! -path "./__pycache__/*" -o -name ".skillkit-mode" | sort | zip -@ "$skill_name.skill"
+    find . -type f ! -name "*.skill" ! -path "./__pycache__/*" \
+        \( ! -name ".*" -o -name ".skillkit-mode" \) |
+        sort | zip -@ "$skill_name.skill"
     cd - > /dev/null
 done
 

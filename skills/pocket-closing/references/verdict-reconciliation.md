@@ -80,7 +80,8 @@ A phase passes only when **every** reviewable task in it is `REVIEW_PASS`.
 | Verdict present in phase | Phase result |
 |--------------------------|--------------|
 | any `REVIEW_FAIL` | BLOCKED — print that task's `fix_instructions` |
-| any `REVIEW_BLOCKED` | BLOCKED — print the escalation `fix_instructions` |
+| any `REVIEW_BLOCKED` with `blocked_category: "auditor-unavailable"` | BLOCKED — `CLOSE_BLOCKED` with infrastructure message (re-run pocket-development on the blocked task(s); do NOT print `ESCALATE:` instructions) |
+| any other `REVIEW_BLOCKED` | BLOCKED — print the escalation `fix_instructions` |
 | all `REVIEW_PASS` | PASS — eligible for `log update … DONE` |
 
 `REVIEW_FAIL` vs `REVIEW_BLOCKED`:
@@ -88,10 +89,10 @@ A phase passes only when **every** reviewable task in it is `REVIEW_PASS`.
 - `REVIEW_FAIL` — issues were found. Path: fix the code → re-run pocket-development's phase-level pass (overwrites the verdict) → re-run pocket-closing.
 - `REVIEW_BLOCKED` — the reviewer could not complete or escalated (e.g. plan/spec unreadable, repeated failures). `fix_instructions` starts with `ESCALATE:`. This needs a human decision, not just a code fix. Surface it and stop.
 
-A `REVIEW_BLOCKED` **stub** may also appear when the phase-level pass's subagent could not run at all. Treat any `overall == REVIEW_BLOCKED` identically: block and print its `fix_instructions`.
+A `REVIEW_BLOCKED` **stub** may also appear when the phase-level pass's subagent could not run at all. Block closure until a valid verdict exists; disposition depends on `blocked_category` (below).
 
 **Distinguishing infra stubs from genuine escalations:**
-- `blocked_category: "auditor-unavailable"` — infra failure (subagent died/timed out). The bounded retry ladder was exhausted. This is NOT a quality signal. `pocket-closing` SHALL NOT treat this as a genuine `ESCALATE:` verdict. A flaky auditor subagent cannot `CLOSE_BLOCKED` a phase.
+- `blocked_category: "auditor-unavailable"` — infra failure (subagent died/timed out). The bounded retry ladder was exhausted. Closure stays blocked, but this is NOT a quality escalation: do NOT print `ESCALATE:` instructions or frame it as a plan/spec human decision. Report `CLOSE_BLOCKED` naming re-run pocket-development (resume or re-dispatch the blocked task's audit ladder) as the unblock path.
 - `blocked_category: "audit-failed"` or `fix_instructions` starts with `ESCALATE:` — genuine quality escalation. This needs a human decision.
 
 ## Carried-forward observations (PASS only)

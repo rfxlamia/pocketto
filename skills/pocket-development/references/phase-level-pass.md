@@ -126,11 +126,14 @@ The phase-level pass has the same fix-round budget as a task: **2 rounds**. The 
 - If findings exist: fixes are dispatched, one correction commit per fix (see [Correction recording](#correction-recording)), then the pass **re-runs** to confirm the findings are resolved. This re-run consumes round 1.
 - If findings remain after round 1's re-run: round 2 repeats the same fix → correction → re-run cycle.
 - If findings remain after round 2's re-run: the phase-level pass ends with a bounded auto-recovery attempt before declaring PHASE_BLOCKED:
-  1. Route the outstanding findings through the existing `REVIEW_FAIL` correction path for one extra bounded cycle
-  2. Dispatch an implementer subagent for the fix (the main agent stays Delegator + Auditor — never writes the fix itself)
-  3. Record it as an append-only correction per [Correction recording](#correction-recording)
-  4. Refresh the affected tasks' verdict artifacts per [Verdict refresh](#verdict-refresh-fan-out)
-  5. Re-run the phase-level pass to confirm the findings are resolved
+  1. Before dispatching recovery, persist `recovery_attempt_consumed: false` on `reviews/phase-pass-<phase_key>.json` if absent; on first recovery dispatch set `recovery_attempt_consumed: true` (resume MUST NOT re-run recovery when this flag is already `true`).
+  2. Route the outstanding findings through the existing `REVIEW_FAIL` correction path for one extra bounded cycle
+  3. Dispatch an implementer subagent for the fix (the main agent stays Delegator + Auditor — never writes the fix itself)
+  4. Record it as an append-only correction per [Correction recording](#correction-recording)
+  5. Refresh the affected tasks' verdict artifacts per [Verdict refresh](#verdict-refresh-fan-out)
+  6. Re-run the phase-level pass to confirm the findings are resolved
+  - After step 6 completes, persist `loop_info` as `current_cycle: 4`, `max_cycles: 2`, `cycles_remaining: 0`, and `recovery_attempt_consumed: true`.
+  - If findings are cleared: `status: "PHASE_PASS_RESOLVED"` and phase status advances to `REVIEW` per [Ordering](#ordering-review-only-after-the-pass-records-a-result).
   - If findings remain after this bounded attempt: the phase is marked `PHASE_BLOCKED` — `reviews/phase-pass-<phase_key>.json` records `status: "PHASE_BLOCKED"` with `blocked_category: "phase-audit-failed"` and the outstanding `findings` attached. The main agent reports `PHASE_BLOCKED` with those findings and names the correction command as the first unblocking action. Phase status SHALL NOT advance to `REVIEW`.
 
 A clean pass (zero findings on round 1, or zero findings remaining after a fix round's re-run) writes `status: "PHASE_PASS_CLEAN"` (never entered a fix round) or `status: "PHASE_PASS_RESOLVED"` (entered at least one fix round and resolved), and phase status then advances to `REVIEW` per [Ordering](#ordering-review-only-after-the-pass-records-a-result).
@@ -200,7 +203,7 @@ On resume, the main agent SHALL read `reviews/phase-pass-<phase_key>.json` along
 
 - If the file is absent and the phase's `log.json` status is not yet `REVIEW`, the pass has not completed (it may never have started, or it died before its first write) — dispatch it fresh.
 - If the file exists with `status: "PHASE_PASS_CLEAN"` or `"PHASE_PASS_RESOLVED"` and the phase's `log.json` status is already `REVIEW`, the pass is done — do not re-dispatch it and do not re-issue the `REVIEW` transition.
-- If the file exists with findings recorded but no terminal `status` (i.e. it stopped between a fix round's corrections and its confirming re-run), the pass died mid-flight — resume it from its persisted `loop_info` (`current_cycle`, `cycles_remaining`), not from round 1. The round budget is never reset by a resume.
+- If the file exists with findings recorded but no terminal `status` (i.e. it stopped between a fix round's corrections and its confirming re-run), the pass died mid-flight — resume it from its persisted `loop_info` (`current_cycle`, `cycles_remaining`) and `recovery_attempt_consumed`, not from round 1. The round budget is never reset by a resume; when `recovery_attempt_consumed` is `true`, do not start another bounded recovery cycle.
 - If the file records `status: "PHASE_BLOCKED"`, the phase stays blocked. The main agent SHALL NOT re-dispatch the pass and SHALL NOT advance to `REVIEW` until a human resolves the block.
 
 [RESTATE: `done_sha` never moves. `--correction` is phase-level-pass-only — in-loop fixes are plain commits, never `--correction`. `reviewed_sha(T)` after a fan-out is `max-by-commit-time` over `{done_sha} ∪ {corrections in data.correction.affectedTasks attributed to T}` — this is provably `pocket-closing`'s `latest_owned_sha(T)`, not the correction sha in isolation. Phase status becomes `REVIEW` only after `reviews/phase-pass-<phase_key>.json` records a terminal result.]
