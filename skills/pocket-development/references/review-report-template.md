@@ -156,6 +156,11 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
       "type": "boolean",
       "description": "Parallel group merge-conflict recovery: set true before the single bounded recovery dispatch; read on resume."
     },
+    "merge_recovery_stage": {
+      "type": "string",
+      "enum": ["implementer", "gate", "auditor", "merge_retry"],
+      "description": "In-progress merge-recovery step for resume; distinct from phase-level recovery_stage."
+    },
     "reviewed_sha": {
       "type": "string",
       "description": "The newest commit SHA whose changes are covered by this review. On first cycle: task.done_sha. On re-review: max-by-commit-time of done_sha and all correction SHAs attributed to this task. pocket-closing uses exact-SHA match against latest_owned_sha(T) — this field is the exact-match anchor."

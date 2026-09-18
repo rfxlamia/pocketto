@@ -477,20 +477,27 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
     # On conflict:
     #   git merge --abort
     #   → Bounded merge-recovery attempt before escalating (separate from
-    #     per-task audit fix rounds — does NOT decrement cycles_remaining):
-    #     1. If reviews/<task_id>-review.json has merge_recovery_consumed: true,
-    #        skip recovery → parallel-conflict BLOCKED immediately
-    #     2. Persist merge_recovery_consumed: true on that verdict artifact
-    #        BEFORE the first recovery dispatch (audit loop_info unchanged)
-    #     3. Dispatch one implementer round against the retained worktrees
+    #     per-task audit fix rounds and phase-level recovery_stage — does NOT
+    #     decrement cycles_remaining). All artifact I/O uses
+    #     <plan_dir>/reviews/<task_id>-review.json:
+    #     1. If merge_recovery_stage is set, resume that bounded attempt from
+    #        the persisted stage (same artifact path).
+    #     2. Else if merge_recovery_consumed is true, skip recovery →
+    #        parallel-conflict BLOCKED immediately.
+    #     3. Persist merge_recovery_consumed: true and
+    #        merge_recovery_stage: "implementer" BEFORE the first recovery
+    #        dispatch; mirror merge_recovery_stage on every group task verdict
+    #        artifact involved in the conflict (group-visible resume state).
+    #     4. Dispatch one implementer round against the retained worktrees
     #        with the conflicting file list and both tasks' packets
     #        (same WORKTREE-field dispatch as a fix round)
-    #     4. Run the mechanical gate
-    #     5. Re-dispatch the auditor
-    #     6. Retry git merge --no-ff task/<task_id> once
-    #        - success → rewrite reviews/<task_id>-review.json reviewed_sha
-    #          to the merge commit SHA (same boundary log update will pin), then
-    #          fall through to log update below
+    #     5. Set merge_recovery_stage: "gate"; run the mechanical gate
+    #     6. Set merge_recovery_stage: "auditor"; re-dispatch the auditor
+    #     7. Set merge_recovery_stage: "merge_retry"; retry git merge --no-ff
+    #        task/<task_id> once
+    #        - success → rewrite <plan_dir>/reviews/<task_id>-review.json
+    #          reviewed_sha to the merge commit SHA, clear merge_recovery_stage
+    #          on the group artifacts, then fall through to log update below
     #        - conflict → git merge --abort → parallel-conflict BLOCKED
     #   → If recovery completes but merge still conflicts:
     #     BLOCKED: category=parallel-conflict
