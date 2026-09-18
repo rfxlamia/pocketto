@@ -111,7 +111,7 @@ Auditor infrastructure failure does not consume a round. It yields a bounded ret
 2. Second consecutive infrastructure failure → retry with backoff (no round consumed)
 3. Third consecutive infrastructure failure → task is BLOCKED with category `auditor-unavailable`
 
-The main agent SHALL attempt up to 3 retries before declaring BLOCKED. Each retry dispatches a fresh read-only auditor subagent. Retries MUST NOT consume a fix round (`loop_info` unchanged). The persisted `blocked_category` is preserved when the ladder is exhausted.
+The main agent SHALL attempt up to 3 total auditor attempts (the initial dispatch plus up to 2 retries) before declaring BLOCKED. Each retry dispatches a fresh read-only auditor subagent. Retries MUST NOT consume a fix round (`loop_info` unchanged). The persisted `blocked_category` is preserved when the ladder is exhausted.
 
 On a clean first PASS (no consumed round), the artifact SHALL record `loop_info.current_cycle: 1`, `max_cycles: 2`, and `cycles_remaining: 2`.
 

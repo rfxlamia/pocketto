@@ -216,3 +216,15 @@ Order within DELIVERABLE:
 | Branching logic or ambiguous spec | standard (override) |
 | Architecture decisions, complex reasoning | deep |
 | Review / audit (read-only) | standard review |
+
+### Structural tasks (non-testable scaffold/config)
+
+Use for directory creation, config setup, or other work with no behavioral GWT. Downstream skills recognize the marker `[no-tdd — structural task]` on the task heading or in QUALITY BAR.
+
+Replace the RED-cycle Steps 1–3 in OBJECTIVE with:
+
+1. Create the structure / file / config
+2. Verify: `<exact validation command, e.g., ls -la, config lint, or startup check>`
+3. Commit: `git commit -m "chore(<scope>): <description>"`
+
+In QUALITY BAR, include: `[no-tdd — structural task]`
