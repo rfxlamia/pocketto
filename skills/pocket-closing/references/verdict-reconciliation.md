@@ -81,7 +81,8 @@ A phase passes only when **every** reviewable task in it is `REVIEW_PASS`.
 |--------------------------|--------------|
 | any `REVIEW_FAIL` | BLOCKED — print that task's `fix_instructions` |
 | any `REVIEW_BLOCKED` with `blocked_category: "auditor-unavailable"` | BLOCKED — `CLOSE_BLOCKED` with infrastructure message (re-run pocket-development on the blocked task(s); do NOT print `ESCALATE:` instructions) |
-| any other `REVIEW_BLOCKED` | BLOCKED — print the escalation `fix_instructions` |
+| any other `REVIEW_BLOCKED` with `fix_instructions` starting with `ESCALATE:` or `blocked_category: "audit-failed"` | BLOCKED — print the escalation `fix_instructions` |
+| `REVIEW_BLOCKED` with no `blocked_category` and no `ESCALATE:` prefix | BLOCKED — stale/incomplete stub; re-run pocket-development's phase-level pass to regenerate verdicts (do not close) |
 | all `REVIEW_PASS` | PASS — eligible for `log update … DONE` |
 
 `REVIEW_FAIL` vs `REVIEW_BLOCKED`:

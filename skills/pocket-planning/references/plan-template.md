@@ -217,6 +217,15 @@ Order within DELIVERABLE:
 | Architecture decisions, complex reasoning | deep |
 | Review / audit (read-only) | standard review |
 
+### Packet defaults (behavioral tasks)
+
+Include in QUALITY BAR / OBJECTIVE unless the spec overrides:
+
+- Tests written before implementation (implement-then-test is a plan violation)
+- Rule of three enforced — auditor judges duplication from the diff, not implementer self-report
+- Commit messages use conventional commits: `feat | fix | test | refactor | chore` with module scope
+- If a refactor extracts a helper, commit it separately as `refactor(<scope>): <description>`
+
 ### Structural tasks (non-testable scaffold/config)
 
 Use for directory creation, config setup, or other work with no behavioral GWT. Downstream skills recognize the marker `[no-tdd — structural task]` on the task heading or in QUALITY BAR.
