@@ -478,16 +478,19 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
     #   git merge --abort
     #   → Bounded merge-recovery attempt before escalating (separate from
     #     per-task audit fix rounds — does NOT decrement cycles_remaining):
-    #     1. If loop_info.merge_recovery_consumed is true for the task,
+    #     1. If reviews/<task_id>-review.json has merge_recovery_consumed: true,
     #        skip recovery → parallel-conflict BLOCKED immediately
-    #     2. Dispatch one implementer round against the retained worktrees
+    #     2. Persist merge_recovery_consumed: true on that verdict artifact
+    #        BEFORE the first recovery dispatch (audit loop_info unchanged)
+    #     3. Dispatch one implementer round against the retained worktrees
     #        with the conflicting file list and both tasks' packets
     #        (same WORKTREE-field dispatch as a fix round)
-    #     3. Run the mechanical gate
-    #     4. Re-dispatch the auditor
-    #     5. Persist merge_recovery_consumed: true on the task verdict
-    #        artifact (audit loop_info unchanged)
-    #   → If conflict survives after bounded attempt:
+    #     4. Run the mechanical gate
+    #     5. Re-dispatch the auditor
+    #     6. Retry git merge --no-ff task/<task_id> once
+    #        - success → fall through to log update below
+    #        - conflict → git merge --abort → parallel-conflict BLOCKED
+    #   → If recovery completes but merge still conflicts:
     #     BLOCKED: category=parallel-conflict
     #       Reason:   <task_id> conflicts with already-merged <prev_task>
     #       Files:    <conflicting files>
@@ -685,7 +688,7 @@ Run: /pocketto:pocket-closing <plan_dir>/<phase_file>
 | Status | Controller Action |
 |--------|-------------------|
 | **DONE** | Run the in-loop audit cycle per `references/two-stage-review.md`. |
-| **DONE_WITH_CONCERNS** | Attach concerns verbatim to the auditor input per `references/two-stage-review.md` § Auditor identity. |
+| **DONE_WITH_CONCERNS** | Route per `references/status-handling.md` § DONE_WITH_CONCERNS (attach concerns verbatim; scope/context blockers → NEEDS_CONTEXT). |
 | **NEEDS_CONTEXT** | Provide context → Re-dispatch (NO work until answered) |
 | **BLOCKED** | Categorize blocker type per [BLOCKED Categorization](#blocked-categorization) below; for audit-driven blocks also cite `references/two-stage-review.md` § BLOCKED categories (`audit-failed`, `auditor-unavailable`). |
 | **REVIEW_FAIL** (task verdict artifact) | Fix through the correction path in `references/phase-level-pass.md`. `done_sha` NEVER moves. |
@@ -700,7 +703,7 @@ Run: /pocketto:pocket-closing <plan_dir>/<phase_file>
 | Reasoning needs | Escalate review depth |
 | Task too large | Split into smaller packets |
 | Plan wrong | Escalate to human |
-| Parallel-conflict | Group merge failed — abort merge, escalate to user with conflicting file list, retain worktrees for diagnosis |
+| Parallel-conflict | After one bounded merge-recovery attempt (or if `merge_recovery_consumed` is already true), abort merge, escalate to user with conflicting file list, retain worktrees for diagnosis |
 
 Every BLOCKED status must include:
 1. What's blocked (specific)

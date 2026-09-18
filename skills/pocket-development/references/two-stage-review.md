@@ -36,7 +36,8 @@ The gate SHALL check, in order:
 2. **Every distinct exact command the task specifies is green.** A behavioral task carries one RED cycle per GWT scenario it covers, and each cycle names its own exact command in its Step 2. The gate SHALL enumerate every such command in the task and run all of them; a task with three RED cycles is green only when all three commands pass. Running one command and inferring the rest is a gate failure, not a shortcut — it is how a task ships two unproved GWT scenarios.
    Commands SHALL be executed with the task's working tree as cwd. In a parallel group that is the worktree — `( cd "$WT" && <command> )` — never `git -C $WT <command>`, which asks git to run the command as a git subcommand and fails even when the test passes.
 3. For a `[no-tdd — structural task]` structural task, the packet's validation command(s) are the mechanical gate (in place of the test commands).
-4. If the plan specifies no command at all (neither a test command nor a validation command), the main agent SHALL skip every command check and proceed straight to the auditor.
+4. **Parallel-group in-worktree pass:** with cwd set to the task worktree, `git branch --show-current` MUST equal `task/<task_id>`. A mismatch is a mechanical gate failure (wrong branch / CWD discipline).
+5. If the plan specifies no command at all (neither a test command nor a validation command), the main agent SHALL skip every command check and proceed straight to the auditor.
 
 On any mechanical failure the main agent SHALL re-dispatch the implementer with the failure reason (for example, "tests failing" or "no commit") and SHALL NOT dispatch the auditor. A mechanical failure consumes no round: `loop_info` is unchanged.
 
@@ -108,7 +109,7 @@ Auditor infrastructure failure does not consume a round. It yields a bounded ret
 
 **Retry ladder for auditor-unavailable:**
 1. First infrastructure failure → retry immediately (no round consumed)
-2. Second consecutive infrastructure failure → retry with backoff (no round consumed)
+2. Second consecutive infrastructure failure → retry after a brief pause (~30s; no round consumed)
 3. Third consecutive infrastructure failure → task is BLOCKED with category `auditor-unavailable`
 
 The main agent SHALL attempt up to 3 total auditor attempts (the initial dispatch plus up to 2 retries) before declaring BLOCKED. Each retry dispatches a fresh read-only auditor subagent. Retries MUST NOT consume a fix round (`loop_info` unchanged). The persisted `blocked_category` is preserved when the ladder is exhausted.
@@ -185,6 +186,7 @@ The file SHALL conform to `skills/pocket-development/references/review-report-te
 - `reviewed_sha`
 - `fix_instructions` (empty string on PASS)
 - `loop_info` — the durable round counter: `current_cycle`, `max_cycles: 2` (except the empty-diff skip stub, which keeps `max_cycles: 1` as written above), `cycles_remaining`
+- `merge_recovery_consumed` (optional, boolean) — set `true` before the first merge-conflict recovery dispatch; resume reads this top-level field (not inside `loop_info`)
 - `stage_2.issues[].severity`
 - `stage_2.strengths[]`
 
@@ -200,6 +202,6 @@ A task already DONE whose artifact's `reviewed_sha` equals its `done_sha` SHALL 
 
 For any task that is not yet DONE, the round count SHALL be read from that task's `loop_info` (`current_cycle`, `max_cycles`, `cycles_remaining`) and SHALL NOT be reset.
 
-A BLOCKED task (`overall: REVIEW_BLOCKED` with `blocked_category` set) SHALL keep the phase halted. The main agent SHALL NOT start the next task. For `auditor-unavailable`, the main agent SHALL retry the bounded retry ladder (up to 3 attempts) before escalating to the user. For `audit-failed`, the main agent SHALL NOT retry the auditor except as a new user-triggered session that already sees the persisted category.
+A BLOCKED task (`overall: REVIEW_BLOCKED` with `blocked_category` set) SHALL keep the phase halted. The main agent SHALL NOT start the next task. For `audit-failed` or `auditor-unavailable`, the persisted BLOCKED artifact is terminal for this session — do NOT re-arm the retry ladder on resume. Unblock only via a new user-triggered pocket-development session that explicitly retries the blocked task.
 
 [RESTATE: This file is the single source of truth. Downstream tasks cite it rather than paraphrasing it. The main agent never judges code — every criterion is executed by a read-only subagent. All audit state lives in `<plan_dir>/reviews/<task_id>-review.json`.]
