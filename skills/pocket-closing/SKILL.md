@@ -146,7 +146,8 @@ A phase may advance ONLY when every reviewable task in it is `REVIEW_PASS`.
 |------------------|--------|
 | `REVIEW_FAIL` | `CLOSE_BLOCKED`. Print each failing task's `fix_instructions` verbatim. Fix → re-run pocket-development's phase-level pass → re-run pocket-closing. |
 | `REVIEW_BLOCKED` with `blocked_category: "auditor-unavailable"` | `CLOSE_BLOCKED`. Infrastructure block — re-run pocket-development on the blocked task(s); do NOT print `ESCALATE:` instructions. |
-| other `REVIEW_BLOCKED` | `CLOSE_BLOCKED`. Print the escalation `fix_instructions`. Resolve the escalation before closing. |
+| `REVIEW_BLOCKED` with `blocked_category: "audit-failed"` or `fix_instructions` starting with `ESCALATE:` | `CLOSE_BLOCKED`. Print the escalation `fix_instructions`. Resolve the escalation before closing. |
+| `REVIEW_BLOCKED` with no `blocked_category` and no `ESCALATE:` prefix | `CLOSE_BLOCKED`. Stale/incomplete stub — re-run pocket-development's phase-level pass; do not close. |
 | all `REVIEW_PASS` | Phase passes the gate — proceed to Advance State. |
 
 The **current** per-task verdict decides the gate — an old `REVIEW_FAIL` superseded by a newer `REVIEW_PASS` (advanced `reviewed_sha`, `overall == REVIEW_PASS`) passes cleanly. The gate reads the current `reviews/<T>-review.json`, not any historical state.
