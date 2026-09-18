@@ -192,7 +192,7 @@ The file SHALL conform to `skills/pocket-development/references/review-report-te
 
 When the task is BLOCKED, the artifact SHALL also persist `blocked_category` as `audit-failed` or `auditor-unavailable`.
 
-The main agent SHALL create `<plan_dir>/reviews/` before the first write. Re-audit overwrites the same path; `loop_info` in that file is what resume reads.
+The main agent SHALL create `<plan_dir>/reviews/` before the first write. Re-audit overwrites the same path; `loop_info` in that file is what resume reads. When rewriting an artifact on re-audit, the main agent SHALL carry forward `merge_recovery_consumed: true` from the prior file if it was set — a successful re-audit MUST NOT clear that flag and reopen merge-conflict recovery.
 
 ## Resume
 

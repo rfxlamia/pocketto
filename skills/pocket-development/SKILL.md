@@ -488,7 +488,9 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
     #     4. Run the mechanical gate
     #     5. Re-dispatch the auditor
     #     6. Retry git merge --no-ff task/<task_id> once
-    #        - success → fall through to log update below
+    #        - success → rewrite reviews/<task_id>-review.json reviewed_sha
+    #          to the merge commit SHA (same boundary log update will pin), then
+    #          fall through to log update below
     #        - conflict → git merge --abort → parallel-conflict BLOCKED
     #   → If recovery completes but merge still conflicts:
     #     BLOCKED: category=parallel-conflict
