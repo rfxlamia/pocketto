@@ -2,6 +2,10 @@
 
 All notable changes to Pocketto are documented here, newest first. Dates are the tag's commit date.
 
+## 3.1.3 — 2026-09-19
+
+`pocket-development` and `pocket-planning` SKILL.md files no longer restate normative contracts — they cite the canonical references instead (`two-stage-review.md`, `phase-level-pass.md`, `plan-template.md`), closing the drift risk from duplicated rules (#48). The in-loop audit gains a bounded retry ladder (3 attempts, no fix-round consumed) before `auditor-unavailable` escalates to BLOCKED (#52). `pocket-closing` now distinguishes `REVIEW_BLOCKED` by category: infra blocks (`auditor-unavailable`) re-run development, escalations print `fix_instructions`, and stale stubs without a category re-run the phase-level pass instead of closing. Parallel-merge conflicts get one bounded merge-recovery attempt (implementer → gate → auditor → merge retry) scoped to the plan dir's review artifacts, with `parallel-conflict` as a terminal stage so resume can't re-enter recovery. Adds `rebuild-skills.sh` to rebuild bundled `.skill` archives from source.
+
 ## 3.1.2 — 2026-08-23
 
 `pocket-planning` replaces test-architect codegen with test-intent planning (auditor-judged, not self-reported). GATE 4 is now anchored to the approval gate instead of the plan-write step. `pocket-development` unblocks single-task plans and fixes parallel test execution; closes QC findings on the state-machine contracts.
