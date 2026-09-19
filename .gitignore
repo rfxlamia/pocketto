@@ -9,3 +9,4 @@ docs/pocket/
 .worktree/
 graphify-out
 .commandcode
+.claude.globals/
