@@ -480,10 +480,11 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
     #     per-task audit fix rounds and phase-level recovery_stage — does NOT
     #     decrement cycles_remaining). All artifact I/O uses
     #     <plan_dir>/reviews/<task_id>-review.json:
-    #     1. If merge_recovery_stage is set, resume that bounded attempt from
-    #        the persisted stage (same artifact path).
-    #     2. Else if merge_recovery_consumed is true, skip recovery →
-    #        parallel-conflict BLOCKED immediately.
+    #     1. If merge_recovery_stage is "parallel-conflict" (terminal), or
+    #        merge_recovery_consumed is true with no resumable stage →
+    #        parallel-conflict BLOCKED immediately (no second recovery cycle).
+    #     2. Else if merge_recovery_stage is implementer, gate, auditor, or
+    #        merge_retry, resume that bounded attempt from the persisted stage.
     #     3. Persist merge_recovery_consumed: true and
     #        merge_recovery_stage: "implementer" BEFORE the first recovery
     #        dispatch; mirror merge_recovery_stage on every group task verdict
@@ -498,7 +499,9 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
     #        - success → rewrite <plan_dir>/reviews/<task_id>-review.json
     #          reviewed_sha to the merge commit SHA, clear merge_recovery_stage
     #          on the group artifacts, then fall through to log update below
-    #        - conflict → git merge --abort → parallel-conflict BLOCKED
+    #        - conflict → git merge --abort; persist
+    #          merge_recovery_stage: "parallel-conflict" on the group artifacts
+    #          → parallel-conflict BLOCKED
     #   → If recovery completes but merge still conflicts:
     #     BLOCKED: category=parallel-conflict
     #       Reason:   <task_id> conflicts with already-merged <prev_task>

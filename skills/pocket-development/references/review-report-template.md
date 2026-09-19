@@ -158,7 +158,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     },
     "merge_recovery_stage": {
       "type": "string",
-      "enum": ["implementer", "gate", "auditor", "merge_retry"],
+      "enum": ["implementer", "gate", "auditor", "merge_retry", "parallel-conflict"],
       "description": "In-progress merge-recovery step for resume; distinct from phase-level recovery_stage."
     },
     "reviewed_sha": {
