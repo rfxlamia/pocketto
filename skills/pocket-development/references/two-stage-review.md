@@ -187,13 +187,13 @@ The file SHALL conform to `skills/pocket-development/references/review-report-te
 - `fix_instructions` (empty string on PASS)
 - `loop_info` — the durable round counter: `current_cycle`, `max_cycles: 2` (except the empty-diff skip stub, which keeps `max_cycles: 1` as written above), `cycles_remaining`
 - `merge_recovery_consumed` (optional, boolean) — once-only guard for the single bounded merge-recovery cycle; set `true` before the first recovery dispatch
-- `merge_recovery_stage` (optional) — `implementer` | `gate` | `auditor` | `merge_retry`; persisted before each merge-recovery step on `<plan_dir>/reviews/<task_id>-review.json` (and mirrored on peer group tasks during a conflict). Distinct from phase-level `recovery_stage` on `phase-pass-*.json`
+- `merge_recovery_stage` (optional) — `implementer` | `gate` | `auditor` | `merge_retry` | `parallel-conflict` (terminal); persisted before each merge-recovery step on `<plan_dir>/reviews/<task_id>-review.json` (and mirrored on peer group tasks during a conflict). Resume only from non-terminal stages. Distinct from phase-level `recovery_stage` on `phase-pass-*.json`
 - `stage_2.issues[].severity`
 - `stage_2.strengths[]`
 
 When the task is BLOCKED, the artifact SHALL also persist `blocked_category` as `audit-failed` or `auditor-unavailable`.
 
-The main agent SHALL create `<plan_dir>/reviews/` before the first write. Re-audit overwrites the same path; `loop_info` in that file is what resume reads. When rewriting an artifact on re-audit, the main agent SHALL carry forward `merge_recovery_consumed: true` and any in-progress `merge_recovery_stage` from the prior file if they were set — a successful re-audit MUST NOT clear those fields and reopen merge-conflict recovery (clear `merge_recovery_stage` only after a successful merge retry).
+The main agent SHALL create `<plan_dir>/reviews/` before the first write. Re-audit overwrites the same path; `loop_info` in that file is what resume reads. When rewriting an artifact on re-audit, the main agent SHALL carry forward `merge_recovery_consumed: true`, terminal `merge_recovery_stage: "parallel-conflict"`, and any in-progress non-terminal `merge_recovery_stage` from the prior file if they were set — a successful re-audit MUST NOT clear those fields and reopen merge-conflict recovery (clear `merge_recovery_stage` only after a successful merge retry).
 
 ## Resume
 
