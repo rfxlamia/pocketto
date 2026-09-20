@@ -13,3 +13,107 @@ test('v4 protocol constants are independently versioned', () => {
   assert.equal(version.ADAPTER_CONTRACT, 1, 'ADAPTER_CONTRACT must be 1');
   assert.equal(version.SURFACE_MANIFEST, 1, 'SURFACE_MANIFEST must be 1');
 });
+
+// T1 CYCLE 2: lifecycle events accept only the neutral schema.
+const {
+  EVENT_TYPES,
+  DELIVERY_STATUSES,
+  validateEvent,
+  buildEventId,
+} = require('../cli/lib/lifecycle-contract');
+
+const FIXED_CLOCK = '2026-09-19T12:00:00.000Z';
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const PAYLOAD_SHA256 = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
+
+function makeValidEvent(overrides = {}) {
+  const planId = 'demo-plan';
+  const type = 'spec-approved';
+  const revision = 1;
+  return {
+    event_id: `${planId}:${type}:r${revision}`,
+    plan_id: planId,
+    type,
+    revision,
+    occurred_at: FIXED_CLOCK,
+    artifact_refs: [
+      {
+        root: 'spec',
+        kind: 'spec-doc',
+        path: 'core-enterprise-agent-surfaces.md',
+        sha256: EMPTY_SHA256,
+        revision: 1,
+      },
+    ],
+    payload_hash: PAYLOAD_SHA256,
+    proof_ref: null,
+    proof_hash: null,
+    delivery: { status: 'pending', attempts: 0 },
+    ...overrides,
+  };
+}
+
+test('accepts an allowlisted event with deterministic ID, revision, artifacts, opaque proof, delivery', () => {
+  for (const type of EVENT_TYPES) {
+    const planId = 'demo-plan';
+    const revision = 2;
+    const ev = makeValidEvent({
+      type,
+      revision,
+      event_id: `${planId}:${type}:r${revision}`,
+      occurred_at: FIXED_CLOCK,
+    });
+    const res = validateEvent(ev);
+    assert.equal(res.ok, true, `type ${type} should validate: ${JSON.stringify(res)}`);
+  }
+  const res = validateEvent(makeValidEvent());
+  assert.equal(res.ok, true);
+  assert.equal(buildEventId('demo-plan', 'spec-approved', 1), 'demo-plan:spec-approved:r1');
+});
+
+test('rejects unsupported type with stable code', () => {
+  const ev = makeValidEvent({ type: 'plan-published', event_id: 'demo-plan:plan-published:r1' });
+  const res = validateEvent(ev);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'LIFECYCLE_UNKNOWN_TYPE');
+});
+
+test('rejects unknown top-level fields with stable code', () => {
+  const ev = makeValidEvent({ extra_field: 'nope' });
+  const res = validateEvent(ev);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'LIFECYCLE_UNKNOWN_FIELD');
+});
+
+test('rejects remote-identity top-level field with stable code', () => {
+  const ev = makeValidEvent({ github_issue_number: 50 });
+  const res = validateEvent(ev);
+  assert.equal(res.ok, false);
+  assert.ok(typeof res.code === 'string' && res.code.length > 0);
+  assert.equal(res.code, 'LIFECYCLE_UNKNOWN_FIELD');
+});
+
+test('rejects secret top-level field with stable code', () => {
+  const ev = makeValidEvent({ token: 'placeholder-secret-value' });
+  const res = validateEvent(ev);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'LIFECYCLE_UNKNOWN_FIELD');
+});
+
+test('rejects external-command top-level field with stable code', () => {
+  const ev = makeValidEvent({ argv: ['remote', 'sync'] });
+  const res = validateEvent(ev);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'LIFECYCLE_UNKNOWN_FIELD');
+});
+
+test('rejects non-deterministic event ID with stable code', () => {
+  const ev = makeValidEvent({ event_id: 'demo-plan:spec-approved:r999' });
+  const res = validateEvent(ev);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'LIFECYCLE_BAD_EVENT_ID');
+});
+
+test('delivery statuses are the neutral allowlist', () => {
+  assert.deepEqual([...DELIVERY_STATUSES].sort(), ['claimed', 'pending', 'reconciling', 'retryable', 'succeeded', 'terminal']);
+});
