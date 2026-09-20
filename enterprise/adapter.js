@@ -6,10 +6,26 @@
 // `gh` invocations, and ownership rules never appear in responses — only
 // opaque proof refs plus redacted diagnostics.
 
-const { validateAdapterResponse } = require('../cli/lib/lifecycle-contract');
+const { validateAdapterResponse, EVENT_TYPES } = require('../cli/lib/lifecycle-contract');
 const { redactSecrets } = require('./retry');
 
+let CORE_VERSION = null;
+try {
+  CORE_VERSION = require('../cli/lib/version');
+} catch (_) {
+  CORE_VERSION = null;
+}
+
 const ADAPTER_STATUSES = ['succeeded', 'retryable', 'terminal', 'reconciling'];
+
+// Explicit handler dispatch table: exactly the three neutral lifecycle
+// event types, each naming the Enterprise handler that owns it. The names
+// are local handler keys — remote policy stays in the Phase 2 handlers.
+const HANDLERS = {
+  'spec-approved': 'handleSpecApproved',
+  'phase-complete': 'handlePhaseComplete',
+  'plan-closed': 'handlePlanClosed',
+};
 
 function buildError(code, message, retryable) {
   return {
@@ -72,4 +88,107 @@ function serializeResponse(input, expectedEventId) {
   return out;
 }
 
-module.exports = { serializeResponse, buildError, ADAPTER_STATUSES };
+// Compatibility boundary + explicit dispatch.
+//
+// Mirrors Core's registered-executable invocation contract: before any
+// handler or GitHub call, verifies (1) the Core envelope contract is the
+// supported major, (2) the registration record exists and declares a
+// compatible adapter contract, and (3) the event type is in the
+// registration allowlist and the dispatch table. Any mismatch returns an
+// actionable retryable protocol result carrying the original event ID —
+// the event stays pending/retryable for Core replay, and no handler or
+// GitHub runner is invoked. The boundary itself performs no GitHub calls.
+function dispatchEvent(event, opts = {}) {
+  const eventId = event && typeof event.event_id === 'string' ? event.event_id : 'unknown-event';
+  const protocolError = (code, message) => serializeResponse({
+    event_id: eventId,
+    status: 'retryable',
+    error: { code, retryable: true, message },
+  }, eventId === 'unknown-event' ? undefined : eventId);
+
+  const expectedCoreContract = CORE_VERSION ? CORE_VERSION.CONTRACT : 3;
+  const coreContract = opts.coreContract !== undefined ? opts.coreContract : expectedCoreContract;
+  if (coreContract !== expectedCoreContract) {
+    return protocolError(
+      'ADAPTER_PROTOCOL_CORE_MISMATCH',
+      `Core contract ${coreContract} is incompatible with Enterprise adapter boundary (expected ${expectedCoreContract}). Upgrade Core; the event stays pending and no handler or GitHub call ran.`
+    );
+  }
+
+  const projectRoot = opts.projectRoot;
+  if (typeof projectRoot !== 'string' || projectRoot.length === 0) {
+    return protocolError(
+      'ADAPTER_PROTOCOL_NO_PROJECT',
+      'Adapter dispatch requires a project root. The event stays pending and no handler or GitHub call ran.'
+    );
+  }
+
+  let registration;
+  try {
+    registration = require('./registration');
+  } catch (err) {
+    return protocolError(
+      'ADAPTER_PROTOCOL_ERROR',
+      `Adapter registration boundary is unavailable: ${redactSecrets(err && err.message ? err.message : String(err))}`
+    );
+  }
+  const loaded = registration.loadRegistration(projectRoot);
+  if (!loaded.ok) {
+    return protocolError(
+      loaded.code === 'ENTERPRISE_ADAPTER_CONTRACT_MISMATCH' ? 'ADAPTER_CONTRACT_MISMATCH' : 'ADAPTER_PROTOCOL_REGISTRATION',
+      `${loaded.message} The event stays pending/retryable and no handler or GitHub call ran.`
+    );
+  }
+  const record = loaded.record;
+
+  const eventType = event && typeof event.type === 'string' ? event.type : null;
+  if (!eventType || !EVENT_TYPES.includes(eventType)) {
+    return protocolError(
+      'ADAPTER_PROTOCOL_UNKNOWN_EVENT',
+      `Event type "${eventType}" is not part of the neutral lifecycle vocabulary. The event stays pending and no handler or GitHub call ran.`
+    );
+  }
+  if (!record.events.includes(eventType)) {
+    return protocolError(
+      'ADAPTER_EVENT_NOT_ALLOWED',
+      `Event type "${eventType}" is not in the adapter registration allowlist. Update the registration; the event stays pending/retryable and no handler or GitHub call ran.`
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(HANDLERS, eventType)) {
+    return protocolError(
+      'ADAPTER_PROTOCOL_NO_HANDLER',
+      `No Enterprise handler is registered for event type "${eventType}". The event stays pending and no GitHub call ran.`
+    );
+  }
+
+  const handlers = opts.handlers || {};
+  const handler = handlers[eventType];
+  if (typeof handler !== 'function') {
+    return protocolError(
+      'ADAPTER_PROTOCOL_NO_HANDLER',
+      `Enterprise handler "${HANDLERS[eventType]}" is unavailable for event type "${eventType}". The event stays pending and no GitHub call ran.`
+    );
+  }
+
+  let produced;
+  try {
+    produced = handler(event, { projectRoot, record, ghRunner: opts.ghRunner });
+  } catch (err) {
+    return protocolError(
+      'ADAPTER_PROTOCOL_HANDLER_FAILED',
+      `Enterprise handler failed before remote mutation completed: ${redactSecrets(err && err.message ? err.message : String(err))}`
+    );
+  }
+  // Serialize through the response boundary: malformed handler output can
+  // never leak as success — it throws, which the caller treats as retryable.
+  try {
+    return serializeResponse(produced, eventId);
+  } catch (err) {
+    return protocolError(
+      'ADAPTER_PROTOCOL_MALFORMED_RESPONSE',
+      `Enterprise handler returned a malformed response: ${redactSecrets(err && err.message ? err.message : String(err))}`
+    );
+  }
+}
+
+module.exports = { serializeResponse, buildError, ADAPTER_STATUSES, HANDLERS, dispatchEvent };

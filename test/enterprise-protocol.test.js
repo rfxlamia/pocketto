@@ -415,3 +415,130 @@ test('CYCLE 3: metadata seam round-trips GitHub IDs through the Enterprise wrapp
   assert.equal(fs.readFileSync(bodyPath, 'utf8'), 'hello **world**');
   assert.ok(bodyPath.startsWith(root), 'body-file transport must stay local');
 });
+
+// T7 CYCLE 4: adapter contract mismatch prevents handler dispatch.
+// Integration through Core's registered executable invocation plus the
+// Enterprise preflight/allowlist boundary. Recording adapter/GitHub
+// runner; real process protocol and temporary registration files.
+
+function makeC4Event(overrides = {}) {
+  const planId = 'demo-plan';
+  const type = overrides.type || 'spec-approved';
+  const revision = overrides.revision || 1;
+  return {
+    event_id: `${planId}:${type}:r${revision}`,
+    plan_id: planId,
+    type,
+    revision,
+    occurred_at: '2026-09-19T12:00:00.000Z',
+    artifact_refs: [
+      {
+        root: 'spec',
+        kind: 'spec-doc',
+        path: 'spec-doc.md',
+        sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        revision: 1,
+      },
+    ],
+    payload_hash: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+    proof_ref: null,
+    proof_hash: null,
+    delivery: { status: 'pending', attempts: 0 },
+    ...overrides,
+  };
+}
+
+function installC4Root(events, argv) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-c4-'));
+  const res = registration.installRegistration(root, { argv, events });
+  assert.equal(res.ok, true, `c4 install should succeed: ${JSON.stringify(res)}`);
+  return root;
+}
+
+test('CYCLE 4: Core contract 3 plus adapter registration contract 2 fails closed before any handler or GitHub call', () => {
+  const root = installC4Root(['spec-approved'], [process.execPath, 'adapter-stub.js']);
+  const dir = path.join(root, '.pocket');
+  const raw = JSON.parse(fs.readFileSync(path.join(dir, 'lifecycle-adapter.json'), 'utf8'));
+  raw.adapter_contract = 2;
+  fs.writeFileSync(path.join(dir, 'lifecycle-adapter.json'), JSON.stringify(raw, null, 2) + '\n');
+
+  let handlerCalls = 0;
+  let ghCalls = 0;
+  const res = adapter.dispatchEvent(makeC4Event(), {
+    projectRoot: root,
+    coreContract: 3,
+    handlers: {
+      'spec-approved': () => {
+        handlerCalls += 1;
+        return { event_id: 'demo-plan:spec-approved:r1', status: 'succeeded' };
+      },
+    },
+    ghRunner: () => {
+      ghCalls += 1;
+      return { exit: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(res.status, 'retryable', 'mixed-major mismatch must leave the event pending/retryable for Core replay');
+  assert.match(res.error.code, /ADAPTER_CONTRACT|ADAPTER_PROTOCOL/, 'mismatch needs an actionable protocol code');
+  assert.equal(res.event_id, 'demo-plan:spec-approved:r1', 'protocol result must carry the original event ID');
+  assert.equal(handlerCalls, 0, 'no handler may run on contract mismatch');
+  assert.equal(ghCalls, 0, 'no GitHub call may run on contract mismatch');
+});
+
+test('CYCLE 4: event allowlist omission fails closed before any handler or GitHub call', () => {
+  const root = installC4Root(['spec-approved'], [process.execPath, 'adapter-stub.js']);
+  let handlerCalls = 0;
+  let ghCalls = 0;
+  const res = adapter.dispatchEvent(makeC4Event({ type: 'phase-complete' }), {
+    projectRoot: root,
+    coreContract: 3,
+    handlers: {
+      'phase-complete': () => {
+        handlerCalls += 1;
+        return { event_id: 'demo-plan:phase-complete:r1', status: 'succeeded' };
+      },
+    },
+    ghRunner: () => {
+      ghCalls += 1;
+      return { exit: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(res.status, 'retryable', 'allowlist omission must leave the event pending/retryable for Core replay');
+  assert.match(res.error.code, /ADAPTER_EVENT_NOT_ALLOWED|ADAPTER_PROTOCOL/, 'omission needs an actionable protocol code');
+  assert.equal(res.event_id, 'demo-plan:phase-complete:r1');
+  assert.equal(handlerCalls, 0, 'no handler may run when the event is not allowlisted');
+  assert.equal(ghCalls, 0, 'no GitHub call may run when the event is not allowlisted');
+});
+
+test('CYCLE 4: the handler dispatch table covers exactly the three lifecycle event types', () => {
+  assert.deepEqual(Object.keys(adapter.HANDLERS).sort(), ['phase-complete', 'plan-closed', 'spec-approved']);
+  for (const type of ['spec-approved', 'phase-complete', 'plan-closed']) {
+    assert.equal(typeof adapter.HANDLERS[type], 'string', `${type} must map to an explicit named handler`);
+    assert.ok(adapter.HANDLERS[type].length > 0, `${type} handler name must be non-empty`);
+  }
+});
+
+test('CYCLE 4: compatible registration dispatches to the handler with zero GitHub calls from the boundary', () => {
+  const root = installC4Root(['spec-approved'], [process.execPath, 'adapter-stub.js']);
+  const seen = [];
+  let ghCalls = 0;
+  const res = adapter.dispatchEvent(makeC4Event(), {
+    projectRoot: root,
+    coreContract: 3,
+    handlers: {
+      'spec-approved': (event) => {
+        seen.push(event.event_id);
+        return { event_id: event.event_id, status: 'succeeded', proof_ref: 'meta:github_issue' };
+      },
+    },
+    ghRunner: () => {
+      ghCalls += 1;
+      return { exit: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(res.status, 'succeeded');
+  assert.equal(res.event_id, 'demo-plan:spec-approved:r1');
+  assert.equal(res.proof_ref, 'meta:github_issue');
+  assert.deepEqual(seen, ['demo-plan:spec-approved:r1'], 'compatible dispatch must reach exactly one handler');
+  assert.equal(ghCalls, 0, 'the boundary itself performs no GitHub call');
+});
