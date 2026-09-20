@@ -94,17 +94,77 @@ function checkEventSize(event) {
   return { ok: true, code: null, bytes: serializedBytes, limit: MAX_EVENT_BYTES };
 }
 
-function validateArtifactRefShallow(ref) {
-  if (!isPlainObject(ref)) return false;
-  for (const key of ARTIFACT_FIELDS) {
-    if (!(key in ref)) return false;
+function isRootRelativePath(value) {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (value.startsWith('/')) return false;
+  if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')) return false;
+  const segments = value.split('/');
+  for (const seg of segments) {
+    if (seg === '..') return false;
   }
-  if (!ARTIFACT_ROOTS.includes(ref.root)) return false;
-  if (typeof ref.kind !== 'string' || ref.kind.length === 0) return false;
-  if (typeof ref.path !== 'string' || ref.path.length === 0) return false;
-  if (typeof ref.sha256 !== 'string' || ref.sha256.length === 0) return false;
-  if (!Number.isInteger(ref.revision) || ref.revision < 0) return false;
+  if (segments.includes('..')) return false;
+  // Reject `.`/`..` traversals that stay syntactically inside but escape the root.
+  let depth = 0;
+  for (const seg of segments) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') return false;
+    depth += 1;
+    if (depth < 0) return false;
+  }
+  if (value === '..' || value.startsWith('../') || value.includes('/../') || value.endsWith('/..')) {
+    return false;
+  }
   return true;
+}
+
+// Pure root-specific artifact-reference validation. Filesystem-root
+// existence and symlink-escape checks live at T2's store boundary —
+// this only validates the serialized { root, kind, path, sha256, revision }
+// shape with stable error codes.
+function validateArtifactRef(ref) {
+  if (!isPlainObject(ref)) {
+    return fail('LIFECYCLE_BAD_ARTIFACT', 'artifact ref must be an object');
+  }
+  for (const key of Object.keys(ref)) {
+    if (!ARTIFACT_FIELDS.includes(key)) {
+      return fail('LIFECYCLE_BAD_ARTIFACT', `unsupported artifact field: ${key}`);
+    }
+  }
+  for (const key of ARTIFACT_FIELDS) {
+    if (!(key in ref)) {
+      return fail('LIFECYCLE_BAD_ARTIFACT', `missing artifact field: ${key}`);
+    }
+  }
+  if (!ARTIFACT_ROOTS.includes(ref.root)) {
+    return fail('LIFECYCLE_BAD_ARTIFACT_ROOT', `unsupported artifact root: ${ref.root}`);
+  }
+  if (typeof ref.kind !== 'string' || ref.kind.length === 0) {
+    return fail('LIFECYCLE_BAD_ARTIFACT', 'artifact kind must be a non-empty string');
+  }
+  if (!isRootRelativePath(ref.path)) {
+    return fail('LIFECYCLE_BAD_ARTIFACT_PATH', `artifact path must be root-relative: ${ref.path}`);
+  }
+  if (typeof ref.sha256 !== 'string' || !HEX64_PATTERN.test(ref.sha256)) {
+    return fail('LIFECYCLE_BAD_ARTIFACT_HASH', 'artifact sha256 must be a SHA-256 hex digest');
+  }
+  if (!Number.isInteger(ref.revision) || ref.revision < 0) {
+    return fail('LIFECYCLE_BAD_ARTIFACT', 'artifact revision must be a non-negative integer');
+  }
+  return { ok: true, code: null, message: null };
+}
+
+function canonicalArtifactRef(ref) {
+  return {
+    root: ref.root,
+    kind: ref.kind,
+    path: normalizeText(ref.path),
+    sha256: String(ref.sha256).toLowerCase(),
+    revision: ref.revision,
+  };
+}
+
+function validateArtifactRefShallow(ref) {
+  return validateArtifactRef(ref).ok;
 }
 
 function validateEvent(event) {
@@ -179,5 +239,7 @@ module.exports = {
   canonicalizePayload,
   hashCanonicalPayload,
   checkEventSize,
+  validateArtifactRef,
+  canonicalArtifactRef,
   validateEvent,
 };

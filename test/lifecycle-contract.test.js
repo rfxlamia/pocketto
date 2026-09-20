@@ -172,3 +172,65 @@ test('exactly-at and over 64 KiB serialized events produce the boundary result',
   assert.equal(checkEventSize(over).code, 'LIFECYCLE_EVENT_TOO_LARGE');
   void nExact;
 });
+
+// T1 CYCLE 4: artifact references are root-relative and hash-bounded.
+const {
+  validateArtifactRef,
+  canonicalArtifactRef,
+} = require('../cli/lib/lifecycle-contract');
+
+const GOOD_SHA = EMPTY_SHA256;
+
+function makeRef(overrides = {}) {
+  return {
+    root: 'spec',
+    kind: 'spec-doc',
+    path: 'core-enterprise-agent-surfaces.md',
+    sha256: GOOD_SHA,
+    revision: 1,
+    ...overrides,
+  };
+}
+
+test('accepts allowlisted spec and plan root shapes', () => {
+  assert.equal(validateArtifactRef(makeRef()).ok, true);
+  assert.equal(validateArtifactRef(makeRef({ root: 'plan', path: 'execution-plan/phase-1.md' })).ok, true);
+  const canon = canonicalArtifactRef(makeRef({ path: 'b.md' }));
+  assert.equal(canon.path, 'b.md');
+  assert.equal(canon.sha256, GOOD_SHA);
+});
+
+test('rejects absolute artifact paths', () => {
+  const res = validateArtifactRef(makeRef({ path: '/etc/passwd' }));
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'LIFECYCLE_BAD_ARTIFACT_PATH');
+});
+
+test('rejects escaping artifact paths', () => {
+  for (const bad of ['../outside.md', 'a/../../outside.md', 'a/./../..', '..']) {
+    const res = validateArtifactRef(makeRef({ path: bad }));
+    assert.equal(res.ok, false, `path ${bad} should be rejected`);
+    assert.equal(res.code, 'LIFECYCLE_BAD_ARTIFACT_PATH');
+  }
+});
+
+test('rejects wrong artifact root', () => {
+  const res = validateArtifactRef(makeRef({ root: 'remote' }));
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'LIFECYCLE_BAD_ARTIFACT_ROOT');
+});
+
+test('rejects malformed artifact fields', () => {
+  const malformed = validateArtifactRef({ root: 'spec', kind: 'x' });
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.code, 'LIFECYCLE_BAD_ARTIFACT');
+  const emptyKind = validateArtifactRef(makeRef({ kind: '' }));
+  assert.equal(emptyKind.ok, false);
+  assert.equal(emptyKind.code, 'LIFECYCLE_BAD_ARTIFACT');
+});
+
+test('rejects mismatched artifact hash fields', () => {
+  const res = validateArtifactRef(makeRef({ sha256: 'not-a-hash' }));
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'LIFECYCLE_BAD_ARTIFACT_HASH');
+});
