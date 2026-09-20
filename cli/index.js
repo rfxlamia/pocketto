@@ -25,6 +25,7 @@ const { ok, fail, CliError } = require('./lib/envelope');
 const { CLI_VERSION, CONTRACT } = require('./lib/version');
 const structure = require('./commands/structure');
 const log = require('./commands/log');
+const lifecycle = require('./commands/lifecycle');
 const meta = require('./commands/meta');
 const doctor = require('./commands/doctor');
 const mode = require('./commands/mode');
@@ -59,6 +60,7 @@ function parseArgs(argv) {
     forTask: null,
     sha: null,
     allowDuplicateSha: false,
+    artifact: [],
   };
 
   // A flag that takes a value must actually have one — guard against it being
@@ -109,6 +111,8 @@ function parseArgs(argv) {
     else if (a === '--sha') flags.sha = requireValue(argv[++i], '--sha');
     else if (a.startsWith('--sha=')) flags.sha = requireValue(a.slice('--sha='.length), '--sha');
     else if (a === '--allow-duplicate-sha') flags.allowDuplicateSha = true;
+    else if (a === '--artifact') flags.artifact.push(requireValue(argv[++i], '--artifact'));
+    else if (a.startsWith('--artifact=')) flags.artifact.push(requireValue(a.slice('--artifact='.length), '--artifact'));
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -244,9 +248,15 @@ function main() {
         allowDuplicateSha: flags.allowDuplicateSha,
       });
       emitSuccess(result.command, result, flags.json);
-    } else if (command === 'meta') {
-      const result = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
+    } else if (command === 'lifecycle') {
+      const result = lifecycle.run({
+        positionals: positionals.slice(1),
+        artifacts: flags.artifact,
+      });
       emitSuccess(result.command, result, flags.json);
+    } else if (command === 'meta') {
+      const metaResult = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
+      emitSuccess(metaResult.command, metaResult, flags.json);
     } else if (command === 'doctor') {
       const result = doctor.run({ strict: flags.strict });
       emitSuccess(result.command, result, flags.json);
@@ -273,7 +283,7 @@ function main() {
       const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
       emitSuccess(result.command, result, flags.json);
     } else {
-      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | meta | doctor | mode | format | scaffold | reconcile | setup-extensions.`);
+      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | lifecycle | meta | doctor | mode | format | scaffold | reconcile | setup-extensions.`);
     }
   } catch (err) {
     emitError(command, err, flags.json);
