@@ -262,7 +262,90 @@ test('manifest staging rejects missing, duplicate, or forbidden fixture entries 
   }
 });
 
-test('package major is 4.0.0', () => {
-  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  assert.equal(pkg.version, '4.0.0');
+test('package metadata and role staging use v4 release inputs', () => {
+  const { execFileSync: exec } = require('node:child_process');
+
+  // `node scripts/build-surfaces.js --role pi/core --output <dir>` stages Core.
+  {
+    const src = makeFixtureSource();
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 't5-c3-role-'));
+    try {
+      const out = path.join(parent, 'pi-core');
+      const stdout = exec(
+        'node',
+        [BUILDER, '--role', 'pi/core', '--output', out, '--source', src],
+        { cwd: ROOT, encoding: 'utf8' },
+      );
+      assert.ok(stdout.includes('staged pi/core'), 'role staging must report the staged role');
+      assert.ok(fs.existsSync(path.join(out, 'cli/commands/log.js')), 'staged core must carry core CLI modules');
+      assert.ok(!fs.existsSync(path.join(out, 'skills/create-pr')), 'staged core must not carry the enterprise skill');
+    } finally {
+      fs.rmSync(src, { recursive: true, force: true });
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  }
+
+  // `rebuild-skills.sh` rebuilds archives without a wildcard: it consumes the
+  // manifest include list instead of iterating every directory implicitly.
+  {
+    const text = fs.readFileSync(path.join(ROOT, 'rebuild-skills.sh'), 'utf8');
+    assert.ok(
+      text.includes('surfaces.json') || text.includes('build-surfaces'),
+      'rebuild-skills.sh must consume the surface manifest',
+    );
+    assert.ok(
+      !/for skill_dir in "\$SKILLS_DIR"\//.test(text),
+      'rebuild-skills.sh must not rebuild via an implicit wildcard directory loop',
+    );
+  }
+
+  // The explicit package file list carries no wildcard ownership.
+  {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    assert.equal(pkg.version, '4.0.0');
+    for (const entry of pkg.files || []) {
+      assert.ok(
+        entry !== 'skills/**' && entry !== 'skills/*' && entry !== 'cli/**',
+        `package file list must not rely on wildcard ownership (got ${entry})`,
+      );
+    }
+    assert.ok(
+      (pkg.files || []).includes('surfaces.json'),
+      'package file list must ship the surface manifest',
+    );
+  }
+
+  // Both Claude host manifests consume the manifest without wildcard ownership.
+  for (const name of ['plugin.json', 'marketplace.json']) {
+    const doc = JSON.parse(
+      fs.readFileSync(path.join(ROOT, '.claude-plugin', name), 'utf8'),
+    );
+    const text = JSON.stringify(doc);
+    assert.ok(
+      text.includes('surfaces.json') || text.includes('claude/core') || text.includes('surface_manifest'),
+      `${name} must consume the surface manifest`,
+    );
+    assert.ok(
+      !text.includes('skills/**'),
+      `${name} must not rely on wildcard ownership`,
+    );
+  }
+
+  // `rebuild-skills.sh` runs in a temporary copy: archives still generate.
+  {
+    const copy = fs.mkdtempSync(path.join(os.tmpdir(), 't5-c3-rebuild-'));
+    try {
+      for (const entry of ['skills', 'surfaces.json', 'scripts', 'cli', 'assets', 'llms.txt', 'README.md', 'LICENSE', 'rebuild-skills.sh']) {
+        exec('cp', ['-r', path.join(ROOT, entry), path.join(copy, entry)], { encoding: 'utf8' });
+      }
+      exec('bash', [path.join(copy, 'rebuild-skills.sh')], { cwd: copy, encoding: 'utf8' });
+      const archives = exec('find', [path.join(copy, 'skills'), '-name', '*.skill'], { encoding: 'utf8' })
+        .split('\n')
+        .filter(Boolean);
+      assert.ok(archives.length > 0, 'rebuild in a temporary copy must still generate archives');
+    } finally {
+      fs.rmSync(copy, { recursive: true, force: true });
+    }
+  }
 });
+

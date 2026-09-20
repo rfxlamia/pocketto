@@ -80,7 +80,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/cli.test.js test/package.test.js",
+    "test": "node --test test/cli.test.js test/package.test.js test/surfaces.test.js",
     "prepublishOnly": "echo 'Publishing pocketto to npm...'"
   },
   "pi": {
