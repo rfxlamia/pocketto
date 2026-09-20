@@ -228,6 +228,72 @@ function validateEvent(event) {
   return { ok: true, code: null, message: null };
 }
 
+// Opaque adapter responses: the adapter reports an outcome for a known
+// event ID plus optional opaque proof refs. No remote-identity, secret,
+// or command field is ever accepted here — the handler owns those and
+// writes them only to Enterprise-owned stores.
+const ADAPTER_RESPONSE_STATUSES = ['succeeded', 'retryable', 'terminal', 'reconciling'];
+
+const ADAPTER_RESPONSE_FIELDS = ['event_id', 'status', 'proof_ref', 'proof_hash', 'error'];
+
+const ADAPTER_ERROR_CODES = {
+  NOT_OBJECT: 'ADAPTER_NOT_OBJECT',
+  UNKNOWN_FIELD: 'ADAPTER_UNKNOWN_FIELD',
+  BAD_EVENT_ID: 'ADAPTER_BAD_EVENT_ID',
+  BAD_STATUS: 'ADAPTER_BAD_STATUS',
+  BAD_PROOF: 'ADAPTER_BAD_PROOF',
+  BAD_ERROR: 'ADAPTER_BAD_ERROR',
+};
+
+function adapterFail(code, message) {
+  return { ok: false, code, message };
+}
+
+function validateAdapterResponse(response, expectedEventId) {
+  if (!isPlainObject(response)) {
+    return adapterFail(ADAPTER_ERROR_CODES.NOT_OBJECT, 'adapter response must be an object');
+  }
+  for (const key of Object.keys(response)) {
+    if (!ADAPTER_RESPONSE_FIELDS.includes(key)) {
+      return adapterFail(ADAPTER_ERROR_CODES.UNKNOWN_FIELD, `unsupported adapter field: ${key}`);
+    }
+  }
+  if (typeof response.event_id !== 'string' || response.event_id.length === 0) {
+    return adapterFail(ADAPTER_ERROR_CODES.BAD_EVENT_ID, 'adapter response requires an event_id');
+  }
+  if (typeof expectedEventId === 'string' && response.event_id !== expectedEventId) {
+    return adapterFail(ADAPTER_ERROR_CODES.BAD_EVENT_ID, 'adapter event_id must match the dispatched event');
+  }
+  if (!ADAPTER_RESPONSE_STATUSES.includes(response.status)) {
+    return adapterFail(ADAPTER_ERROR_CODES.BAD_STATUS, `unsupported adapter status: ${response.status}`);
+  }
+  for (const key of ['proof_ref', 'proof_hash']) {
+    if (key in response && response[key] !== undefined && response[key] !== null && typeof response[key] !== 'string') {
+      return adapterFail(ADAPTER_ERROR_CODES.BAD_PROOF, `${key} must be an opaque string`);
+    }
+  }
+  if ('error' in response && response.error !== undefined && response.error !== null) {
+    if (!isPlainObject(response.error)) {
+      return adapterFail(ADAPTER_ERROR_CODES.BAD_ERROR, 'adapter error must be an object');
+    }
+    for (const key of Object.keys(response.error)) {
+      if (!['code', 'retryable', 'message'].includes(key)) {
+        return adapterFail(ADAPTER_ERROR_CODES.BAD_ERROR, `unsupported adapter error field: ${key}`);
+      }
+    }
+    if (typeof response.error.code !== 'string' || response.error.code.length === 0) {
+      return adapterFail(ADAPTER_ERROR_CODES.BAD_ERROR, 'adapter error.code must be a non-empty string');
+    }
+    if (typeof response.error.retryable !== 'boolean') {
+      return adapterFail(ADAPTER_ERROR_CODES.BAD_ERROR, 'adapter error.retryable must be a boolean');
+    }
+    if (typeof response.error.message !== 'string' || response.error.message.length === 0) {
+      return adapterFail(ADAPTER_ERROR_CODES.BAD_ERROR, 'adapter error.message must be a non-empty string');
+    }
+  }
+  return { ok: true, code: null, message: null };
+}
+
 module.exports = {
   EVENT_TYPES,
   DELIVERY_STATUSES,
@@ -242,4 +308,8 @@ module.exports = {
   validateArtifactRef,
   canonicalArtifactRef,
   validateEvent,
+  ADAPTER_RESPONSE_STATUSES,
+  ADAPTER_RESPONSE_FIELDS,
+  ADAPTER_ERROR_CODES,
+  validateAdapterResponse,
 };

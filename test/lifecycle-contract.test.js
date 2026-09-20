@@ -234,3 +234,76 @@ test('rejects mismatched artifact hash fields', () => {
   assert.equal(res.ok, false);
   assert.equal(res.code, 'LIFECYCLE_BAD_ARTIFACT_HASH');
 });
+
+// T1 CYCLE 5: adapter responses remain opaque and version-bounded.
+const {
+  ADAPTER_RESPONSE_STATUSES,
+  ADAPTER_ERROR_CODES,
+  validateAdapterResponse,
+} = require('../cli/lib/lifecycle-contract');
+
+const KNOWN_EVENT_ID = 'demo-plan:spec-approved:r1';
+
+function makeResponse(overrides = {}) {
+  return {
+    event_id: KNOWN_EVENT_ID,
+    status: 'succeeded',
+    ...overrides,
+  };
+}
+
+test('accepts a supported opaque outcome with matching event ID', () => {
+  for (const status of ADAPTER_RESPONSE_STATUSES) {
+    const res = validateAdapterResponse(makeResponse({ status }), KNOWN_EVENT_ID);
+    assert.equal(res.ok, true, `status ${status} should validate: ${JSON.stringify(res)}`);
+  }
+  const withProof = validateAdapterResponse(
+    makeResponse({ proof_ref: 'meta:github_issue', proof_hash: PAYLOAD_SHA256 }),
+    KNOWN_EVENT_ID,
+  );
+  assert.equal(withProof.ok, true);
+});
+
+test('accepts opaque response without remote-identity fields', () => {
+  const res = validateAdapterResponse(makeResponse(), KNOWN_EVENT_ID);
+  assert.equal(res.ok, true);
+  assert.ok(!('github_issue_number' in makeResponse()));
+});
+
+test('rejects malformed adapter status with stable code', () => {
+  const res = validateAdapterResponse(makeResponse({ status: 'done' }), KNOWN_EVENT_ID);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, ADAPTER_ERROR_CODES.BAD_STATUS);
+});
+
+test('rejects missing event ID with stable code', () => {
+  const { event_id: _dropped, ...noId } = makeResponse();
+  void _dropped;
+  const res = validateAdapterResponse(noId, KNOWN_EVENT_ID);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, ADAPTER_ERROR_CODES.BAD_EVENT_ID);
+});
+
+test('rejects secret-bearing response with stable code', () => {
+  const res = validateAdapterResponse(
+    makeResponse({ token: 'placeholder-secret-value' }),
+    KNOWN_EVENT_ID,
+  );
+  assert.equal(res.ok, false);
+  assert.equal(res.code, ADAPTER_ERROR_CODES.UNKNOWN_FIELD);
+});
+
+test('rejects remote-identifier response with stable code', () => {
+  const res = validateAdapterResponse(
+    makeResponse({ github_issue_number: 50 }),
+    KNOWN_EVENT_ID,
+  );
+  assert.equal(res.ok, false);
+  assert.equal(res.code, ADAPTER_ERROR_CODES.UNKNOWN_FIELD);
+});
+
+test('rejects unknown response field with stable code', () => {
+  const res = validateAdapterResponse(makeResponse({ frobnicate: true }), KNOWN_EVENT_ID);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, ADAPTER_ERROR_CODES.UNKNOWN_FIELD);
+});
