@@ -261,3 +261,157 @@ test('CYCLE 2: error helper builds redacted, retry-flagged errors', () => {
   assert.equal(redacted.retryable, false);
   assert.ok(typeof redacted.message === 'string' && redacted.message.length > 0);
 });
+
+// T7 CYCLE 3: remote failure classes map to bounded outcomes. Unit through
+// enterprise/retry.js and the injectable enterprise/github.js runner.
+// Fake gh exit/status responses and clock; no live network.
+
+const github = require('../enterprise/github');
+const enterpriseMeta = require('../enterprise/meta');
+
+function fakeClock(start = 0) {
+  let now = start;
+  return { now: () => now, advance: (ms) => { now += ms; } };
+}
+
+test('CYCLE 3: timeout and rate-limit classify as retryable within the configured bound', () => {
+  const clock = fakeClock();
+  const timeoutRes = { exit: 1, stdout: '', stderr: 'gh: operation timed out after 30s', timedOut: true };
+  const classifiedTimeout = retry.classifyGhResult(timeoutRes, { now: clock.now });
+  assert.equal(classifiedTimeout.status, 'retryable');
+  assert.equal(classifiedTimeout.error.retryable, true);
+  assert.match(classifiedTimeout.error.code, /GH_(TIMEOUT|RATE_LIMITED)/);
+
+  const rateRes = { exit: 1, stdout: '', stderr: 'API rate limit exceeded for installation (HTTP 429)', timedOut: false };
+  const classifiedRate = retry.classifyGhResult(rateRes, { now: clock.now });
+  assert.equal(classifiedRate.status, 'retryable');
+  assert.equal(classifiedRate.error.retryable, true);
+  assert.equal(classifiedRate.error.code, 'GH_RATE_LIMITED');
+
+  // Bounded: five retries with 1s/5s/30s/120s/600s delays, then terminal.
+  assert.deepEqual(retry.RETRY_DELAYS_MS, [1000, 5000, 30000, 120000, 600000]);
+  for (let attemptsMade = 1; attemptsMade <= 5; attemptsMade += 1) {
+    const outcome = retry.boundOutcome(classifiedTimeout, attemptsMade);
+    assert.equal(outcome.status, 'retryable', `attempt ${attemptsMade} must stay retryable`);
+    assert.equal(outcome.nextAttemptMs, retry.RETRY_DELAYS_MS[attemptsMade - 1]);
+  }
+  const exhausted = retry.boundOutcome(classifiedTimeout, 6);
+  assert.equal(exhausted.status, 'terminal', 'after the fifth retry the event must be terminal/manual resolution');
+  assert.match(exhausted.error.message, /manual/i);
+});
+
+test('CYCLE 3: auth/permission/validation/integrity classify as terminal with no implied mutation', () => {
+  const cases = [
+    [{ exit: 1, stdout: '', stderr: 'Bad credentials (HTTP 401)', timedOut: false }, 'GH_AUTH'],
+    [{ exit: 1, stdout: '', stderr: 'Forbidden: permission denied to write issues', timedOut: false }, 'GH_FORBIDDEN'],
+    [{ exit: 1, stdout: '', stderr: 'Unprocessable (HTTP 422): Validation Failed', timedOut: false }, 'GH_VALIDATION'],
+    [{ exit: 1, stdout: '', stderr: 'payload hash mismatch: integrity check failed', timedOut: false }, 'GH_INTEGRITY'],
+  ];
+  for (const [result, code] of cases) {
+    let ghCalls = 0;
+    const before = { ...result };
+    const classified = retry.classifyGhResult(result, {});
+    assert.equal(classified.status, 'terminal', `${code} must be terminal`);
+    assert.equal(classified.error.retryable, false);
+    assert.equal(classified.error.code, code);
+    assert.ok(typeof classified.error.message === 'string' && classified.error.message.length > 0, `${code} needs an actionable message`);
+    assert.deepEqual(result, before, `${code}: classification must not mutate its input`);
+    assert.equal(ghCalls, 0, `${code}: classification implies no remote call`);
+    const bounded = retry.boundOutcome(classified, 1);
+    assert.equal(bounded.status, 'terminal', `${code} stays terminal under the bound`);
+  }
+});
+
+test('CYCLE 3: malformed output and generic non-zero exit are retryable until the bound, never success', () => {
+  const malformed = retry.classifyGhResult({ exit: 0, stdout: 'not-json{{{', stderr: '', timedOut: false }, { expectJson: true });
+  assert.equal(malformed.status, 'retryable', 'malformed output must never be success');
+  assert.equal(malformed.error.code, 'GH_MALFORMED_OUTPUT');
+
+  const nonzero = retry.classifyGhResult({ exit: 1, stdout: '', stderr: 'some unfamiliar failure', timedOut: false }, {});
+  assert.equal(nonzero.status, 'retryable', 'unknown non-zero exit must be retryable until the bound');
+  assert.equal(nonzero.error.retryable, true);
+
+  const exhausted = retry.boundOutcome(nonzero, 6);
+  assert.equal(exhausted.status, 'terminal', 'unknown failures still terminate after the bound');
+  assert.notEqual(malformed.status, 'succeeded');
+  assert.notEqual(nonzero.status, 'succeeded');
+});
+
+test('CYCLE 3: safe gh runner enforces timeout, parses JSON safely, and redacts diagnostics', () => {
+  const seen = [];
+  const recordingRunner = (args, opts) => {
+    seen.push({ args: args.slice(), timeoutMs: opts.timeoutMs });
+    if (args.includes('rate-limited')) return { exit: 1, stdout: '', stderr: 'API rate limit exceeded', timedOut: false };
+    if (args.includes('auth-fail')) return { exit: 1, stdout: '', stderr: 'Bad credentials GITHUB_TOKEN=hunter2-seekrit', timedOut: false };
+    return { exit: 0, stdout: JSON.stringify({ number: 50 }), stderr: '', timedOut: false };
+  };
+
+  const okRes = github.runGh(['issue', 'view', '50', '--json', 'number'], {
+    runner: recordingRunner,
+    timeoutMs: 30000,
+    expectJson: true,
+  });
+  assert.equal(okRes.ok, true);
+  assert.deepEqual(okRes.data, { number: 50 });
+
+  const rateRes = github.runGh(['issue', 'view', 'rate-limited'], {
+    runner: recordingRunner,
+    timeoutMs: 30000,
+  });
+  assert.equal(rateRes.ok, false);
+  assert.equal(rateRes.classification.status, 'retryable');
+
+  const authRes = github.runGh(['issue', 'view', 'auth-fail'], {
+    runner: recordingRunner,
+    timeoutMs: 30000,
+  });
+  assert.equal(authRes.ok, false);
+  assert.equal(authRes.classification.status, 'terminal');
+  const blob = JSON.stringify(authRes);
+  assert.ok(!blob.includes('hunter2-seekrit'), 'runner diagnostics must redact secret values');
+  assert.ok(!blob.toLowerCase().includes('token'), 'runner diagnostics must not mention tokens');
+
+  const timeoutRes = github.runGh(['issue', 'list'], {
+    runner: () => ({ exit: 1, stdout: '', stderr: 'hung', timedOut: true }),
+    timeoutMs: 1000,
+  });
+  assert.equal(timeoutRes.ok, false);
+  assert.equal(timeoutRes.classification.error.code, 'GH_TIMEOUT');
+
+  const malformedRes = github.runGh(['issue', 'view', '1', '--json', 'number'], {
+    runner: () => ({ exit: 0, stdout: 'oops-not-json', stderr: '', timedOut: false }),
+    timeoutMs: 30000,
+    expectJson: true,
+  });
+  assert.equal(malformedRes.ok, false, 'malformed JSON output must fail, never succeed');
+  assert.equal(malformedRes.classification.error.code, 'GH_MALFORMED_OUTPUT');
+
+  assert.ok(seen.length >= 3, 'injectable runner must observe every call');
+  assert.ok(seen.every((c) => typeof c.timeoutMs === 'number'), 'timeout policy must reach the runner');
+});
+
+test('CYCLE 3: metadata seam round-trips GitHub IDs through the Enterprise wrapper only', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-c3-'));
+  const specDir = path.join(root, 'spec');
+  fs.mkdirSync(specDir, { recursive: true });
+
+  enterpriseMeta.setIssueIdentity(specDir, { number: 50, url: 'https://example.invalid/owner/repo/issues/50' });
+  assert.deepEqual(enterpriseMeta.getIssueIdentity(specDir), {
+    number: 50,
+    url: 'https://example.invalid/owner/repo/issues/50',
+  });
+
+  enterpriseMeta.setPrIdentity(specDir, 'phase-1', { number: 51, url: 'https://example.invalid/owner/repo/pull/51' });
+  assert.deepEqual(enterpriseMeta.getPrIdentity(specDir, 'phase-1'), {
+    number: 51,
+    url: 'https://example.invalid/owner/repo/pull/51',
+  });
+
+  const raw = JSON.parse(fs.readFileSync(path.join(specDir, '.pocket-meta.json'), 'utf8'));
+  assert.equal(raw.github_issue.number, 50);
+  assert.equal(raw.phases['phase-1'].github_pr.number, 51);
+
+  const bodyPath = github.writeBodyFile('hello **world**', { dir: root });
+  assert.equal(fs.readFileSync(bodyPath, 'utf8'), 'hello **world**');
+  assert.ok(bodyPath.startsWith(root), 'body-file transport must stay local');
+});
