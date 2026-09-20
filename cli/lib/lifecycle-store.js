@@ -13,6 +13,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 
 const { writeFileAtomicSync } = require('./atomic-file');
 const {
@@ -85,9 +86,101 @@ function serializeDoc(doc) {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
+// Event-specific artifact roots (spec, normative): `spec-approved` may
+// reference only `spec` and runs with `plan_dir: null`; phase/closure
+// events require a non-null `plan_dir` and may reference `plan` (plus
+// `spec` evidence carried alongside).
+function requiredPlanDir(type) {
+  return type === 'phase-complete' || type === 'plan-closed';
+}
+
+function allowedRootsFor(type) {
+  if (type === 'spec-approved') return ['spec'];
+  return ['spec', 'plan'];
+}
+
+function rootDirFor(root, specDir, planDir) {
+  return root === 'spec' ? specDir : planDir;
+}
+
+function hashBytes(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+// Fail-closed filesystem validation of ONE artifact ref against its
+// declared root directory: rejects symlinks escaping the root, missing
+// files, and hash mismatches. Classifies transient read/I/O failures as
+// retryable (LIFECYCLE_ARTIFACT_IO) without touching the journal.
+function validateArtifactOnDisk(ref, rootDir, deps) {
+  const statFn = (deps && deps.stat) || fs.statSync;
+  const readFn = (deps && deps.readFile) || fs.readFileSync;
+  const realpathFn = (deps && deps.realpath) || fs.realpathSync;
+  const hashFn = (deps && deps.hashFile) || null;
+
+  const candidate = path.resolve(rootDir, ref.path);
+  // Syntactic check first (unresolved paths): catches `..` escapes and
+  // absolute-path confusion before touching the filesystem.
+  const rootSyntactic = path.resolve(rootDir);
+  const rel = path.relative(rootSyntactic, candidate);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return fail('LIFECYCLE_BAD_ARTIFACT_PATH', `artifact escapes its root: ${ref.path}`);
+  }
+  // Resolve the root itself for the symlink comparison: temp dirs
+  // (e.g. macOS /var → /private/var) may live under symlinks, so compare
+  // real path against real path.
+  let rootResolved;
+  try {
+    rootResolved = realpathFn(rootDir);
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+      return fail('LIFECYCLE_ARTIFACT_MISSING', `artifact not found: ${ref.path}`);
+    }
+    return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
+  }
+  let st;
+  try {
+    st = statFn(candidate);
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+      return fail('LIFECYCLE_ARTIFACT_MISSING', `artifact not found: ${ref.path}`);
+    }
+    return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
+  }
+  if (st && typeof st.isDirectory === 'function' && st.isDirectory()) {
+    return fail('LIFECYCLE_ARTIFACT_MISSING', `artifact not found: ${ref.path}`);
+  }
+  // Resolve symlinks AFTER stat: a link pointing outside the root is a
+  // cross-plan escape even when the syntactic path looks inside.
+  let real;
+  try {
+    real = realpathFn(candidate);
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+      return fail('LIFECYCLE_ARTIFACT_MISSING', `artifact not found: ${ref.path}`);
+    }
+    return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
+  }
+  const realRel = path.relative(rootResolved, real);
+  if (realRel === '' || realRel.startsWith('..') || path.isAbsolute(realRel)) {
+    return fail('LIFECYCLE_ARTIFACT_ESCAPE', `artifact escapes its root: ${ref.path}`);
+  }
+  let digest;
+  try {
+    digest = hashFn
+      ? hashFn(candidate)
+      : hashBytes(readFn(candidate));
+  } catch (err) {
+    return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
+  }
+  if (String(digest).toLowerCase() !== ref.sha256) {
+    return fail('LIFECYCLE_ARTIFACT_STALE', `artifact hash mismatch: ${ref.path}`);
+  }
+  return { ok: true, code: null, message: null };
+}
+
 // Commits one logical lifecycle transition atomically.
 // Input: { specDir, planDir, planId, type, artifacts,
-//          proofRef?, proofHash?, deps?: { now } }
+//          proofRef?, proofHash?, deps?: { now, stat, readFile, realpath, hashFile } }
 // Success: { ok, event, revision }. Failure: { ok:false, code, message }.
 // Failures leave `<spec_dir>/lifecycle.json` untouched (no partial success).
 function commitTransition(input) {
@@ -118,6 +211,25 @@ function commitTransition(input) {
     const res = validateArtifactRef(ref);
     if (!res.ok) return fail(res.code, res.message);
     normalized.push(canonicalArtifactRef(ref));
+  }
+
+  if (requiredPlanDir(type) && (planDir === null || planDir === undefined)) {
+    return fail('LIFECYCLE_PLAN_DIR_REQUIRED', `${type} requires a non-null plan_dir`);
+  }
+  const allowed = allowedRootsFor(type);
+  const ioDeps = {
+    stat: deps.stat, readFile: deps.readFile, realpath: deps.realpath, hashFile: deps.hashFile,
+  };
+  for (const ref of normalized) {
+    if (!allowed.includes(ref.root)) {
+      return fail('LIFECYCLE_BAD_ARTIFACT_ROOT', `${type} may not reference root: ${ref.root}`);
+    }
+    const rootDir = rootDirFor(ref.root, specDir, planDir);
+    if (typeof rootDir !== 'string' || rootDir.length === 0) {
+      return fail('LIFECYCLE_BAD_ARTIFACT_ROOT', `missing root directory for: ${ref.root}`);
+    }
+    const disk = validateArtifactOnDisk(ref, rootDir, ioDeps);
+    if (!disk.ok) return disk;
   }
 
   const payload = logicalPayload({
