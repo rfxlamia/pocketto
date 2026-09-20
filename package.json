@@ -42,6 +42,8 @@
     "cli/commands/format.js",
     "cli/index.js",
     "cli/lib/*.js",
+    "skills/*/*.skill",
+    "skills/*/.skillkit-mode",
     "skills/brand-design/SKILL.md",
     "skills/brand-design/references/**",
     "skills/bug-hunting/SKILL.md",

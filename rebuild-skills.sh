@@ -23,7 +23,7 @@ const manifest = JSON.parse(fs.readFileSync("surfaces.json", "utf8"));
 const dirs = new Set();
 for (const role of Object.values(manifest.roles || {})) {
   for (const inc of role.includes || []) {
-    const m = /^(skills\/[^/*]+)(?:\/\*\*)?$/.exec(inc);
+    const m = /^(skills\/[^/]+)(?:\/|$)/.exec(inc);
     if (m) dirs.add(m[1]);
   }
 }

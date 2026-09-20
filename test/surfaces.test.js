@@ -313,6 +313,31 @@ test('package metadata and role staging use v4 release inputs', () => {
       (pkg.files || []).includes('surfaces.json'),
       'package file list must ship the surface manifest',
     );
+    // The packed tarball must carry the release archives and mode dotfiles:
+    // at least one .skill archive and one .skillkit-mode dotfile.
+    {
+      const packJson = exec('npm', ['pack', '--dry-run', '--json'], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      const packed = (JSON.parse(packJson)[0].files || []).map((f) => f.path);
+      assert.ok(
+        packed.some((p) => p.endsWith('.skill')),
+        'packed tarball must include at least one .skill archive',
+      );
+      assert.ok(
+        packed.some((p) => p.endsWith('.skillkit-mode')),
+        'packed tarball must include at least one .skillkit-mode dotfile',
+      );
+      assert.ok(
+        packed.includes('skills/pocket-development/pocket-development.skill'),
+        'packed tarball must include the pocket-development archive',
+      );
+      assert.ok(
+        packed.includes('skills/pocket-development/.skillkit-mode'),
+        'packed tarball must include the pocket-development .skillkit-mode dotfile',
+      );
+    }
   }
 
   // Both Claude host manifests consume the manifest without wildcard ownership.
@@ -338,11 +363,30 @@ test('package metadata and role staging use v4 release inputs', () => {
       for (const entry of ['skills', 'surfaces.json', 'scripts', 'cli', 'assets', 'llms.txt', 'README.md', 'LICENSE', 'rebuild-skills.sh']) {
         exec('cp', ['-r', path.join(ROOT, entry), path.join(copy, entry)], { encoding: 'utf8' });
       }
-      exec('bash', [path.join(copy, 'rebuild-skills.sh')], { cwd: copy, encoding: 'utf8' });
+      const rebuildOut = exec('bash', [path.join(copy, 'rebuild-skills.sh')], { cwd: copy, encoding: 'utf8' });
       const archives = exec('find', [path.join(copy, 'skills'), '-name', '*.skill'], { encoding: 'utf8' })
         .split('\n')
         .filter(Boolean);
       assert.ok(archives.length > 0, 'rebuild in a temporary copy must still generate archives');
+      // The manifest union must include pocket-development (declared only via
+      // per-file includes), and its archive must be rebuilt by the script.
+      const skillDirs = exec(
+        'node',
+        ['-e', 'const fs=require("node:fs");const m=JSON.parse(fs.readFileSync("surfaces.json","utf8"));const d=new Set();for(const r of Object.values(m.roles||{})){for(const i of r.includes||[]){const x=/^(skills\\/[^/]+)(?:\\/|$)/.exec(i);if(x)d.add(x[1]);}}console.log([...d].sort().join("\\n"));'],
+        { cwd: ROOT, encoding: 'utf8' },
+      ).split('\n').filter(Boolean);
+      assert.ok(
+        skillDirs.includes('skills/pocket-development'),
+        'manifest skill-dir union must include pocket-development',
+      );
+      assert.ok(
+        rebuildOut.includes('skills/pocket-development/pocket-development.skill'),
+        'rebuild-skills.sh must rebuild the pocket-development archive',
+      );
+      assert.ok(
+        fs.existsSync(path.join(copy, 'skills/pocket-development/pocket-development.skill')),
+        'pocket-development archive must exist after rebuild',
+      );
     } finally {
       fs.rmSync(copy, { recursive: true, force: true });
     }
