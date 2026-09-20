@@ -302,3 +302,79 @@ test('CYCLE 3: closed plan rejects further transitions with no mutation', () => 
   assert.equal(readFileSync(lifecyclePathFor(specDir), 'utf8'), before, 'state must remain byte-identical');
   assert.equal(JSON.parse(before).events.length, 3, 'no event may be appended');
 });
+
+function tmpOrphans(dir) {
+  return readdirSync(dir).filter((f) => f.startsWith('.lifecycle.json.tmp-'));
+}
+
+function seedApprovedWithPlanDirs() {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-persist-'));
+  const specDir = path.join(root, 'spec');
+  const planDir = path.join(root, 'plan');
+  mkdirSync(specDir, { recursive: true });
+  mkdirSync(planDir, { recursive: true });
+  const specSha = writeArtifact(specDir, 'spec-doc.md', 'spec\n');
+  const planSha = writeArtifact(planDir, 'phase-1.md', 'phase 1\n');
+  const seed = commitTransition({
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: specSha, revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seed.ok, true, `seed commit should succeed: ${JSON.stringify(seed)}`);
+  return { root, specDir, planDir, planSha };
+}
+
+function phaseCompleteInput(fixture, atomic) {
+  return {
+    specDir: fixture.specDir,
+    planDir: fixture.planDir,
+    planId: 'demo-plan',
+    type: 'phase-complete',
+    artifacts: [
+      { root: 'plan', kind: 'phase-evidence', path: 'phase-1.md', sha256: fixture.planSha, revision: 1 },
+    ],
+    deps: { now: () => FIXED_CLOCK, atomic },
+  };
+}
+
+function assertPersistFailureAtomic(fixture, res, before) {
+  assert.equal(res.ok, false, `failed commit must be unsuccessful: ${JSON.stringify(res)}`);
+  assert.equal(res.code, 'LIFECYCLE_PERSISTENCE');
+  assert.equal(
+    readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'),
+    before,
+    'previous lifecycle document must remain byte-identical',
+  );
+  const doc = JSON.parse(before);
+  assert.equal(doc.plan.revision, 1, 'no new state may become visible');
+  assert.equal(doc.events.length, 1, 'no event may become visible');
+  assert.deepEqual(tmpOrphans(fixture.specDir), [], 'no orphaned temporary file may remain');
+  const files = readdirSync(fixture.specDir);
+  assert.ok(!files.includes('log.json'), 'store must not write log.json');
+  assert.ok(!files.includes('.pocket-meta.json'), 'store must not write .pocket-meta.json');
+}
+
+test('CYCLE 4: temp-write failure leaves previous document byte-identical with no orphan temp', () => {
+  const fixture = seedApprovedWithPlanDirs();
+  const before = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+  const boom = new Error('ENOSPC: no space left on device');
+  boom.code = 'ENOSPC';
+  const res = commitTransition(
+    phaseCompleteInput(fixture, { writeFile: () => { throw boom; } }),
+  );
+  assertPersistFailureAtomic(fixture, res, before);
+});
+
+test('CYCLE 4: rename failure leaves previous document byte-identical with no orphan temp', () => {
+  const fixture = seedApprovedWithPlanDirs();
+  const before = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+  const boom = new Error('EXDEV: cross-device link not permitted');
+  boom.code = 'EXDEV';
+  const res = commitTransition(
+    phaseCompleteInput(fixture, { rename: () => { throw boom; } }),
+  );
+  assertPersistFailureAtomic(fixture, res, before);
+});

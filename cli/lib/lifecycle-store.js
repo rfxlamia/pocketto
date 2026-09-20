@@ -282,7 +282,16 @@ function commitTransition(input) {
   doc.events.push(event);
 
   const target = lifecyclePathFor(specDir);
-  writeFileAtomicSync(target, serializeDoc(doc));
+  // All-or-nothing commit: the single authoritative document is replaced
+  // via temp-file plus rename. Any write/rename failure leaves the previous
+  // document byte-identical with no orphan temp (the atomic writer cleans
+  // up); the caller sees LIFECYCLE_PERSISTENCE with no partial success.
+  try {
+    writeFileAtomicSync(target, serializeDoc(doc), deps.atomic || {});
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    return fail('LIFECYCLE_PERSISTENCE', `lifecycle persistence failed: ${detail}`);
+  }
 
   return { ok: true, event, revision };
 }
