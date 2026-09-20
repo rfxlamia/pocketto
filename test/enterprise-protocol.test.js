@@ -181,3 +181,83 @@ test('CYCLE 1: failed install writes no partial registration state', () => {
   const loaded = registration.loadRegistration(root);
   assert.equal(loaded.ok, false, 'nothing usable may remain after a failed install');
 });
+
+// T7 CYCLE 2: valid adapter responses are bounded and secret-free. Unit
+// through enterprise/adapter.js response serializer and enterprise/retry.js
+// redaction. Fixed response objects and a fake gh runner; never live GitHub.
+
+const adapter = require('../enterprise/adapter');
+const retry = require('../enterprise/retry');
+const { validateAdapterResponse } = require('../cli/lib/lifecycle-contract');
+
+const C2_EVENT_ID = 'demo-plan:spec-approved:r1';
+
+test('CYCLE 2: succeeded/retryable/terminal/reconciling responses echo the event ID with only permitted proof fields', () => {
+  let ghCalls = 0;
+  const fakeGh = () => {
+    ghCalls += 1;
+    return { exit: 0, stdout: '', stderr: '' };
+  };
+  const cases = [
+    { input: { event_id: C2_EVENT_ID, status: 'succeeded', proof_ref: 'meta:github_issue', proof_hash: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' } },
+    { input: { event_id: C2_EVENT_ID, status: 'retryable', error: { code: 'GH_TIMEOUT', retryable: true, message: 'gh timed out; will retry with backoff' } } },
+    { input: { event_id: C2_EVENT_ID, status: 'terminal', error: { code: 'GH_FORBIDDEN', retryable: false, message: 'gh refused: permission denied' } } },
+    { input: { event_id: C2_EVENT_ID, status: 'reconciling', proof_ref: 'meta:github_issue' } },
+  ];
+  for (const { input } of cases) {
+    const res = adapter.serializeResponse(input);
+    assert.equal(res.event_id, C2_EVENT_ID, `${input.status}: must echo the original event ID`);
+    assert.equal(res.status, input.status);
+    assert.equal(validateAdapterResponse(res, C2_EVENT_ID).ok, true, `${input.status}: must satisfy the T1 adapter contract`);
+    for (const key of Object.keys(res)) {
+      assert.ok(
+        ['event_id', 'status', 'proof_ref', 'proof_hash', 'error'].includes(key),
+        `${input.status}: no field outside the allowlist (found ${key})`
+      );
+    }
+    if (input.proof_ref !== undefined) {
+      assert.equal(res.proof_ref, input.proof_ref, `${input.status}: opaque proof ref must pass through unchanged`);
+    }
+  }
+  assert.equal(typeof fakeGh, 'function');
+  assert.equal(ghCalls, 0, 'local response serialization must make zero GitHub calls');
+});
+
+test('CYCLE 2: diagnostics are secret-free after redaction', () => {
+  const secretToken = 'ghp_superSecretValue123';
+  const secretEnv = 'hunter2-seekrit';
+  const secretBearer = 'abcdefghij0123456789';
+  const nasty = `gh issue create --token ${secretToken} failed; GITHUB_TOKEN=${secretEnv}; credential: s3cr3t-hidden; Bearer ${secretBearer}`;
+  const redacted = retry.redactSecrets(nasty);
+  assert.equal(typeof redacted, 'string');
+  const lower = redacted.toLowerCase();
+  assert.ok(!lower.includes('token'), `redacted diagnostics must not mention tokens: ${redacted}`);
+  assert.ok(!lower.includes('credential'), `redacted diagnostics must not mention credentials: ${redacted}`);
+  for (const leaked of [secretToken, secretEnv, secretBearer, 's3cr3t-hidden']) {
+    assert.ok(!redacted.includes(leaked), `redacted diagnostics must not leak secret material: ${leaked}`);
+  }
+  assert.ok(!redacted.includes('--token'), 'raw secret-bearing command argument must be removed');
+
+  const res = adapter.serializeResponse({
+    event_id: C2_EVENT_ID,
+    status: 'retryable',
+    error: { code: 'GH_TIMEOUT', retryable: true, message: nasty },
+  });
+  const blob = JSON.stringify(res);
+  assert.ok(!blob.includes(secretToken), 'serialized response must not leak the token');
+  assert.ok(!blob.toLowerCase().includes('credential'), 'serialized response must not mention credentials');
+  assert.equal(res.event_id, C2_EVENT_ID, 'redaction must preserve the event ID');
+  assert.equal(validateAdapterResponse(res, C2_EVENT_ID).ok, true);
+});
+
+test('CYCLE 2: error helper builds redacted, retry-flagged errors', () => {
+  const err = adapter.buildError('GH_TIMEOUT', 'gh run failed with GITHUB_TOKEN=hunter2-seekrit', true);
+  assert.equal(err.code, 'GH_TIMEOUT');
+  assert.equal(err.retryable, true);
+  assert.ok(!err.message.includes('hunter2-seekrit'), 'helper must redact secret values');
+  assert.ok(!err.message.toLowerCase().includes('token'), 'helper must redact token mentions');
+  const redacted = retry.redactError({ code: 'GH_AUTH', retryable: false, message: 'auth failed for credential xyz' });
+  assert.equal(redacted.code, 'GH_AUTH');
+  assert.equal(redacted.retryable, false);
+  assert.ok(typeof redacted.message === 'string' && redacted.message.length > 0);
+});
