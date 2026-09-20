@@ -102,6 +102,16 @@ function checkStateAllowsTransition(doc, type) {
   return { ok: true, code: null, message: null };
 }
 
+// Deterministic replay lookup: an identical logical transition already in
+// the journal (same type and canonical payload hash; volatile timestamps
+// and delivery fields excluded) is a no-op returning the original event.
+function findReplayEvent(doc, type, payloadHash) {
+  for (const event of doc.events) {
+    if (event.type === type && event.payload_hash === payloadHash) return event;
+  }
+  return null;
+}
+
 // Event-specific artifact roots (spec, normative): `spec-approved` may
 // reference only `spec` and runs with `plan_dir: null`; phase/closure
 // events require a non-null `plan_dir` and may reference `plan` (plus
@@ -222,9 +232,6 @@ function commitTransition(input) {
     return fail('LIFECYCLE_PLAN_MISMATCH', 'plan_id does not match the lifecycle document');
   }
 
-  const gate = checkStateAllowsTransition(doc, type);
-  if (!gate.ok) return gate;
-
   const normalized = [];
   for (const ref of artifacts) {
     const res = validateArtifactRef(ref);
@@ -259,6 +266,17 @@ function commitTransition(input) {
     proofHash: input.proofHash,
   });
   const payloadHash = hashCanonicalPayload(payload);
+
+  // Identical replay is a no-op: return the original event ID and revision
+  // without appending or rewriting the authoritative document. Looked up
+  // after validation (refs are real) but before the state gate so an already
+  // committed logical transition replays even when its type can no longer
+  // fire on the current state.
+  const replayed = findReplayEvent(doc, type, payloadHash);
+  if (replayed) return { ok: true, event: replayed, revision: replayed.revision };
+
+  const gate = checkStateAllowsTransition(doc, type);
+  if (!gate.ok) return gate;
 
   const revision = doc.plan.revision + 1;
   const event = {

@@ -378,3 +378,40 @@ test('CYCLE 4: rename failure leaves previous document byte-identical with no or
   );
   assertPersistFailureAtomic(fixture, res, before);
 });
+
+test('CYCLE 5: identical replay returns original event without appending', () => {
+  const specDir = mkdtempSync(path.join(tmpdir(), 'lifecycle-replay-'));
+  const sha = writeArtifact(specDir, 'spec-doc.md', 'spec content\n');
+  const input = {
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha, revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  };
+  const first = commitTransition(input);
+  assert.equal(first.ok, true, `first commit should succeed: ${JSON.stringify(first)}`);
+  assert.equal(first.event.event_id, 'demo-plan:spec-approved:r1');
+  assert.equal(first.revision, 1);
+  const before = readFileSync(lifecyclePathFor(specDir), 'utf8');
+
+  // Same logical transition again — even under a later clock — must be a
+  // no-op replay: canonical payload identity ignores volatile timestamps.
+  const replay = commitTransition({
+    ...input,
+    deps: { now: () => '2026-09-20T00:00:00.000Z' },
+  });
+  assert.equal(replay.ok, true, `replay should succeed as no-op: ${JSON.stringify(replay)}`);
+  assert.equal(replay.event.event_id, first.event.event_id, 'replay must return original event ID');
+  assert.equal(replay.revision, first.revision, 'replay must return original revision');
+  assert.equal(replay.event.payload_hash, first.event.payload_hash);
+  assert.equal(
+    readFileSync(lifecyclePathFor(specDir), 'utf8'),
+    before,
+    'replay must not rewrite the authoritative document',
+  );
+  const doc = JSON.parse(before);
+  assert.equal(doc.events.length, 1, 'no second event may be appended');
+  assert.equal(doc.plan.revision, 1, 'revision must not advance on replay');
+});
