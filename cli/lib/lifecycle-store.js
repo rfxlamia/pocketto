@@ -86,6 +86,22 @@ function serializeDoc(doc) {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
+// Current-state gate: the plan's committed state must legally accept the
+// requested event type. `spec-approved` fires once (PENDING → APPROVED);
+// once the plan is closed (DONE) no further transition is legal. Rejection
+// happens before any journal mutation, so an invalid transition emits no
+// event and leaves the document byte-identical.
+function checkStateAllowsTransition(doc, type) {
+  const state = (doc.plan && doc.plan.state) || {};
+  if (state.status === 'DONE') {
+    return fail('LIFECYCLE_BAD_STATE', `plan is closed; ${type} is not allowed`);
+  }
+  if (type === 'spec-approved' && state.approval === 'APPROVED') {
+    return fail('LIFECYCLE_BAD_STATE', 'spec has already been approved');
+  }
+  return { ok: true, code: null, message: null };
+}
+
 // Event-specific artifact roots (spec, normative): `spec-approved` may
 // reference only `spec` and runs with `plan_dir: null`; phase/closure
 // events require a non-null `plan_dir` and may reference `plan` (plus
@@ -205,6 +221,9 @@ function commitTransition(input) {
   if (doc.plan.plan_id !== planId) {
     return fail('LIFECYCLE_PLAN_MISMATCH', 'plan_id does not match the lifecycle document');
   }
+
+  const gate = checkStateAllowsTransition(doc, type);
+  if (!gate.ok) return gate;
 
   const normalized = [];
   for (const ref of artifacts) {

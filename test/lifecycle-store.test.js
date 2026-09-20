@@ -221,3 +221,84 @@ test('CYCLE 2: deterministic I/O error maps to retryable with no mutation', () =
   assert.equal(res.code, 'LIFECYCLE_ARTIFACT_IO');
   assert.ok(!fs.existsSync(lifecyclePathFor(roots.specDir)), 'no event may be appended');
 });
+
+function writeArtifact(dir, name, content) {
+  writeFileSync(path.join(dir, name), content);
+  return sha256Hex(content);
+}
+
+test('CYCLE 3: invalid state transition emits no event and leaves file byte-identical', () => {
+  const specDir = mkdtempSync(path.join(tmpdir(), 'lifecycle-state-'));
+  const shaA = writeArtifact(specDir, 'spec-a.md', 'spec A\n');
+  const first = commitTransition({
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-a.md', sha256: shaA, revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(first.ok, true, `seed commit should succeed: ${JSON.stringify(first)}`);
+  assert.equal(first.event.event_id, 'demo-plan:spec-approved:r1');
+  const before = readFileSync(lifecyclePathFor(specDir), 'utf8');
+
+  // Same type but a different canonical payload: not a replay, and the
+  // already-APPROVED plan cannot legally accept another spec-approved.
+  const shaB = writeArtifact(specDir, 'spec-b.md', 'spec B\n');
+  const res = commitTransition({
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-b.md', sha256: shaB, revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(res.ok, false, `invalid transition must be rejected: ${JSON.stringify(res)}`);
+  assert.equal(res.code, 'LIFECYCLE_BAD_STATE');
+  assert.equal(readFileSync(lifecyclePathFor(specDir), 'utf8'), before, 'state must remain byte-identical');
+  const doc = JSON.parse(before);
+  assert.equal(doc.events.length, 1, 'no event may be appended');
+  assert.deepEqual(
+    doc.events.map((e) => e.delivery),
+    [{ status: 'pending', attempts: 0 }],
+    'no new delivery entry may become processable',
+  );
+  const files = readdirSync(specDir);
+  assert.ok(!files.includes('log.json'), 'store must not write log.json');
+  assert.ok(!files.includes('.pocket-meta.json'), 'store must not write .pocket-meta.json');
+});
+
+test('CYCLE 3: closed plan rejects further transitions with no mutation', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-closed-'));
+  const specDir = path.join(root, 'spec');
+  const planDir = path.join(root, 'plan');
+  mkdirSync(specDir, { recursive: true });
+  mkdirSync(planDir, { recursive: true });
+  const specSha = writeArtifact(specDir, 'spec-doc.md', 'spec\n');
+  const p1 = writeArtifact(planDir, 'p1.md', 'phase 1\n');
+  const p2 = writeArtifact(planDir, 'p2.md', 'phase 2\n');
+  const p3 = writeArtifact(planDir, 'p3.md', 'phase 3\n');
+  const submit = (type, artifacts, planDirArg) => commitTransition({
+    specDir,
+    planDir: planDirArg,
+    planId: 'demo-plan',
+    type,
+    artifacts,
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(submit('spec-approved',
+    [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: specSha, revision: 1 }], null).ok, true);
+  assert.equal(submit('phase-complete',
+    [{ root: 'plan', kind: 'phase-evidence', path: 'p1.md', sha256: p1, revision: 1 }], planDir).ok, true);
+  assert.equal(submit('plan-closed',
+    [{ root: 'plan', kind: 'closeout', path: 'p2.md', sha256: p2, revision: 1 }], planDir).ok, true);
+  const before = readFileSync(lifecyclePathFor(specDir), 'utf8');
+  assert.equal(JSON.parse(before).plan.state.status, 'DONE');
+
+  const res = submit('phase-complete',
+    [{ root: 'plan', kind: 'phase-evidence', path: 'p3.md', sha256: p3, revision: 1 }], planDir);
+  assert.equal(res.ok, false, `transition on closed plan must be rejected: ${JSON.stringify(res)}`);
+  assert.equal(res.code, 'LIFECYCLE_BAD_STATE');
+  assert.equal(readFileSync(lifecyclePathFor(specDir), 'utf8'), before, 'state must remain byte-identical');
+  assert.equal(JSON.parse(before).events.length, 3, 'no event may be appended');
+});
