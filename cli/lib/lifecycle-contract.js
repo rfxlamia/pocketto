@@ -54,10 +54,44 @@ function buildEventId(planId, type, revision) {
   return `${planId}:${type}:r${revision}`;
 }
 
-// Baseline content hash. Cycle 3 hardens this with stable-key ordering,
-// LF normalization, and delivery-field exclusion.
-function hashPayload(value) {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+// Volatile delivery/transport fields excluded from the canonical identity:
+// they change as the event moves through the journal without changing
+// what the event means.
+const VOLATILE_FIELDS = ['delivery', 'occurred_at'];
+
+function normalizeText(value) {
+  if (typeof value === 'string') {
+    // CRLF and lone-CR are equivalent to LF for identity purposes.
+    return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeText);
+  }
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      if (VOLATILE_FIELDS.includes(key)) continue;
+      out[key] = normalizeText(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function canonicalizePayload(value) {
+  return normalizeText(value);
+}
+
+function hashCanonicalPayload(value) {
+  return createHash('sha256').update(JSON.stringify(canonicalizePayload(value))).digest('hex');
+}
+
+function checkEventSize(event) {
+  const serializedBytes = Buffer.byteLength(JSON.stringify(event), 'utf8');
+  if (serializedBytes > MAX_EVENT_BYTES) {
+    return { ok: false, code: 'LIFECYCLE_EVENT_TOO_LARGE', bytes: serializedBytes, limit: MAX_EVENT_BYTES };
+  }
+  return { ok: true, code: null, bytes: serializedBytes, limit: MAX_EVENT_BYTES };
 }
 
 function validateArtifactRefShallow(ref) {
@@ -140,7 +174,10 @@ module.exports = {
   EVENT_FIELDS,
   ARTIFACT_ROOTS,
   MAX_EVENT_BYTES,
+  VOLATILE_FIELDS,
   buildEventId,
-  hashPayload,
+  canonicalizePayload,
+  hashCanonicalPayload,
+  checkEventSize,
   validateEvent,
 };

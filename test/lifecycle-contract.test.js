@@ -117,3 +117,58 @@ test('rejects non-deterministic event ID with stable code', () => {
 test('delivery statuses are the neutral allowlist', () => {
   assert.deepEqual([...DELIVERY_STATUSES].sort(), ['claimed', 'pending', 'reconciling', 'retryable', 'succeeded', 'terminal']);
 });
+
+// T1 CYCLE 3: canonical payload hashing is stable and bounded.
+const {
+  canonicalizePayload,
+  hashCanonicalPayload,
+  checkEventSize,
+  MAX_EVENT_BYTES,
+} = require('../cli/lib/lifecycle-contract');
+
+test('equivalent payloads with reordered keys share the same hash', () => {
+  const a = { beta: 2, alpha: 1, nested: { z: 1, a: 2 } };
+  const b = { alpha: 1, nested: { a: 2, z: 1 }, beta: 2 };
+  assert.equal(hashCanonicalPayload(a), hashCanonicalPayload(b));
+  assert.match(hashCanonicalPayload(a), /^[0-9a-f]{64}$/);
+});
+
+test('CRLF and LF text produce the same canonical hash', () => {
+  const lf = { body: 'First line\nSecond line\n', title: 'demo' };
+  const crlf = { body: 'First line\r\nSecond line\r\n', title: 'demo' };
+  assert.equal(hashCanonicalPayload(lf), hashCanonicalPayload(crlf));
+  assert.equal(canonicalizePayload({ body: 'a\r\nb' }).body, 'a\nb');
+});
+
+test('volatile delivery fields do not affect the canonical hash', () => {
+  const base = makeValidEvent();
+  const claimed = makeValidEvent({
+    delivery: { status: 'claimed', attempts: 3 },
+    occurred_at: '2026-09-19T13:00:00.000Z',
+  });
+  assert.equal(hashCanonicalPayload(base), hashCanonicalPayload(claimed));
+});
+
+test('semantic content changes affect the canonical hash', () => {
+  const base = makeValidEvent();
+  const changed = makeValidEvent({ proof_ref: 'meta:github_issue' });
+  assert.notEqual(hashCanonicalPayload(base), hashCanonicalPayload(changed));
+});
+
+test('exactly-at and over 64 KiB serialized events produce the boundary result', () => {
+  assert.equal(MAX_EVENT_BYTES, 64 * 1024);
+  const base = makeValidEvent();
+  // proof_ref is ASCII so 1 char = 1 byte; serialized size grows linearly
+  // with its length: size(null) has 4 chars `null`, size(str n) has n + 2.
+  const baseBytes = Buffer.byteLength(JSON.stringify(base), 'utf8');
+  assert.ok(baseBytes < MAX_EVENT_BYTES, 'fixture must start under the bound');
+  const nExact = MAX_EVENT_BYTES - baseBytes + 2 - 4 + 4 - 2; // == MAX - baseBytes + 2
+  const atLimit = { ...base, proof_ref: 'x'.repeat(MAX_EVENT_BYTES - baseBytes + 2) };
+  assert.equal(Buffer.byteLength(JSON.stringify(atLimit), 'utf8'), MAX_EVENT_BYTES);
+  assert.equal(checkEventSize(atLimit).ok, true);
+  const over = { ...base, proof_ref: 'x'.repeat(MAX_EVENT_BYTES - baseBytes + 3) };
+  assert.equal(Buffer.byteLength(JSON.stringify(over), 'utf8'), MAX_EVENT_BYTES + 1);
+  assert.equal(checkEventSize(over).ok, false);
+  assert.equal(checkEventSize(over).code, 'LIFECYCLE_EVENT_TOO_LARGE');
+  void nExact;
+});
