@@ -102,6 +102,18 @@ function checkStateAllowsTransition(doc, type) {
   return { ok: true, code: null, message: null };
 }
 
+// Event identity plus payload integrity: the deterministic event ID for a
+// revision is bound to exactly one canonical payload hash (T1 hashing).
+// An existing event with the same ID but a different payload hash is a
+// terminal integrity conflict — never overwritten, never appended
+// alongside, and never mutated.
+function findIdentityConflict(doc, eventId, payloadHash) {
+  for (const event of doc.events) {
+    if (event.event_id === eventId && event.payload_hash !== payloadHash) return event;
+  }
+  return null;
+}
+
 // Deterministic replay lookup: an identical logical transition already in
 // the journal (same type and canonical payload hash; volatile timestamps
 // and delivery fields excluded) is a no-op returning the original event.
@@ -275,12 +287,26 @@ function commitTransition(input) {
   const replayed = findReplayEvent(doc, type, payloadHash);
   if (replayed) return { ok: true, event: replayed, revision: replayed.revision };
 
+  // Identity conflict precedes the state gate: the existing journal entry
+  // already binds this event ID to a different canonical payload, so this
+  // submission is terminally rejected with zero mutation — no state
+  // change, no journal append, and no delivery change.
+  const revision = doc.plan.revision + 1;
+  const candidateEventId = buildEventId(planId, type, revision);
+  const conflicting = findIdentityConflict(doc, candidateEventId, payloadHash);
+  if (conflicting) {
+    return fail(
+      'LIFECYCLE_INTEGRITY_CONFLICT',
+      `event ${candidateEventId} conflicts with a different canonical payload`,
+      { event_id: candidateEventId, terminal: true },
+    );
+  }
+
   const gate = checkStateAllowsTransition(doc, type);
   if (!gate.ok) return gate;
 
-  const revision = doc.plan.revision + 1;
   const event = {
-    event_id: buildEventId(planId, type, revision),
+    event_id: candidateEventId,
     plan_id: planId,
     type,
     revision,

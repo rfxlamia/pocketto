@@ -415,3 +415,80 @@ test('CYCLE 5: identical replay returns original event without appending', () =>
   assert.equal(doc.events.length, 1, 'no second event may be appended');
   assert.equal(doc.plan.revision, 1, 'revision must not advance on replay');
 });
+
+test('CYCLE 6: same event ID with different canonical payload is a terminal integrity conflict', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-conflict-'));
+  const specDir = path.join(root, 'spec');
+  const planDir = path.join(root, 'plan');
+  mkdirSync(specDir, { recursive: true });
+  mkdirSync(planDir, { recursive: true });
+  const specSha = writeArtifact(specDir, 'spec-doc.md', 'spec\n');
+  const shaA = writeArtifact(planDir, 'phase-a.md', 'phase A\n');
+  const shaB = writeArtifact(planDir, 'phase-b.md', 'phase B\n');
+
+  const seed = commitTransition({
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: specSha, revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seed.ok, true, `seed commit should succeed: ${JSON.stringify(seed)}`);
+
+  const phase = (file, sha) => commitTransition({
+    specDir,
+    planDir,
+    planId: 'demo-plan',
+    type: 'phase-complete',
+    artifacts: [{ root: 'plan', kind: 'phase-evidence', path: file, sha256: sha, revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  const first = phase('phase-a.md', shaA);
+  assert.equal(first.ok, true, `first phase commit should succeed: ${JSON.stringify(first)}`);
+  assert.equal(first.event.event_id, 'demo-plan:phase-complete:r2');
+
+  // A divergent writer rewinds the plan revision, so the next commit claims
+  // the same deterministic event ID with a different canonical payload.
+  const rewoundDoc = JSON.parse(readFileSync(lifecyclePathFor(specDir), 'utf8'));
+  rewoundDoc.plan.revision = 1;
+  writeFileSync(lifecyclePathFor(specDir), `${JSON.stringify(rewoundDoc, null, 2)}\n`);
+  const before = readFileSync(lifecyclePathFor(specDir), 'utf8');
+  const beforeDoc = JSON.parse(before);
+  assert.equal(beforeDoc.events.length, 2);
+
+  const res = phase('phase-b.md', shaB);
+  assert.equal(res.ok, false, `conflicting payload must be rejected: ${JSON.stringify(res)}`);
+  assert.equal(res.code, 'LIFECYCLE_INTEGRITY_CONFLICT');
+  const after = readFileSync(lifecyclePathFor(specDir), 'utf8');
+  assert.equal(after, before, 'conflict must leave the authoritative document byte-identical');
+  const afterDoc = JSON.parse(after);
+  assert.equal(afterDoc.events.length, 2, 'no event may be appended');
+  assert.equal(afterDoc.plan.revision, 1, 'revision must not advance on conflict');
+  assert.deepEqual(
+    afterDoc.events.map((e) => e.delivery),
+    beforeDoc.events.map((e) => e.delivery),
+    'no delivery entry may be mutated',
+  );
+  assert.deepEqual(
+    afterDoc.events.map((e) => e.payload_hash),
+    beforeDoc.events.map((e) => e.payload_hash),
+    'no journal payload may be mutated',
+  );
+  assert.deepEqual(tmpOrphans(specDir), [], 'no orphaned temporary file may remain');
+  const files = readdirSync(specDir);
+  assert.ok(!files.includes('log.json'), 'store must not write log.json');
+  assert.ok(!files.includes('.pocket-meta.json'), 'store must not write .pocket-meta.json');
+
+  // Identical replay of the original payload still resolves to the original
+  // event without mutation.
+  const replay = phase('phase-a.md', shaA);
+  assert.equal(replay.ok, true, `identical replay should succeed: ${JSON.stringify(replay)}`);
+  assert.equal(replay.event.event_id, first.event.event_id, 'replay must return original event ID');
+  assert.equal(replay.revision, first.revision, 'replay must return original revision');
+  assert.equal(
+    readFileSync(lifecyclePathFor(specDir), 'utf8'),
+    before,
+    'replay must not rewrite the authoritative document',
+  );
+});
