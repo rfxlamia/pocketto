@@ -569,7 +569,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     // dispatches. `mutate` applies the status change to the in-memory log
     // before either. Existing status rules above are unchanged, including
     // REVIEW→DONE which emits nothing.
-    runPhaseUpdateTransition({
+    const outcome = runPhaseUpdateTransition({
       planDir,
       logPath,
       log,
@@ -581,7 +581,23 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
       deps: { projectionWriter, adapterRunner },
     });
     human = [`Updated ${phase.file}: ${oldStatus} → ${newStatus}`];
-    data = { planDir, phaseFile: phase.file, level: 'phase', oldStatus, newStatus };
+    data = {
+      planDir,
+      phaseFile: phase.file,
+      level: 'phase',
+      oldStatus,
+      newStatus,
+      event: outcome.event
+        ? {
+          event_id: outcome.event.event_id,
+          plan_id: outcome.event.plan_id,
+          type: outcome.event.type,
+          revision: outcome.event.revision,
+          status: outcome.event.delivery.status,
+        }
+        : null,
+      dispatch: outcome.dispatch,
+    };
   }
 
   human.push('Current log:');
@@ -772,7 +788,7 @@ function close(positionals, { projectionWriter = null, adapterRunner = null } = 
   // either. Plans without a matching lifecycle document keep existing v3
   // close behavior untouched.
   const phaseFiles = log.phases.map((p) => p.file);
-  runPlanCloseTransition({
+  const outcome = runPlanCloseTransition({
     planDir,
     logPath,
     log,
@@ -803,6 +819,16 @@ function close(positionals, { projectionWriter = null, adapterRunner = null } = 
       dateStarted: log.header.date_started,
       dateCompleted: log.header.date_completed,
       phaseCount: log.phases.length,
+      event: outcome.event
+        ? {
+          event_id: outcome.event.event_id,
+          plan_id: outcome.event.plan_id,
+          type: outcome.event.type,
+          revision: outcome.event.revision,
+          status: outcome.event.delivery.status,
+        }
+        : null,
+      dispatch: outcome.dispatch,
     },
   };
 }

@@ -12,7 +12,7 @@
 // GitHub IDs, credentials, or Enterprise policy.
 
 const path = require('node:path');
-const { readFileSync } = require('node:fs');
+const { readFileSync, existsSync } = require('node:fs');
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { CliError } = require('./envelope');
@@ -80,7 +80,7 @@ function runTransition({ specDir, type, artifactFlags, planDir = null, deps = {}
     throw new CliError(res.code, res.message);
   }
 
-  const dispatch = decideDispatch();
+  const dispatch = decideDispatch(specDir);
   const data = {
     event_id: res.event.event_id,
     plan_id: planId,
@@ -93,15 +93,39 @@ function runTransition({ specDir, type, artifactFlags, planDir = null, deps = {}
   const human = [
     `Committed ${res.event.event_id} (revision ${res.revision})`,
     `  status   : ${data.status}`,
-    `  dispatch : deferred (no adapter registration)`,
+    `  dispatch : ${dispatch.deferred ? 'deferred' : 'dispatched'} (${dispatch.reason})`,
   ];
   return { command: 'lifecycle transition', exit: 0, human, data };
 }
 
 // Local-first dispatch decision: Core never performs remote work itself.
-// Without an adapter registration there is nothing to invoke.
-function decideDispatch() {
-  return { attempted: false, deferred: true, reason: 'no-adapter-registration' };
+// The ONLY adapter signal is the project-local registration file
+// `<project>/.pocket/lifecycle-adapter.json` (checked with a single
+// existence probe — no child process, no filesystem reads outside the
+// project, no Enterprise imports, no `gh`, no credentials). Without that
+// registration present there is nothing to invoke, so Core succeeds
+// locally and defers dispatch with the event pending.
+const ADAPTER_REGISTRATION_REL = path.join('.pocket', 'lifecycle-adapter.json');
+const NO_ADAPTER_REASON = 'no-adapter-registration';
+
+// A project carries an adapter registration only when the Enterprise-owned
+// registration file exists directly under that project root. `projectDir`
+// may be a spec dir (CLI `lifecycle transition`) or a plan dir (`log`
+// update/close); a missing directory simply has no registration.
+function hasAdapterRegistration(projectDir) {
+  if (typeof projectDir !== 'string' || projectDir.length === 0) return false;
+  try {
+    return existsSync(path.join(path.resolve(projectDir), ADAPTER_REGISTRATION_REL));
+  } catch {
+    return false;
+  }
+}
+
+function decideDispatch(projectDir = null) {
+  if (projectDir !== null && projectDir !== undefined && hasAdapterRegistration(projectDir)) {
+    return { attempted: false, deferred: true, reason: 'adapter-registered' };
+  }
+  return { attempted: false, deferred: true, reason: NO_ADAPTER_REASON };
 }
 
 // Deterministic clock for tests: POCKETTO_LIFECYCLE_NOW pins `occurred_at`.
@@ -272,8 +296,9 @@ function dispatchCommittedEvent(event, { adapterRunner = defaultDispatchRunner }
   return adapterRunner({ event });
 }
 
-function defaultDispatchRunner() {
-  return decideDispatch();
+function defaultDispatchRunner({ event } = {}) {
+  const projectDir = (event && (event.plan_dir || event.spec_dir)) || null;
+  return decideDispatch(projectDir);
 }
 
 // State-changing orchestration for `log update` (phase-level) and
@@ -369,4 +394,4 @@ function runPlanCloseTransition({ planDir, logPath, log, phaseFiles, mutate, dep
   });
 }
 
-module.exports = { parseArtifactFlag, planIdFor, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent };
+module.exports = { parseArtifactFlag, planIdFor, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };

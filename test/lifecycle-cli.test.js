@@ -582,3 +582,162 @@ test('CYCLE 5: log close projection failure returns PROJECTION_REPAIR_REQUIRED w
     delete process.env.POCKETTO_LIFECYCLE_NOW;
   }
 });
+
+test('CYCLE 6: Core-only transition performs zero Enterprise work', { skip: !hasGit() }, () => {
+  const transition = require('../cli/lib/lifecycle-transition');
+
+  // Boundary (static): Core files never require/import Enterprise modules,
+  // shell to `gh`, or read credentials. (Prose comments may name the
+  // boundary; code invocations and imports must not appear.)
+  const enterpriseImport = /require\s*\(\s*['"][^'"]*enterprise|from\s+['"][^'"]*enterprise|import\s*\(\s*['"][^'"]*enterprise/;
+  for (const rel of ['cli/lib/lifecycle-transition.js', 'cli/commands/log.js', 'cli/commands/lifecycle.js']) {
+    const src = readFileSync(path.join(__dirname, '..', rel), 'utf8');
+    assert.ok(!enterpriseImport.test(src), `${rel} must not import enterprise modules`);
+    assert.ok(!src.includes("'gh'") && !src.includes('"gh"'), `${rel} must never shell to gh`);
+    assert.ok(!src.includes('GITHUB_TOKEN') && !src.includes('GH_TOKEN'), `${rel} must not read credentials`);
+  }
+
+  // Recording child-process double for CLI subprocesses: wraps (never stubs)
+  // every child_process entry point and appends {cmd, args} per invocation so
+  // the test proves zero remote operations from real persistence.
+  const roleDir = mkdtempSync(path.join(tmpdir(), 'core-only-'));
+  const recorderPath = path.join(roleDir, 'spawn-recorder.js');
+  writeFileSync(recorderPath, `'use strict';
+const cp = require('node:child_process');
+const fs = require('node:fs');
+const out = process.env.CORE6_SPAWN_LOG;
+const NL = String.fromCharCode(10);
+function record(cmd, args) {
+  try {
+    fs.appendFileSync(out, JSON.stringify({ cmd: String(cmd), args: Array.isArray(args) ? args.map(String) : [] }) + NL);
+  } catch (e) {}
+}
+const methods = ['execFileSync', 'spawnSync', 'execFile', 'spawn', 'execSync', 'exec'];
+for (const m of methods) {
+  const orig = cp[m];
+  if (typeof orig !== 'function') continue;
+  cp[m] = function (cmd) {
+    const args = Array.prototype.slice.call(arguments, 1);
+    record(cmd, args[0]);
+    return orig.apply(this, arguments);
+  };
+}
+`);
+  let spawnSeq = 0;
+  const runRecorded = (args) => {
+    const logPath = path.join(roleDir, `spawns-${spawnSeq++}.ndjson`);
+    writeFileSync(logPath, '');
+    const stdout = execFileSync('node', ['-r', recorderPath, CLI, ...args], {
+      encoding: 'utf8',
+      env: { ...process.env, CORE6_SPAWN_LOG: logPath },
+    });
+    const calls = readFileSync(logPath, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    return { stdout, calls };
+  };
+  const basename = (cmd) => String(cmd).split(/[\\/]/).pop();
+  const assertNoRemoteWork = (calls) => {
+    for (const c of calls) {
+      assert.ok(basename(c.cmd) !== 'gh', 'Core must never invoke gh');
+      const blob = `${c.cmd} ${(c.args || []).join(' ')}`;
+      assert.ok(!/github/i.test(blob), `Core must not touch GitHub remotes: ${blob}`);
+      assert.ok(!/token|credential|passwd/i.test(blob), `Core must not touch credentials: ${blob}`);
+    }
+  };
+
+  // ── Path 1: CLI `lifecycle transition` with no adapter registration ──
+  const rootA = mkdtempSync(path.join(tmpdir(), 'core-only-transition-'));
+  const specDir = path.join(rootA, 'demo-plan');
+  mkdirSync(specDir, { recursive: true });
+  const specContent = 'approved spec content\n';
+  writeFileSync(path.join(specDir, 'spec-doc.md'), specContent);
+  const specSha = sha256Hex(specContent);
+  assert.equal(existsSync(path.join(specDir, '.pocket', 'lifecycle-adapter.json')), false);
+  assert.equal(transition.hasAdapterRegistration(specDir), false);
+
+  const t1 = runRecorded([
+    'lifecycle', 'transition', specDir, 'spec-approved',
+    '--artifact', `spec:spec-doc:spec-doc.md:${specSha}`,
+    '--json', '--contract', '3',
+  ]);
+  const envA = JSON.parse(t1.stdout.trim());
+  assert.equal(envA.ok, true);
+  assert.equal(envA.data.status, 'pending');
+  assert.deepEqual(envA.data.dispatch, { attempted: false, deferred: true, reason: 'no-adapter-registration' });
+  assert.deepEqual(
+    [envA.data.event_id, envA.data.plan_id, envA.data.type, envA.data.revision],
+    ['demo-plan:spec-approved:r1', 'demo-plan', 'spec-approved', 1],
+  );
+  assert.equal(t1.calls.length, 0, 'Core-only transition must spawn zero child processes');
+  const docA = JSON.parse(readFileSync(path.join(specDir, 'lifecycle.json'), 'utf8'));
+  assert.equal(docA.events.length, 1);
+  assert.equal(docA.events[0].delivery.status, 'pending');
+
+  // ── Path 2: CLI `log update` phase→REVIEW with no adapter registration ──
+  const rootB = mkdtempSync(path.join(tmpdir(), 'core-only-update-'));
+  const planDir = path.join(rootB, 'plan-80');
+  mkdirSync(planDir, { recursive: true });
+  const execDir = path.join(planDir, 'execution-plan');
+  mkdirSync(execDir, { recursive: true });
+  writeFileSync(path.join(planDir, 'execution-plan.md'), '# Execution Plan\n\n### Task 1: First\n\nBody.\n');
+  writeFileSync(path.join(execDir, 'index.md'), '# Plan Index\n\n**Source Plan:** ../execution-plan.md\n');
+  const phaseContent = '# Phase 1\n\n### Task 1: First\n\nWork done.\n';
+  writeFileSync(path.join(execDir, 'phase-1.md'), phaseContent);
+  const phaseSha = sha256Hex(phaseContent);
+  const seedContent = 'approved spec content\n';
+  writeFileSync(path.join(planDir, 'spec-doc.md'), seedContent);
+
+  gitIn(planDir, ['init', '-q']);
+  gitIn(planDir, ['config', 'user.email', 'test@example.com']);
+  gitIn(planDir, ['config', 'user.name', 'Test']);
+  gitIn(planDir, ['config', 'commit.gpgsign', 'false']);
+  gitIn(planDir, ['add', '-A']);
+  gitIn(planDir, ['commit', '-q', '-m', 'plan snapshot']);
+  gitIn(planDir, ['checkout', '-q', '-b', 'feature/issue-80']);
+
+  assert.equal(existsSync(path.join(planDir, '.pocket', 'lifecycle-adapter.json')), false);
+  assert.equal(transition.hasAdapterRegistration(planDir), false);
+
+  run(['log', 'init', planDir, '--json', '--contract', '3']);
+  const log0 = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+  const phaseFile = log0.phases[0].file;
+
+  // Seed revision 1 through the real store with a deterministic clock.
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const seeded = commitTransition({
+    specDir: planDir, planDir: null, planId: 'plan-80', type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha256Hex(seedContent), revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seeded.ok, true, `seed commit should succeed: ${JSON.stringify(seeded)}`);
+
+  process.env.POCKETTO_LIFECYCLE_NOW = FIXED_CLOCK;
+  try {
+    const up = runRecorded(['log', 'update', planDir, phaseFile, 'REVIEW', '--json', '--contract', '3']);
+    const envB = JSON.parse(up.stdout.trim());
+    assert.equal(envB.ok, true);
+    assert.deepEqual(envB.data.dispatch, { attempted: false, deferred: true, reason: 'no-adapter-registration' });
+    assert.equal(envB.data.event.event_id, 'plan-80:phase-complete:r2');
+    assert.equal(envB.data.event.revision, 2);
+    assert.equal(envB.data.event.status, 'pending');
+    assertNoRemoteWork(up.calls);
+    for (const c of up.calls) {
+      assert.equal(basename(c.cmd), 'git', 'only local git may run on the Core-only path');
+    }
+
+    // Authoritative side durable and pending; projection side projected.
+    const docB = JSON.parse(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'));
+    assert.equal(docB.events.length, 2);
+    const second = docB.events[1];
+    assert.equal(second.event_id, 'plan-80:phase-complete:r2');
+    assert.equal(second.revision, 2);
+    assert.equal(second.type, 'phase-complete');
+    assert.deepEqual(second.artifact_refs, [
+      { root: 'plan', kind: 'phase-evidence', path: phaseFile, sha256: phaseSha, revision: 1 },
+    ]);
+    assert.equal(second.delivery.status, 'pending');
+    const projected = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    assert.equal(projected.phases[0].status, 'REVIEW');
+  } finally {
+    delete process.env.POCKETTO_LIFECYCLE_NOW;
+  }
+});
