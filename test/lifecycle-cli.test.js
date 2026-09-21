@@ -287,7 +287,7 @@ test('CYCLE 4: Core CLI starts without Enterprise-only modules', () => {
   // Local fixture: Enterprise-only command modules staged OUT of the Core
   // role. Final module ownership follows the T5 manifest — this list is a
   // test-local statement of the Core surface, not a reclassification.
-  const ENTERPRISE_ONLY = ['mode.js', 'meta.js', 'format.js'];
+  const ENTERPRISE_ONLY = ['mode.js', 'format.js'];
   const repoRoot = path.join(__dirname, '..');
   const roleDir = mkdtempSync(path.join(tmpdir(), 'core-role-'));
   const stagedCli = path.join(roleDir, 'cli');
@@ -296,8 +296,8 @@ test('CYCLE 4: Core CLI starts without Enterprise-only modules', () => {
     rmSync(path.join(stagedCli, 'commands', name));
   }
   assert.ok(!existsSync(path.join(stagedCli, 'commands', 'mode.js')));
-  assert.ok(!existsSync(path.join(stagedCli, 'commands', 'meta.js')));
   assert.ok(!existsSync(path.join(stagedCli, 'commands', 'format.js')));
+  // meta.js is Core-owned (ships in Core per manifest+package): it stays staged.
 
   // Module-load recorder: records every module load in the child without
   // stubbing anything; the staged CLI under test is unmodified.

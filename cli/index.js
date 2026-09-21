@@ -25,6 +25,7 @@ const { ok, fail, CliError } = require('./lib/envelope');
 const { CLI_VERSION, CONTRACT } = require('./lib/version');
 const structure = require('./commands/structure');
 const log = require('./commands/log');
+const meta = require('./commands/meta');
 const lifecycle = require('./commands/lifecycle');
 const doctor = require('./commands/doctor');
 const setupExtensions = require('./commands/setup-extensions');
@@ -32,7 +33,7 @@ const reconcile = require('./commands/reconcile');
 const scaffold = require('./commands/scaffold');
 
 // Core-safe lazy command registry (T3 cycle 4; boundary declared by the T5
-// manifest `cli_boundary`): Enterprise-only command modules (`mode`, `meta`,
+// manifest `cli_boundary`): Enterprise-only command modules (`mode`,
 // `format`) must never break Core startup when absent from a Core role. They
 // load on first use through `loadEnterpriseCommand`, which treats ONLY
 // "module not found for the target path" as "not installed" — any other
@@ -68,7 +69,6 @@ function loadCommandModule(spec) {
 
 const ENTERPRISE_SPECS = {
   mode: './commands/mode',
-  meta: './commands/meta',
   format: './commands/format',
 };
 
@@ -309,7 +309,7 @@ function main() {
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'meta') {
-      const metaResult = requireEnterpriseCommand('meta').run({ sub: positionals[1], positionals: positionals.slice(2) });
+      const metaResult = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
       emitSuccess(metaResult.command, metaResult, flags.json);
     } else if (command === 'doctor') {
       const result = doctor.run({ strict: flags.strict });

@@ -346,4 +346,5 @@ module.exports = {
   lifecyclePathFor,
   readLifecycleDoc,
   commitTransition,
+  hashBytes,
 };

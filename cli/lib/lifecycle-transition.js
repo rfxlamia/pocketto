@@ -13,11 +13,10 @@
 
 const path = require('node:path');
 const { readFileSync, existsSync } = require('node:fs');
-const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { CliError } = require('./envelope');
 const { EVENT_TYPES } = require('./lifecycle-contract');
-const { commitTransition, readLifecycleDoc, lifecyclePathFor } = require('./lifecycle-store');
+const { commitTransition, readLifecycleDoc, lifecyclePathFor, hashBytes: sha256Bytes } = require('./lifecycle-store');
 const { writeFileAtomicSync } = require('./atomic-file');
 const { writeProjection: defaultWriteProjection } = require('./logjson');
 
@@ -146,10 +145,6 @@ function currentBranch(planDir) {
   } catch {
     return null;
   }
-}
-
-function sha256Bytes(bytes) {
-  return createHash('sha256').update(bytes).digest('hex');
 }
 
 // Phase evidence is the phase file itself, referenced from the `plan` root.
