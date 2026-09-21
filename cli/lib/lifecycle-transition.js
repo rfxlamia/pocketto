@@ -3,9 +3,10 @@
 // Neutral lifecycle transition coordinator (T3).
 //
 // Core-only orchestration: commits lifecycle state plus event through the T2
-// store BEFORE any projection work. Later cycles add phase/closure emission,
-// projection repair, and local-first dispatch here so `cli/commands/log.js`
-// stays free of inline lifecycle orchestration.
+// store BEFORE any projection work. Phase (cycle 2) and closure (cycle 3)
+// emission live here; later cycles add projection repair and local-first
+// dispatch here so `cli/commands/log.js` stays free of inline lifecycle
+// orchestration.
 //
 // Boundary: never imports enterprise/**, never shells to `gh`, never reads
 // GitHub IDs, credentials, or Enterprise policy.
@@ -185,14 +186,75 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
   // no-op replay (identical payload) still stamps the branch.
   const branch = currentBranch(planDir);
   if (branch) {
-    const doc = readLifecycleDoc(planDir);
-    if (doc && doc.plan && doc.plan.plan_id === planId && doc.plan.branch !== branch) {
-      doc.plan.branch = branch;
-      doc.plan.plan_dir = planDir;
-      writeFileAtomicSync(lifecyclePathFor(planDir), `${JSON.stringify(doc, null, 2)}\n`);
-    }
+    stampBranch(planDir, planId, branch);
   }
   return res.event;
 }
 
-module.exports = { parseArtifactFlag, planIdFor, runTransition, emitPhaseCompleteIfReview };
+// Final closure evidence is every DONE phase file, referenced from the
+// `plan` root. Hashes the on-disk content directly (no git required),
+// matching the T1/T2 sha256-hex contract.
+function closureEvidenceRefs(planDir, phaseFiles) {
+  return phaseFiles.map((phaseFile) => phaseEvidenceRef(planDir, phaseFile));
+}
+
+// Stamps the captured branch onto the committed lifecycle document (T2
+// store owns persistence; lifecycle.json itself is rewritten atomically
+// here via the shared atomic writer). No-op when the branch is unchanged.
+function stampBranch(planDir, planId, branch) {
+  const doc = readLifecycleDoc(planDir);
+  if (doc && doc.plan && doc.plan.plan_id === planId && doc.plan.branch !== branch) {
+    doc.plan.branch = branch;
+    doc.plan.plan_dir = planDir;
+    writeFileAtomicSync(lifecyclePathFor(planDir), `${JSON.stringify(doc, null, 2)}\n`);
+  }
+}
+
+// Emission hook for `log close`: commits exactly one `plan-closed` event
+// when every phase is DONE, and nothing otherwise. Called by
+// `cli/commands/log.js` AFTER the log.json projection write — Core commits
+// the authoritative event, then stamps the captured branch onto the
+// lifecycle document. Fail-closed by construction: any emission failure
+// surfaces as a CliError and the projection write has already succeeded,
+// so log.json is never left half-written.
+//
+// Guard: only plans already carrying a matching lifecycle document
+// participate (same v3-preservation rule as cycle 2) — v3-only plans keep
+// existing `log close` behavior untouched: no event, no error, no new
+// file. Replay-safe by construction: an identical closure payload is a
+// store-level no-op (same event ID and revision, no second event).
+//
+// Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
+function emitPlanClosedIfDone({ planDir, phaseFiles }) {
+  if (!Array.isArray(phaseFiles) || phaseFiles.length === 0) return null;
+  // v3-only plans (no lifecycle identity or no lifecycle document) keep
+  // existing `log close` behavior untouched: no event, no error, no new
+  // file. Only plans already carrying a lifecycle document participate.
+  const planId = planIdForLog(planDir);
+  if (!planId) return null;
+  const existing = readLifecycleDoc(planDir);
+  if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  const artifacts = closureEvidenceRefs(planDir, phaseFiles);
+  const res = commitTransition({
+    specDir: planDir,
+    planDir,
+    planId,
+    type: 'plan-closed',
+    artifacts,
+    deps: { now: lifecycleNow },
+  });
+  if (!res.ok) {
+    throw new CliError(res.code, res.message);
+  }
+  // Capture the current branch on the committed document: the emission is
+  // the point where Core observes delivery context. Idempotent with respect
+  // to the event journal — the event itself is already committed, so a
+  // no-op replay (identical payload) still stamps the branch.
+  const branch = currentBranch(planDir);
+  if (branch) {
+    stampBranch(planDir, planId, branch);
+  }
+  return res.event;
+}
+
+module.exports = { parseArtifactFlag, planIdFor, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone };

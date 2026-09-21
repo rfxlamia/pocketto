@@ -6,7 +6,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { mkdtempSync, writeFileSync, mkdirSync, readFileSync } = require('node:fs');
+const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
@@ -176,4 +176,109 @@ test('CYCLE 2: phase REVIEW emits phase-complete with branch and plan-root evide
   } finally {
     delete process.env.POCKETTO_LIFECYCLE_NOW;
   }
+});
+
+test('CYCLE 3: log close commits one plan-closed event atomically with DONE; replay emits nothing', { skip: !hasGit() }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-close-'));
+  const planDir = path.join(root, 'plan-60');
+  mkdirSync(planDir, { recursive: true });
+  const execDir = path.join(planDir, 'execution-plan');
+  mkdirSync(execDir, { recursive: true });
+  writeFileSync(path.join(planDir, 'execution-plan.md'), '# Execution Plan\n\n### Task 1: First\n\nBody.\n\n### Task 2: Second\n\nBody.\n');
+  writeFileSync(path.join(execDir, 'index.md'), '# Plan Index\n\n**Source Plan:** ../execution-plan.md\n');
+  const phase1 = '# Phase 1\n\n### Task 1: First\n\nWork done.\n';
+  const phase2 = '# Phase 2\n\n### Task 2: Second\n\nWork done.\n';
+  writeFileSync(path.join(execDir, 'phase-1.md'), phase1);
+  writeFileSync(path.join(execDir, 'phase-2.md'), phase2);
+  const phase1Sha = sha256Hex(phase1);
+  const phase2Sha = sha256Hex(phase2);
+  const specContent = 'approved spec content\n';
+  writeFileSync(path.join(planDir, 'spec-doc.md'), specContent);
+
+  gitIn(planDir, ['init', '-q']);
+  gitIn(planDir, ['config', 'user.email', 'test@example.com']);
+  gitIn(planDir, ['config', 'user.name', 'Test']);
+  gitIn(planDir, ['config', 'commit.gpgsign', 'false']);
+  gitIn(planDir, ['add', '-A']);
+  gitIn(planDir, ['commit', '-q', '-m', 'plan snapshot']);
+  gitIn(planDir, ['checkout', '-q', '-b', 'feature/issue-60']);
+
+  run(['log', 'init', planDir, '--json', '--contract', '3']);
+
+  const log0 = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+  assert.equal(log0.phases.length, 2);
+  const files = log0.phases.map((p) => p.file);
+  assert.deepEqual(files, ['execution-plan/phase-1.md', 'execution-plan/phase-2.md']);
+
+  // Seed the authoritative document with a matching plan identity (real store,
+  // deterministic clock only).
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const seeded = commitTransition({
+    specDir: planDir, planDir: null, planId: 'plan-60', type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha256Hex(specContent), revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seeded.ok, true, `seed commit should succeed: ${JSON.stringify(seeded)}`);
+
+  process.env.POCKETTO_LIFECYCLE_NOW = FIXED_CLOCK;
+  try {
+    // Every phase eligible for closure: REVIEW then DONE through the public CLI.
+    for (const f of files) {
+      const r = json(['log', 'update', planDir, f, 'REVIEW', '--json', '--contract', '3']);
+      assert.equal(r.ok, true);
+      const d = json(['log', 'update', planDir, f, 'DONE', '--json', '--contract', '3']);
+      assert.equal(d.ok, true);
+    }
+
+    // One close operation commits the closure event AND the DONE projection.
+    const closed = json(['log', 'close', planDir, '--json', '--contract', '3']);
+    assert.equal(closed.ok, true);
+
+    const afterClose = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    assert.equal(afterClose.header.status, 'DONE');
+    assert.ok(afterClose.header.date_completed);
+
+    const doc = JSON.parse(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'));
+    const closures = doc.events.filter((e) => e.type === 'plan-closed');
+    assert.equal(closures.length, 1, 'close must record exactly one plan-closed event');
+    const closure = closures[0];
+    assert.equal(closure.event_id, `plan-60:plan-closed:r${closure.revision}`);
+    assert.equal(closure.revision, doc.plan.revision);
+    assert.equal(closure.occurred_at, FIXED_CLOCK);
+    assert.deepEqual(closure.artifact_refs, [
+      { root: 'plan', kind: 'phase-evidence', path: 'execution-plan/phase-1.md', sha256: phase1Sha, revision: 1 },
+      { root: 'plan', kind: 'phase-evidence', path: 'execution-plan/phase-2.md', sha256: phase2Sha, revision: 1 },
+    ]);
+    assert.equal(closure.delivery.status, 'pending');
+    assert.equal(doc.plan.state.status, 'DONE');
+    assert.equal(doc.plan.branch, 'feature/issue-60');
+    assert.equal(doc.plan.plan_dir, planDir);
+    const eventCount = doc.events.length;
+
+    // Replay: closing again emits nothing new.
+    const replay = json(['log', 'close', planDir, '--json', '--contract', '3']);
+    assert.equal(replay.ok, true);
+    const doc2 = JSON.parse(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'));
+    assert.equal(doc2.events.length, eventCount, 'replay must not emit a second closure event');
+    assert.equal(doc2.events.filter((e) => e.type === 'plan-closed').length, 1);
+    assert.equal(doc2.plan.state.status, 'DONE');
+    const afterReplay = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    assert.equal(afterReplay.header.status, 'DONE');
+  } finally {
+    delete process.env.POCKETTO_LIFECYCLE_NOW;
+  }
+
+  // v3 preservation: a plan without a lifecycle document closes exactly as before.
+  const v3Dir = path.join(root, 'legacy-plan');
+  mkdirSync(v3Dir, { recursive: true });
+  writeFileSync(path.join(v3Dir, 'execution-plan.md'), '# Execution Plan\n\n### Task 1: Only\n\nBody.\n');
+  run(['log', 'init', v3Dir, '--json', '--contract', '3']);
+  const v3log = JSON.parse(readFileSync(path.join(v3Dir, 'log.json'), 'utf8'));
+  run(['log', 'update', v3Dir, v3log.phases[0].file, 'REVIEW', '--json', '--contract', '3']);
+  run(['log', 'update', v3Dir, v3log.phases[0].file, 'DONE', '--json', '--contract', '3']);
+  const v3close = json(['log', 'close', v3Dir, '--json', '--contract', '3']);
+  assert.equal(v3close.ok, true);
+  assert.equal(existsSync(path.join(v3Dir, 'lifecycle.json')), false, 'v3 close must not create a lifecycle document');
+  const v3after = JSON.parse(readFileSync(path.join(v3Dir, 'log.json'), 'utf8'));
+  assert.equal(v3after.header.status, 'DONE');
 });

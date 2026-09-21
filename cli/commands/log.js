@@ -9,7 +9,7 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { writeLog, todayISO, readLogChecked } = require('../lib/logjson');
-const { emitPhaseCompleteIfReview } = require('../lib/lifecycle-transition');
+const { emitPhaseCompleteIfReview, emitPlanClosedIfDone } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 const { PIPELINE } = require('../lib/version');
 
@@ -766,6 +766,14 @@ function close(positionals) {
   log.header.status = 'DONE';
   log.header.date_completed = todayISO();
   writeLog(logPath, log);
+  // Cycle 3: the lifecycle store owns persistence — `log close` only adds
+  // the DONE-only emission hook (coordinator logic stays in
+  // cli/lib/lifecycle-transition.js). Plans without a matching lifecycle
+  // document keep existing v3 close behavior untouched.
+  emitPlanClosedIfDone({
+    planDir,
+    phaseFiles: log.phases.map((p) => p.file),
+  });
 
   const human = [
     `Closed ${logPath}`,
