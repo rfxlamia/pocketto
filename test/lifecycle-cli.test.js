@@ -355,3 +355,230 @@ process.on('exit', () => {
   assert.ok(!loads.some((r) => r.includes('enterprise')), 'Enterprise policy modules must not load');
   assert.ok(required('./commands/lifecycle') || required('lifecycle'), 'neutral lifecycle registry must load');
 });
+
+test('CYCLE 5: log update projection failure returns PROJECTION_REPAIR_REQUIRED with commit durable and dispatch deferred', { skip: !hasGit() }, () => {
+  const logCmd = require('../cli/commands/log');
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-projection-'));
+  const planDir = path.join(root, 'plan-70');
+  mkdirSync(planDir, { recursive: true });
+  const execDir = path.join(planDir, 'execution-plan');
+  mkdirSync(execDir, { recursive: true });
+  writeFileSync(path.join(planDir, 'execution-plan.md'), '# Execution Plan\n\n### Task 1: First\n\nBody.\n\n### Task 2: Second\n\nBody.\n');
+  writeFileSync(path.join(execDir, 'index.md'), '# Plan Index\n\n**Source Plan:** ../execution-plan.md\n');
+  const phaseContent = '# Phase 1\n\n### Task 1: First\n\nWork done.\n\n### Task 2: Second\n\nWork done.\n';
+  writeFileSync(path.join(execDir, 'phase-1.md'), phaseContent);
+  const phaseSha = sha256Hex(phaseContent);
+  const specContent = 'approved spec content\n';
+  writeFileSync(path.join(planDir, 'spec-doc.md'), specContent);
+  writeFileSync(path.join(planDir, 'seed-a.md'), 'seed evidence A\n');
+  writeFileSync(path.join(planDir, 'seed-b.md'), 'seed evidence B\n');
+
+  gitIn(planDir, ['init', '-q']);
+  gitIn(planDir, ['config', 'user.email', 'test@example.com']);
+  gitIn(planDir, ['config', 'user.name', 'Test']);
+  gitIn(planDir, ['config', 'commit.gpgsign', 'false']);
+  gitIn(planDir, ['add', '-A']);
+  gitIn(planDir, ['commit', '-q', '-m', 'plan snapshot']);
+  gitIn(planDir, ['checkout', '-q', '-b', 'feature/issue-70']);
+
+  run(['log', 'init', planDir, '--json', '--contract', '3']);
+
+  const log0 = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+  const phaseFile = log0.phases[0].file;
+
+  // Seed revisions 1..3 through the real store with a deterministic clock.
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const seed = (input) => {
+    const res = commitTransition({ ...input, deps: { now: () => FIXED_CLOCK } });
+    assert.equal(res.ok, true, `seed commit should succeed: ${JSON.stringify(res)}`);
+    return res;
+  };
+  seed({
+    specDir: planDir, planDir: null, planId: 'plan-70', type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha256Hex(specContent), revision: 1 }],
+  });
+  seed({
+    specDir: planDir, planDir, planId: 'plan-70', type: 'phase-complete',
+    artifacts: [{ root: 'plan', kind: 'phase-evidence', path: 'seed-a.md', sha256: sha256Hex('seed evidence A\n'), revision: 1 }],
+  });
+  seed({
+    specDir: planDir, planDir, planId: 'plan-70', type: 'phase-complete',
+    artifacts: [{ root: 'plan', kind: 'phase-evidence', path: 'seed-b.md', sha256: sha256Hex('seed evidence B\n'), revision: 1 }],
+  });
+
+  // Doubles: fake ONLY the projection writer (fails) and the adapter runner
+  // (records). Lifecycle persistence stays real.
+  const adapterCalls = [];
+  const adapterRunner = (invocation) => {
+    adapterCalls.push(invocation);
+    return { attempted: true, deferred: false, reason: 'fake-adapter-recorded' };
+  };
+  const failingProjection = () => {
+    throw new Error('injected projection failure');
+  };
+
+  process.env.POCKETTO_LIFECYCLE_NOW = FIXED_CLOCK;
+  try {
+    let thrown = null;
+    try {
+      logCmd.run({
+        sub: 'update',
+        positionals: [planDir, phaseFile, 'REVIEW'],
+        projectionWriter: failingProjection,
+        adapterRunner,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'projection failure must raise instead of reporting success');
+    assert.equal(thrown.code, 'PROJECTION_REPAIR_REQUIRED');
+    assert.deepEqual(thrown.details, {
+      event_id: 'plan-70:phase-complete:r4',
+      revision: 4,
+      lifecycle_committed: true,
+      dispatch_deferred: true,
+    });
+    assert.match(thrown.message, /plan-70:phase-complete:r4/);
+
+    // Authoritative side durable: revision 4 committed and still pending.
+    const doc = JSON.parse(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'));
+    assert.equal(doc.events.length, 4);
+    const fourth = doc.events[3];
+    assert.equal(fourth.event_id, 'plan-70:phase-complete:r4');
+    assert.equal(fourth.revision, 4);
+    assert.equal(fourth.type, 'phase-complete');
+    assert.deepEqual(fourth.artifact_refs, [
+      { root: 'plan', kind: 'phase-evidence', path: phaseFile, sha256: phaseSha, revision: 1 },
+    ]);
+    assert.equal(fourth.delivery.status, 'pending');
+    assert.equal(doc.plan.revision, 4);
+    assert.equal(doc.plan.branch, 'feature/issue-70');
+
+    // Projection side untouched: log.json still shows the pre-update status.
+    const projected = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    assert.equal(projected.phases[0].status, 'WAITING');
+
+    // Dispatch deferred: the adapter runner never fired.
+    assert.equal(adapterCalls.length, 0);
+
+    // Repair rebuilds the projection without emitting a new event.
+    const repaired = logCmd.run({ sub: 'update', positionals: [planDir, phaseFile, 'REVIEW'], adapterRunner });
+    assert.equal(repaired.command, 'log update');
+    const doc2 = JSON.parse(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'));
+    assert.equal(doc2.events.length, 4, 'repair must not emit a second event');
+    const projected2 = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    assert.equal(projected2.phases[0].status, 'REVIEW');
+    assert.equal(adapterCalls.length, 1, 'adapter runs only once the projection succeeds');
+    assert.equal(adapterCalls[0].event.event_id, 'plan-70:phase-complete:r4');
+  } finally {
+    delete process.env.POCKETTO_LIFECYCLE_NOW;
+  }
+});
+
+test('CYCLE 5: log close projection failure returns PROJECTION_REPAIR_REQUIRED with closure durable and dispatch deferred', { skip: !hasGit() }, () => {
+  const logCmd = require('../cli/commands/log');
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-projection-close-'));
+  const planDir = path.join(root, 'plan-71');
+  mkdirSync(planDir, { recursive: true });
+  const execDir = path.join(planDir, 'execution-plan');
+  mkdirSync(execDir, { recursive: true });
+  writeFileSync(path.join(planDir, 'execution-plan.md'), '# Execution Plan\n\n### Task 1: First\n\nBody.\n\n### Task 2: Second\n\nBody.\n');
+  writeFileSync(path.join(execDir, 'index.md'), '# Plan Index\n\n**Source Plan:** ../execution-plan.md\n');
+  const phase1 = '# Phase 1\n\n### Task 1: First\n\nWork done.\n';
+  const phase2 = '# Phase 2\n\n### Task 2: Second\n\nWork done.\n';
+  writeFileSync(path.join(execDir, 'phase-1.md'), phase1);
+  writeFileSync(path.join(execDir, 'phase-2.md'), phase2);
+  const specContent = 'approved spec content\n';
+  writeFileSync(path.join(planDir, 'spec-doc.md'), specContent);
+
+  gitIn(planDir, ['init', '-q']);
+  gitIn(planDir, ['config', 'user.email', 'test@example.com']);
+  gitIn(planDir, ['config', 'user.name', 'Test']);
+  gitIn(planDir, ['config', 'commit.gpgsign', 'false']);
+  gitIn(planDir, ['add', '-A']);
+  gitIn(planDir, ['commit', '-q', '-m', 'plan snapshot']);
+  gitIn(planDir, ['checkout', '-q', '-b', 'feature/issue-71']);
+
+  run(['log', 'init', planDir, '--json', '--contract', '3']);
+
+  const log0 = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+  const files = log0.phases.map((p) => p.file);
+  assert.deepEqual(files, ['execution-plan/phase-1.md', 'execution-plan/phase-2.md']);
+
+  // Seed revision 1 through the real store with a deterministic clock.
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const seeded = commitTransition({
+    specDir: planDir, planDir: null, planId: 'plan-71', type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha256Hex(specContent), revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seeded.ok, true, `seed commit should succeed: ${JSON.stringify(seeded)}`);
+
+  // Doubles: fake ONLY the projection writer (fails) and the adapter runner
+  // (records). Lifecycle persistence stays real.
+  const adapterCalls = [];
+  const adapterRunner = (invocation) => {
+    adapterCalls.push(invocation);
+    return { attempted: true, deferred: false, reason: 'fake-adapter-recorded' };
+  };
+  const failingProjection = () => {
+    throw new Error('injected projection failure');
+  };
+
+  process.env.POCKETTO_LIFECYCLE_NOW = FIXED_CLOCK;
+  try {
+    // Every phase eligible for closure (revisions 2..3 through the real CLI).
+    for (const f of files) {
+      const r = json(['log', 'update', planDir, f, 'REVIEW', '--json', '--contract', '3']);
+      assert.equal(r.ok, true);
+      const d = json(['log', 'update', planDir, f, 'DONE', '--json', '--contract', '3']);
+      assert.equal(d.ok, true);
+    }
+
+    let thrown = null;
+    try {
+      logCmd.run({ sub: 'close', positionals: [planDir], projectionWriter: failingProjection, adapterRunner });
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'projection failure must raise instead of reporting success');
+    assert.equal(thrown.code, 'PROJECTION_REPAIR_REQUIRED');
+    assert.deepEqual(thrown.details, {
+      event_id: 'plan-71:plan-closed:r4',
+      revision: 4,
+      lifecycle_committed: true,
+      dispatch_deferred: true,
+    });
+    assert.match(thrown.message, /plan-71:plan-closed:r4/);
+
+    // Authoritative side durable: the closure event is committed and pending
+    // even though the projection never wrote.
+    const doc = JSON.parse(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'));
+    const closures = doc.events.filter((e) => e.type === 'plan-closed');
+    assert.equal(closures.length, 1, 'close must record exactly one plan-closed event');
+    assert.equal(closures[0].event_id, 'plan-71:plan-closed:r4');
+    assert.equal(closures[0].revision, 4);
+    assert.equal(closures[0].delivery.status, 'pending');
+    assert.equal(doc.plan.revision, 4);
+    assert.equal(doc.plan.state.status, 'DONE');
+
+    // Projection side untouched: log.json still shows the pre-close status.
+    const projected = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    assert.notEqual(projected.header.status, 'DONE');
+
+    // Dispatch deferred: the adapter runner never fired.
+    assert.equal(adapterCalls.length, 0);
+
+    // Repair rebuilds the projection without emitting a new event.
+    const repaired = logCmd.run({ sub: 'close', positionals: [planDir], adapterRunner });
+    assert.equal(repaired.command, 'log close');
+    const doc2 = JSON.parse(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'));
+    assert.equal(doc2.events.filter((e) => e.type === 'plan-closed').length, 1, 'repair must not emit a second closure event');
+    const projected2 = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    assert.equal(projected2.header.status, 'DONE');
+    assert.equal(adapterCalls.length, 1, 'adapter runs only once the projection succeeds');
+    assert.equal(adapterCalls[0].event.event_id, 'plan-71:plan-closed:r4');
+  } finally {
+    delete process.env.POCKETTO_LIFECYCLE_NOW;
+  }
+});

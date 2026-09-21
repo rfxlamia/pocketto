@@ -9,7 +9,7 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { writeLog, todayISO, readLogChecked } = require('../lib/logjson');
-const { emitPhaseCompleteIfReview, emitPlanClosedIfDone } = require('../lib/lifecycle-transition');
+const { runPhaseUpdateTransition, runPlanCloseTransition } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 const { PIPELINE } = require('../lib/version');
 
@@ -416,7 +416,7 @@ function findPhaseInLog(log, phaseFileArg) {
 
 // ─── UPDATE ─────────────────────────────────────────────────────────────────
 
-function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSha = false } = {}) {
+function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSha = false, projectionWriter = null, adapterRunner = null } = {}) {
   if (positionals.length !== 3) {
     throw new CliError(
       'USAGE',
@@ -564,18 +564,21 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     };
   } else {
     const oldStatus = phase.status;
-    phase.status = newStatus;
-    writeLog(logPath, log);
-    // Cycle 2: the lifecycle store owns persistence — `log update` only adds
-    // the REVIEW-only emission hook (coordinator logic stays in
-    // cli/lib/lifecycle-transition.js). Existing status/SHA rules above are
-    // unchanged, including REVIEW→DONE which emits nothing.
-    emitPhaseCompleteIfReview({
+    // Cycle 5: commit-before-project — the coordinator commits the
+    // authoritative lifecycle event FIRST, then projects log.json, then
+    // dispatches. `mutate` applies the status change to the in-memory log
+    // before either. Existing status rules above are unchanged, including
+    // REVIEW→DONE which emits nothing.
+    runPhaseUpdateTransition({
       planDir,
+      logPath,
+      log,
       phaseFile: phase.file,
       level: 'phase',
       oldStatus,
       newStatus,
+      mutate: () => { phase.status = newStatus; },
+      deps: { projectionWriter, adapterRunner },
     });
     human = [`Updated ${phase.file}: ${oldStatus} → ${newStatus}`];
     data = { planDir, phaseFile: phase.file, level: 'phase', oldStatus, newStatus };
@@ -741,7 +744,7 @@ function recordCorrection(positionals, sha, forTask) {
 
 // ─── CLOSE ──────────────────────────────────────────────────────────────────
 
-function close(positionals) {
+function close(positionals, { projectionWriter = null, adapterRunner = null } = {}) {
   if (positionals.length !== 1) {
     throw new CliError('USAGE', 'Usage: pocketto-pi log close <plan_dir>');
   }
@@ -763,16 +766,22 @@ function close(positionals) {
     );
   }
 
-  log.header.status = 'DONE';
-  log.header.date_completed = todayISO();
-  writeLog(logPath, log);
-  // Cycle 3: the lifecycle store owns persistence — `log close` only adds
-  // the DONE-only emission hook (coordinator logic stays in
-  // cli/lib/lifecycle-transition.js). Plans without a matching lifecycle
-  // document keep existing v3 close behavior untouched.
-  emitPlanClosedIfDone({
+  // Cycle 5: commit-before-project — the coordinator commits the
+  // authoritative plan-closed event FIRST, then projects log.json, then
+  // dispatches. `mutate` applies the closure to the in-memory log before
+  // either. Plans without a matching lifecycle document keep existing v3
+  // close behavior untouched.
+  const phaseFiles = log.phases.map((p) => p.file);
+  runPlanCloseTransition({
     planDir,
-    phaseFiles: log.phases.map((p) => p.file),
+    logPath,
+    log,
+    phaseFiles,
+    mutate: () => {
+      log.header.status = 'DONE';
+      log.header.date_completed = todayISO();
+    },
+    deps: { projectionWriter, adapterRunner },
   });
 
   const human = [
@@ -800,7 +809,7 @@ function close(positionals) {
 
 // ─── DISPATCH ───────────────────────────────────────────────────────────────
 
-function run({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha }) {
+function run({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha, projectionWriter = null, adapterRunner = null }) {
   if (sub === 'init') return init(positionals);
   if (sub === 'update') {
     if (correction) {
@@ -809,9 +818,9 @@ function run({ sub, positionals, task, correction, forTask, sha, allowDuplicateS
       }
       return recordCorrection(positionals, correction, forTask);
     }
-    return update(positionals, task, { sha, allowDuplicateSha });
+    return update(positionals, task, { sha, allowDuplicateSha, projectionWriter, adapterRunner });
   }
-  if (sub === 'close') return close(positionals);
+  if (sub === 'close') return close(positionals, { projectionWriter, adapterRunner });
   throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'log' subcommand: ${sub || '(none)'}. Use init | update | close.`);
 }
 

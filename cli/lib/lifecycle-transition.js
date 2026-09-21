@@ -19,6 +19,7 @@ const { CliError } = require('./envelope');
 const { EVENT_TYPES } = require('./lifecycle-contract');
 const { commitTransition, readLifecycleDoc, lifecyclePathFor } = require('./lifecycle-store');
 const { writeFileAtomicSync } = require('./atomic-file');
+const { writeProjection: defaultWriteProjection } = require('./logjson');
 
 // Parses one `--artifact <root>:<kind>:<relative-path>:<sha256>` flag value.
 // The relative path may itself contain ':' — it is everything between kind
@@ -148,13 +149,16 @@ function planIdForLog(planDir) {
 
 // Emission hook for `log update`: commits exactly one `phase-complete` event
 // when a phase-level (not task-level) update moves a phase INTO REVIEW, and
-// nothing otherwise. Called by `cli/commands/log.js` AFTER the log.json
-// projection write — Core commits the authoritative event, then stamps the
-// captured branch onto the lifecycle document (T2 store owns persistence;
-// lifecycle.json itself is rewritten atomically here via the shared atomic
-// writer). Fail-closed by construction: any emission failure surfaces as a
-// CliError and the projection write has already succeeded, so log.json is
-// never left half-written.
+// nothing otherwise. Called by `cli/commands/log.js` BEFORE the log.json
+// projection write — Core commits the authoritative event FIRST, then the
+// caller projects log.json; a projection failure surfaces as
+// PROJECTION_REPAIR_REQUIRED with the commit durable, the event pending,
+// and dispatch deferred (never dispatched on a failed projection).
+// Lifecycle persistence stays with the T2 store; lifecycle.json itself is
+// rewritten atomically here via the shared atomic writer for branch
+// capture. Fail-closed by construction: any emission failure surfaces as a
+// CliError and the projection write never happens, so log.json is never
+// left ahead of the authoritative document.
 //
 // Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
 function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus }) {
@@ -212,11 +216,13 @@ function stampBranch(planDir, planId, branch) {
 
 // Emission hook for `log close`: commits exactly one `plan-closed` event
 // when every phase is DONE, and nothing otherwise. Called by
-// `cli/commands/log.js` AFTER the log.json projection write — Core commits
-// the authoritative event, then stamps the captured branch onto the
-// lifecycle document. Fail-closed by construction: any emission failure
-// surfaces as a CliError and the projection write has already succeeded,
-// so log.json is never left half-written.
+// `cli/commands/log.js` BEFORE the log.json projection write — Core commits
+// the authoritative event FIRST, then the caller projects log.json; a
+// projection failure surfaces as PROJECTION_REPAIR_REQUIRED with the commit
+// durable, the event pending, and dispatch deferred. Fail-closed by
+// construction: any emission failure surfaces as a CliError and the
+// projection write never happens, so log.json is never left ahead of the
+// authoritative document.
 //
 // Guard: only plans already carrying a matching lifecycle document
 // participate (same v3-preservation rule as cycle 2) — v3-only plans keep
@@ -257,4 +263,110 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
   return res.event;
 }
 
-module.exports = { parseArtifactFlag, planIdFor, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone };
+// Runs the adapter runner for a committed event exactly once the projection
+// write has succeeded. Never invoked on a projection failure — the event
+// stays pending with dispatch deferred. The default runner keeps the Cycle-6
+// local-first behavior (no adapter registration → deferred, zero remote
+// work); the override exists only for failure injection in tests.
+function dispatchCommittedEvent(event, { adapterRunner = defaultDispatchRunner } = {}) {
+  return adapterRunner({ event });
+}
+
+function defaultDispatchRunner() {
+  return decideDispatch();
+}
+
+// State-changing orchestration for `log update` (phase-level) and
+// `log close`: commit the authoritative lifecycle event FIRST, write the
+// derived `log.json` projection SECOND, dispatch LAST. A projection failure
+// throws the stable repair error with the commit durable and dispatch
+// deferred; dispatch never runs on a failed projection.
+//
+// `prepare` mutates the in-memory `log` object (the caller owns the
+// projection content); `commit` emits the authoritative event and returns
+// the committed event or null when no transition applies; `write` projects
+// log.json (defaults to the explicit projection writer); `dispatch` runs
+// the adapter (defaults to the deferred local-first runner).
+// Successful transitions return `{ event, dispatch }`; no-op transitions
+// return `{ event: null, dispatch: { attempted: false, deferred: true,
+// reason: 'no-transition' } }`.
+function runLifecycleTransition({ planDir, logPath, log, prepare, commit, write = defaultWriteProjection, dispatch = dispatchCommittedEvent } = {}) {
+  if (typeof prepare === 'function') prepare();
+  const event = typeof commit === 'function' ? commit() : null;
+  if (!event) {
+    write(logPath, log);
+    return { event: null, dispatch: { attempted: false, deferred: true, reason: 'no-transition' } };
+  }
+  try {
+    write(logPath, log);
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    const repair = new CliError(
+      'PROJECTION_REPAIR_REQUIRED',
+      `projection write failed for ${event.event_id} (revision ${event.revision}): ${detail}. ` +
+        `Lifecycle commit is durable; event remains pending with dispatch deferred. ` +
+        `Re-run the command to rebuild the log.json projection without a new event.`,
+      {
+        exitCode: 1,
+        human: [
+          `Projection write failed for ${event.event_id} (revision ${event.revision}): ${detail}.`,
+          `Lifecycle commit is durable; event remains pending with dispatch deferred.`,
+          `Re-run the command to rebuild the log.json projection without a new event.`,
+        ].join('\n'),
+      },
+    );
+    repair.details = {
+      event_id: event.event_id,
+      revision: event.revision,
+      lifecycle_committed: true,
+      dispatch_deferred: true,
+    };
+    throw repair;
+  }
+  return { event, dispatch: dispatch(event) };
+}
+
+// Shared commit→project→dispatch wiring: resolves the injectable
+// projection writer and adapter runner (null means "use the default").
+function transitionDeps(deps = {}) {
+  return {
+    write: deps.projectionWriter || defaultWriteProjection,
+    dispatch: deps.adapterRunner
+      ? (event) => dispatchCommittedEvent(event, { adapterRunner: deps.adapterRunner })
+      : dispatchCommittedEvent,
+  };
+}
+
+// Commit-first `log update` orchestration: emits the authoritative
+// phase-complete event, then projects the REVIEW status into log.json, then
+// dispatches. `mutate` applies the status change to the in-memory log.
+// No-op statuses (non-phase, non-REVIEW, repeated REVIEW, v3-only plans)
+// still project log.json and report `{ event: null }`.
+function runPhaseUpdateTransition({ planDir, logPath, log, phaseFile, level, oldStatus, newStatus, mutate, deps = {} } = {}) {
+  return runLifecycleTransition({
+    planDir,
+    logPath,
+    log,
+    prepare: mutate,
+    commit: () => emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus }),
+    ...transitionDeps(deps),
+  });
+}
+
+// Commit-first `log close` orchestration: emits the authoritative plan-closed
+// event, then projects the DONE status into log.json, then dispatches.
+// `mutate` applies the closure to the in-memory log. No-op closes (v3-only
+// plans, replayed closures) still project log.json and report
+// `{ event: null }`.
+function runPlanCloseTransition({ planDir, logPath, log, phaseFiles, mutate, deps = {} } = {}) {
+  return runLifecycleTransition({
+    planDir,
+    logPath,
+    log,
+    prepare: mutate,
+    commit: () => emitPlanClosedIfDone({ planDir, phaseFiles }),
+    ...transitionDeps(deps),
+  });
+}
+
+module.exports = { parseArtifactFlag, planIdFor, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent };
