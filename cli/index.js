@@ -26,13 +26,67 @@ const { CLI_VERSION, CONTRACT } = require('./lib/version');
 const structure = require('./commands/structure');
 const log = require('./commands/log');
 const lifecycle = require('./commands/lifecycle');
-const meta = require('./commands/meta');
 const doctor = require('./commands/doctor');
-const mode = require('./commands/mode');
 const setupExtensions = require('./commands/setup-extensions');
-const format = require('./commands/format');
 const reconcile = require('./commands/reconcile');
 const scaffold = require('./commands/scaffold');
+
+// Core-safe lazy command registry (T3 cycle 4; boundary declared by the T5
+// manifest `cli_boundary`): Enterprise-only command modules (`mode`, `meta`,
+// `format`) must never break Core startup when absent from a Core role. They
+// load on first use through `loadEnterpriseCommand`, which treats ONLY
+// "module not found for the target path" as "not installed" — any other
+// error (syntax error, missing nested dependency, throw at require time)
+// propagates unchanged so real breakage is never misreported as missing.
+//
+// Enterprise installs may override resolution explicitly via
+// `registerEnterpriseCommand(name, loader)`; the default loader resolves the
+// sibling `./commands/<name>` module. Core commands above stay eagerly
+// required: they are present in every role.
+const enterpriseRegistry = new Map();
+
+function registerEnterpriseCommand(name, loader) {
+  if (typeof loader !== 'function') {
+    throw new TypeError(`registerEnterpriseCommand('${name}') requires a loader function.`);
+  }
+  enterpriseRegistry.set(name, loader);
+}
+
+// `require.resolve` probes existence WITHOUT populating the require cache,
+// so a genuinely missing Enterprise module leaves no cache residue, while a
+// present-but-broken module still throws its real error from `require`.
+function loadCommandModule(spec) {
+  let resolved;
+  try {
+    resolved = require.resolve(spec);
+  } catch (err) {
+    if (err && err.code === 'MODULE_NOT_FOUND') return null;
+    throw err;
+  }
+  return require(resolved);
+}
+
+const ENTERPRISE_SPECS = {
+  mode: './commands/mode',
+  meta: './commands/meta',
+  format: './commands/format',
+};
+
+function loadEnterpriseCommand(name) {
+  if (enterpriseRegistry.has(name)) return enterpriseRegistry.get(name)();
+  return loadCommandModule(ENTERPRISE_SPECS[name]);
+}
+
+function requireEnterpriseCommand(name) {
+  const mod = loadEnterpriseCommand(name);
+  if (!mod) {
+    throw new CliError(
+      'ENTERPRISE_COMMAND_UNAVAILABLE',
+      `'${name}' is not available in this Core installation (Enterprise-only command).`,
+    );
+  }
+  return mod;
+}
 
 function parseArgs(argv) {
   const positionals = [];
@@ -255,13 +309,13 @@ function main() {
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'meta') {
-      const metaResult = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
+      const metaResult = requireEnterpriseCommand('meta').run({ sub: positionals[1], positionals: positionals.slice(2) });
       emitSuccess(metaResult.command, metaResult, flags.json);
     } else if (command === 'doctor') {
       const result = doctor.run({ strict: flags.strict });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'mode') {
-      const result = mode.run({
+      const result = requireEnterpriseCommand('mode').run({
         positionals: positionals.slice(1),
         enterprise: flags.enterprise,
         branchStrategy: flags.branchStrategy,
@@ -271,7 +325,7 @@ function main() {
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'format') {
-      const result = format.run({ kind: positionals[1], inputPath: flags.input, positionals: positionals.slice(2) });
+      const result = requireEnterpriseCommand('format').run({ kind: positionals[1], inputPath: flags.input, positionals: positionals.slice(2) });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'scaffold') {
       const result = scaffold.run({ target: positionals[1], targetDir: positionals[2], dryRun: flags.dryRun });
@@ -290,4 +344,8 @@ function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { parseArgs, registerEnterpriseCommand, loadEnterpriseCommand };

@@ -6,7 +6,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } = require('node:fs');
+const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, cpSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
@@ -281,4 +281,77 @@ test('CYCLE 3: log close commits one plan-closed event atomically with DONE; rep
   assert.equal(existsSync(path.join(v3Dir, 'lifecycle.json')), false, 'v3 close must not create a lifecycle document');
   const v3after = JSON.parse(readFileSync(path.join(v3Dir, 'log.json'), 'utf8'));
   assert.equal(v3after.header.status, 'DONE');
+});
+
+test('CYCLE 4: Core CLI starts without Enterprise-only modules', () => {
+  // Local fixture: Enterprise-only command modules staged OUT of the Core
+  // role. Final module ownership follows the T5 manifest — this list is a
+  // test-local statement of the Core surface, not a reclassification.
+  const ENTERPRISE_ONLY = ['mode.js', 'meta.js', 'format.js'];
+  const repoRoot = path.join(__dirname, '..');
+  const roleDir = mkdtempSync(path.join(tmpdir(), 'core-role-'));
+  const stagedCli = path.join(roleDir, 'cli');
+  cpSync(path.join(repoRoot, 'cli'), stagedCli, { recursive: true });
+  for (const name of ENTERPRISE_ONLY) {
+    rmSync(path.join(stagedCli, 'commands', name));
+  }
+  assert.ok(!existsSync(path.join(stagedCli, 'commands', 'mode.js')));
+  assert.ok(!existsSync(path.join(stagedCli, 'commands', 'meta.js')));
+  assert.ok(!existsSync(path.join(stagedCli, 'commands', 'format.js')));
+
+  // Module-load recorder: records every module load in the child without
+  // stubbing anything; the staged CLI under test is unmodified.
+  const recorderPath = path.join(roleDir, 'load-recorder.js');
+  writeFileSync(recorderPath, `'use strict';
+const Module = require('node:module');
+const loads = [];
+const origLoad = Module._load;
+Module._load = function (request, parent, isMain) {
+  loads.push(request);
+  return origLoad.call(this, request, parent, isMain);
+};
+process.on('exit', () => {
+  try { require('node:fs').writeFileSync(process.env.CORE_ROLE_LOADS, JSON.stringify(loads)); } catch {}
+});
+`);
+  const loadsPath = path.join(roleDir, 'loads.json');
+  writeFileSync(loadsPath, '[]');
+
+  const stagedEntry = path.join(stagedCli, 'index.js');
+  const runStaged = (args) => execFileSync('node', ['-r', recorderPath, stagedEntry, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, CORE_ROLE_LOADS: loadsPath },
+  });
+
+  // Core CLI starts successfully: --version needs no Enterprise module.
+  const versionOut = runStaged(['--version']);
+  assert.match(versionOut, /pocketto-pi/);
+
+  // Neutral lifecycle dispatch needs no Enterprise policy or GitHub metadata.
+  const specDir = path.join(roleDir, 'demo-plan');
+  mkdirSync(specDir, { recursive: true });
+  const content = 'approved spec content\n';
+  writeFileSync(path.join(specDir, 'spec-doc.md'), content);
+  const sha = sha256Hex(content);
+  const envOut = runStaged([
+    'lifecycle', 'transition', specDir, 'spec-approved',
+    '--artifact', `spec:spec-doc:spec-doc.md:${sha}`,
+    '--json', '--contract', '3',
+  ]);
+  const env = JSON.parse(envOut.trim());
+  assert.equal(env.ok, true);
+  assert.equal(env.command, 'lifecycle transition');
+  assert.equal(env.data.event_id, 'demo-plan:spec-approved:r1');
+  assert.ok(existsSync(path.join(specDir, 'lifecycle.json')));
+
+  // Only the neutral command registry loaded; Enterprise policy / GitHub
+  // metadata modules were never required.
+  const loads = JSON.parse(readFileSync(loadsPath, 'utf8'));
+  const required = (mod) => loads.some((r) => r === mod || r.endsWith(`/${mod}`) || r.endsWith(`\\${mod}`));
+  for (const name of ENTERPRISE_ONLY) {
+    assert.ok(!required(`commands/${name}`), `Enterprise-only module must not load: ${name}`);
+    assert.ok(!required(name), `Enterprise-only module must not load: ${name}`);
+  }
+  assert.ok(!loads.some((r) => r.includes('enterprise')), 'Enterprise policy modules must not load');
+  assert.ok(required('./commands/lifecycle') || required('lifecycle'), 'neutral lifecycle registry must load');
 });
