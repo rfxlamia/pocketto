@@ -4,7 +4,7 @@
 // Then it contains exactly pi/core, pi/enterprise, claude/core, claude/enterprise,
 // each with explicit includes/requires/forbidden_paths/forbidden_content;
 // Enterprise roles require matching Core roles, no role relies on skills/**,
-// and ownership classifies the 8 named CLI modules.
+// and ownership classifies the 10 named CLI modules.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -29,6 +29,8 @@ const NAMED_CLI_MODULES = [
   'cli/lib/bodies.js',
   'cli/lib/identity.js',
   'cli/lib/reconcile.js',
+  'cli/commands/lifecycle.js',
+  'cli/lib/lifecycle-transition.js',
 ];
 
 function makeFixtureSource() {
@@ -106,6 +108,35 @@ test('manifest declares exactly four explicit roles with no wildcard package sur
   }
 
   assert.ok(manifest.cli_boundary, 'manifest must describe the lazy CLI boundary');
+});
+
+test('staged pi/core contains the lifecycle files and its entry starts', () => {
+  const { execFileSync: exec } = require('node:child_process');
+  // Stage from the real repo source (fixture trees hold placeholders that
+  // cannot be required), then demand the lifecycle files and a loadable
+  // staged entry: requiring the staged cli/index.js exercises the eager
+  // Core command graph (including lifecycle) without enterprise modules.
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 't5-core-entry-'));
+  try {
+    const out = path.join(parent, 'pi-core');
+    const stdout = exec(
+      'node',
+      [BUILDER, '--role', 'pi/core', '--output', out],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.ok(stdout.includes('staged pi/core'), 'role staging must report the staged role');
+    assert.ok(
+      fs.existsSync(path.join(out, 'cli/commands/lifecycle.js')),
+      'staged core must contain cli/commands/lifecycle.js',
+    );
+    assert.ok(
+      fs.existsSync(path.join(out, 'cli/lib/lifecycle-transition.js')),
+      'staged core must contain cli/lib/lifecycle-transition.js',
+    );
+    require(path.join(out, 'cli', 'index.js'));
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
 });
 
 test('scripts/build-surfaces.js validates the manifest against a fixture source tree', () => {
@@ -244,6 +275,14 @@ test('manifest staging rejects missing, duplicate, or forbidden fixture entries 
         list1.includes('cli/commands/log.js'),
         'core staging must include core-owned CLI modules',
       );
+      assert.ok(
+        list1.includes('cli/commands/lifecycle.js'),
+        'core staging must include the lifecycle command module',
+      );
+      assert.ok(
+        list1.includes('cli/lib/lifecycle-transition.js'),
+        'core staging must include the lifecycle transition module',
+      );
       // Restaging over an existing target replaces it atomically, same file set.
       exec('node', [BUILDER, '--role', 'pi/core', '--output', out1, '--source', src], {
         cwd: ROOT,
@@ -278,6 +317,8 @@ test('package metadata and role staging use v4 release inputs', () => {
       );
       assert.ok(stdout.includes('staged pi/core'), 'role staging must report the staged role');
       assert.ok(fs.existsSync(path.join(out, 'cli/commands/log.js')), 'staged core must carry core CLI modules');
+      assert.ok(fs.existsSync(path.join(out, 'cli/commands/lifecycle.js')), 'staged core must carry the lifecycle command module');
+      assert.ok(fs.existsSync(path.join(out, 'cli/lib/lifecycle-transition.js')), 'staged core must carry the lifecycle transition module');
       assert.ok(!fs.existsSync(path.join(out, 'skills/create-pr')), 'staged core must not carry the enterprise skill');
     } finally {
       fs.rmSync(src, { recursive: true, force: true });

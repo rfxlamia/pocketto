@@ -168,7 +168,7 @@ function validateManifestStructure(manifest) {
     errors.push('SURFACE_REQUIRES_INVALID: claude/core must require nothing.');
   }
 
-  // Explicit ownership classification for the eight named CLI modules.
+  // Explicit ownership classification for the ten named CLI modules.
   const requiredOwnership = [
     'cli/commands/mode.js',
     'cli/lib/mode.js',
@@ -178,6 +178,8 @@ function validateManifestStructure(manifest) {
     'cli/lib/bodies.js',
     'cli/lib/identity.js',
     'cli/lib/reconcile.js',
+    'cli/commands/lifecycle.js',
+    'cli/lib/lifecycle-transition.js',
   ];
   if (!isObject(manifest.ownership)) {
     errors.push('SURFACE_OWNERSHIP_INVALID: ownership must be an object.');

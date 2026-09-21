@@ -33,6 +33,7 @@
     "cli/lib/surface-manifest.js",
     "cli/commands/log.js",
     "cli/commands/doctor.js",
+    "cli/commands/lifecycle.js",
     "cli/commands/meta.js",
     "cli/commands/reconcile.js",
     "cli/commands/scaffold.js",
