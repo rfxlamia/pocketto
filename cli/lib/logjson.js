@@ -39,6 +39,15 @@ function writeLog(logPath, log) {
   writeFileSync(logPath, JSON.stringify(log, null, 2) + '\n');
 }
 
+// Explicit projection writer: `log.json` is a derived, repairable
+// projection of the authoritative lifecycle document — never the authority
+// itself. All lifecycle-coupled writes go through here (single writer for
+// log.json); the optional `writer` override exists only for failure
+// injection in tests.
+function writeProjection(logPath, log, { writer = writeLog } = {}) {
+  writer(logPath, log);
+}
+
 // Local-time YYYY-MM-DD, matching Python date.today().isoformat().
 function todayISO() {
   const d = new Date();
@@ -48,4 +57,4 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
-module.exports = { readLog, writeLog, todayISO, assertPipeline, readLogChecked };
+module.exports = { readLog, writeLog, writeProjection, todayISO, assertPipeline, readLogChecked };
