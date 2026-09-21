@@ -11,9 +11,13 @@
 // GitHub IDs, credentials, or Enterprise policy.
 
 const path = require('node:path');
+const { readFileSync } = require('node:fs');
+const { createHash } = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 const { CliError } = require('./envelope');
 const { EVENT_TYPES } = require('./lifecycle-contract');
-const { commitTransition } = require('./lifecycle-store');
+const { commitTransition, readLifecycleDoc, lifecyclePathFor } = require('./lifecycle-store');
+const { writeFileAtomicSync } = require('./atomic-file');
 
 // Parses one `--artifact <root>:<kind>:<relative-path>:<sha256>` flag value.
 // The relative path may itself contain ':' — it is everything between kind
@@ -98,4 +102,97 @@ function decideDispatch() {
   return { attempted: false, deferred: true, reason: 'no-adapter-registration' };
 }
 
-module.exports = { parseArtifactFlag, planIdFor, runTransition };
+// Deterministic clock for tests: POCKETTO_LIFECYCLE_NOW pins `occurred_at`.
+function lifecycleNow() {
+  return process.env.POCKETTO_LIFECYCLE_NOW || new Date().toISOString();
+}
+
+// Current git branch of a directory, or null when unavailable (never throws:
+// a missing repo cannot block the log.json projection write).
+function currentBranch(planDir) {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: planDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+function sha256Bytes(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+// Phase evidence is the phase file itself, referenced from the `plan` root.
+// Hashes the on-disk content directly (no git required), matching the T1/T2
+// sha256-hex contract.
+function phaseEvidenceRef(planDir, phaseFile) {
+  const bytes = readFileSync(path.join(planDir, phaseFile));
+  return { root: 'plan', kind: 'phase-evidence', path: phaseFile, sha256: sha256Bytes(bytes), revision: 1 };
+}
+
+// `plan_id` for a log-owned plan: the kebab-slug basename of the plan
+// directory, matching the Lifecycle Contract normative slug rule. Used only
+// for the `log update` emission hook; returns null when the plan directory
+// name is not a valid slug (a v3-only plan with no lifecycle identity —
+// emission is skipped so existing log behavior is unchanged).
+function planIdForLog(planDir) {
+  const slug = path.basename(path.resolve(planDir));
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null;
+  return slug;
+}
+
+// Emission hook for `log update`: commits exactly one `phase-complete` event
+// when a phase-level (not task-level) update moves a phase INTO REVIEW, and
+// nothing otherwise. Called by `cli/commands/log.js` AFTER the log.json
+// projection write — Core commits the authoritative event, then stamps the
+// captured branch onto the lifecycle document (T2 store owns persistence;
+// lifecycle.json itself is rewritten atomically here via the shared atomic
+// writer). Fail-closed by construction: any emission failure surfaces as a
+// CliError and the projection write has already succeeded, so log.json is
+// never left half-written.
+//
+// Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
+function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus }) {
+  if (level !== 'phase') return null;
+  if (newStatus !== 'REVIEW') return null;
+  if (oldStatus === 'REVIEW') return null;
+  // v3-only plans (no lifecycle identity or no lifecycle document) keep
+  // existing `log update` behavior untouched: no event, no error, no new
+  // file. Only plans already carrying a lifecycle document participate.
+  const planId = planIdForLog(planDir);
+  if (!planId) return null;
+  const existing = readLifecycleDoc(planDir);
+  if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  const artifacts = [phaseEvidenceRef(planDir, phaseFile)];
+  const res = commitTransition({
+    specDir: planDir,
+    planDir,
+    planId,
+    type: 'phase-complete',
+    artifacts,
+    deps: { now: lifecycleNow },
+  });
+  if (!res.ok) {
+    throw new CliError(res.code, res.message);
+  }
+  // Capture the current branch on the committed document: the emission is
+  // the point where Core observes delivery context. Idempotent with respect
+  // to the event journal — the event itself is already committed, so a
+  // no-op replay (identical payload) still stamps the branch.
+  const branch = currentBranch(planDir);
+  if (branch) {
+    const doc = readLifecycleDoc(planDir);
+    if (doc && doc.plan && doc.plan.plan_id === planId && doc.plan.branch !== branch) {
+      doc.plan.branch = branch;
+      doc.plan.plan_dir = planDir;
+      writeFileAtomicSync(lifecyclePathFor(planDir), `${JSON.stringify(doc, null, 2)}\n`);
+    }
+  }
+  return res.event;
+}
+
+module.exports = { parseArtifactFlag, planIdFor, runTransition, emitPhaseCompleteIfReview };

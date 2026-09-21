@@ -9,6 +9,7 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { writeLog, todayISO, readLogChecked } = require('../lib/logjson');
+const { emitPhaseCompleteIfReview } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 const { PIPELINE } = require('../lib/version');
 
@@ -565,6 +566,17 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     const oldStatus = phase.status;
     phase.status = newStatus;
     writeLog(logPath, log);
+    // Cycle 2: the lifecycle store owns persistence — `log update` only adds
+    // the REVIEW-only emission hook (coordinator logic stays in
+    // cli/lib/lifecycle-transition.js). Existing status/SHA rules above are
+    // unchanged, including REVIEW→DONE which emits nothing.
+    emitPhaseCompleteIfReview({
+      planDir,
+      phaseFile: phase.file,
+      level: 'phase',
+      oldStatus,
+      newStatus,
+    });
     human = [`Updated ${phase.file}: ${oldStatus} → ${newStatus}`];
     data = { planDir, phaseFile: phase.file, level: 'phase', oldStatus, newStatus };
   }
