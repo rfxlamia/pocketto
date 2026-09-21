@@ -1,0 +1,232 @@
+{
+  "schema": 1,
+  "release": {
+    "major": 4
+  },
+  "roles": {
+    "pi/core": {
+      "host": "pi",
+      "kind": "core",
+      "includes": [
+        "skills/brand-design/**",
+        "skills/bug-hunting/**",
+        "skills/hotfix/**",
+        "skills/pocket-closing/**",
+        "skills/pocket-development/SKILL.md",
+        "skills/pocket-development/pocket-development.skill",
+        "skills/pocket-development/.skillkit-mode",
+        "skills/pocket-development/references/code-quality-review.md",
+        "skills/pocket-development/references/entry-gate.md",
+        "skills/pocket-development/references/iron-laws.md",
+        "skills/pocket-development/references/phase-level-pass.md",
+        "skills/pocket-development/references/pocket-packet.md",
+        "skills/pocket-development/references/review-report-template.md",
+        "skills/pocket-development/references/sandwich-prompt.md",
+        "skills/pocket-development/references/spec-compliance-review.md",
+        "skills/pocket-development/references/status-handling.md",
+        "skills/pocket-development/references/two-stage-review.md",
+        "skills/pocket-grinding/**",
+        "skills/pocket-help/**",
+        "skills/pocket-init/**",
+        "skills/pocket-pitching/**",
+        "skills/pocket-planning/**",
+        "skills/pocket-structuring/**",
+        "skills/structured-research/**",
+        "cli/index.js",
+        "cli/commands/log.js",
+        "cli/commands/doctor.js",
+        "cli/commands/meta.js",
+        "cli/commands/reconcile.js",
+        "cli/commands/scaffold.js",
+        "cli/commands/setup-extensions.js",
+        "cli/commands/structure.js",
+        "cli/lib/atomic-file.js",
+        "cli/lib/envelope.js",
+        "cli/lib/extensions.js",
+        "cli/lib/git.js",
+        "cli/lib/identity.js",
+        "cli/lib/lifecycle-contract.js",
+        "cli/lib/lifecycle-store.js",
+        "cli/lib/logjson.js",
+        "cli/lib/meta.js",
+        "cli/lib/reconcile.js",
+        "cli/lib/version.js",
+        "assets/**",
+        "llms.txt",
+        "README.md",
+        "LICENSE"
+      ],
+      "requires": [],
+      "forbidden_paths": [
+        "skills/create-pr/",
+        "skills/pocket-development/references/enterprise-reporting.md",
+        "cli/commands/mode.js",
+        "cli/lib/mode.js",
+        "cli/commands/format.js",
+        "cli/lib/bodies.js"
+      ],
+      "forbidden_content": [
+        "ENTERPRISE_ONLY_SURFACE"
+      ]
+    },
+    "pi/enterprise": {
+      "host": "pi",
+      "kind": "enterprise",
+      "includes": [
+        "skills/create-pr/**",
+        "skills/pocket-development/references/enterprise-reporting.md",
+        "cli/commands/mode.js",
+        "cli/lib/mode.js",
+        "cli/commands/format.js",
+        "cli/lib/bodies.js"
+      ],
+      "requires": [
+        "pi/core"
+      ],
+      "forbidden_paths": [
+        "skills/pocket-help/",
+        "skills/pocket-planning/",
+        "cli/index.js",
+        "cli/commands/log.js",
+        "cli/lib/logjson.js"
+      ],
+      "forbidden_content": [
+        "CORE_ONLY_SURFACE"
+      ]
+    },
+    "claude/core": {
+      "host": "claude",
+      "kind": "core",
+      "includes": [
+        "skills/brand-design/**",
+        "skills/bug-hunting/**",
+        "skills/hotfix/**",
+        "skills/pocket-closing/**",
+        "skills/pocket-development/SKILL.md",
+        "skills/pocket-development/pocket-development.skill",
+        "skills/pocket-development/.skillkit-mode",
+        "skills/pocket-development/references/code-quality-review.md",
+        "skills/pocket-development/references/entry-gate.md",
+        "skills/pocket-development/references/iron-laws.md",
+        "skills/pocket-development/references/phase-level-pass.md",
+        "skills/pocket-development/references/pocket-packet.md",
+        "skills/pocket-development/references/review-report-template.md",
+        "skills/pocket-development/references/sandwich-prompt.md",
+        "skills/pocket-development/references/spec-compliance-review.md",
+        "skills/pocket-development/references/status-handling.md",
+        "skills/pocket-development/references/two-stage-review.md",
+        "skills/pocket-grinding/**",
+        "skills/pocket-help/**",
+        "skills/pocket-init/**",
+        "skills/pocket-pitching/**",
+        "skills/pocket-planning/**",
+        "skills/pocket-structuring/**",
+        "skills/structured-research/**",
+        "cli/index.js",
+        "cli/commands/log.js",
+        "cli/commands/doctor.js",
+        "cli/commands/meta.js",
+        "cli/commands/reconcile.js",
+        "cli/commands/scaffold.js",
+        "cli/commands/setup-extensions.js",
+        "cli/commands/structure.js",
+        "cli/lib/atomic-file.js",
+        "cli/lib/envelope.js",
+        "cli/lib/extensions.js",
+        "cli/lib/git.js",
+        "cli/lib/identity.js",
+        "cli/lib/lifecycle-contract.js",
+        "cli/lib/lifecycle-store.js",
+        "cli/lib/logjson.js",
+        "cli/lib/meta.js",
+        "cli/lib/reconcile.js",
+        "cli/lib/version.js",
+        "assets/**",
+        "llms.txt",
+        "README.md",
+        "LICENSE"
+      ],
+      "requires": [],
+      "forbidden_paths": [
+        "skills/create-pr/",
+        "skills/pocket-development/references/enterprise-reporting.md",
+        "cli/commands/mode.js",
+        "cli/lib/mode.js",
+        "cli/commands/format.js",
+        "cli/lib/bodies.js"
+      ],
+      "forbidden_content": [
+        "ENTERPRISE_ONLY_SURFACE"
+      ]
+    },
+    "claude/enterprise": {
+      "host": "claude",
+      "kind": "enterprise",
+      "includes": [
+        "skills/create-pr/**",
+        "skills/pocket-development/references/enterprise-reporting.md",
+        "cli/commands/mode.js",
+        "cli/lib/mode.js",
+        "cli/commands/format.js",
+        "cli/lib/bodies.js"
+      ],
+      "requires": [
+        "claude/core"
+      ],
+      "forbidden_paths": [
+        "skills/pocket-help/",
+        "skills/pocket-planning/",
+        "cli/index.js",
+        "cli/commands/log.js",
+        "cli/lib/logjson.js"
+      ],
+      "forbidden_content": [
+        "CORE_ONLY_SURFACE"
+      ]
+    }
+  },
+  "ownership": {
+    "cli/index.js": "core",
+    "cli/commands/log.js": "core",
+    "cli/commands/doctor.js": "core",
+    "cli/commands/meta.js": "core",
+    "cli/commands/reconcile.js": "shared",
+    "cli/commands/scaffold.js": "core",
+    "cli/commands/setup-extensions.js": "core",
+    "cli/commands/structure.js": "core",
+    "cli/commands/mode.js": "enterprise",
+    "cli/commands/format.js": "enterprise",
+    "cli/lib/atomic-file.js": "core",
+    "cli/lib/envelope.js": "core",
+    "cli/lib/extensions.js": "core",
+    "cli/lib/git.js": "core",
+    "cli/lib/identity.js": "shared",
+    "cli/lib/lifecycle-contract.js": "core",
+    "cli/lib/lifecycle-store.js": "core",
+    "cli/lib/logjson.js": "core",
+    "cli/lib/meta.js": "core",
+    "cli/lib/mode.js": "enterprise",
+    "cli/lib/bodies.js": "enterprise",
+    "cli/lib/reconcile.js": "shared",
+    "cli/lib/version.js": "core"
+  },
+  "cli_boundary": {
+    "loader": "cli/index.js",
+    "lazy_commands": [
+      "mode",
+      "format"
+    ],
+    "enterprise_modules": [
+      "cli/commands/mode.js",
+      "cli/lib/mode.js",
+      "cli/commands/format.js",
+      "cli/lib/bodies.js"
+    ],
+    "shared_modules": [
+      "cli/commands/reconcile.js",
+      "cli/lib/identity.js",
+      "cli/lib/reconcile.js"
+    ],
+    "note": "Core starts without enterprise-only command modules; mode/format load lazily through this boundary."
+  }
+}
