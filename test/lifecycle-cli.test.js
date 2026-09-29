@@ -6,6 +6,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
 const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, cpSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { createHash } = require('node:crypto');
@@ -804,4 +805,84 @@ test('SUP-1: log lifecycle transitions keep the authoritative journal under spec
   assert.equal(doc.events[2].event_id, 'demo-plan:plan-closed:r3');
   assert.equal(doc.plan.state.status, 'DONE');
   assert.equal(existsSync(path.join(planDir, 'lifecycle.json')), false);
+});
+
+test('SUP-4: failed phase persistence cannot leave a durable event without branch evidence', { skip: !hasGit() }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-atomic-branch-'));
+  const projectDir = path.join(root, 'project');
+  const specDir = path.join(projectDir, 'docs', 'pocket', 'spec', 'demo-plan');
+  const planDir = path.join(projectDir, 'docs', 'pocket', 'plans', 'demo-plan');
+  const execDir = path.join(planDir, 'execution-plan');
+  mkdirSync(specDir, { recursive: true });
+  mkdirSync(execDir, { recursive: true });
+  const specContent = 'approved spec content\n';
+  const phaseContent = '# Phase 1\n\n### Task 1: First\n\nWork done.\n';
+  writeFileSync(path.join(specDir, 'approved-spec.md'), specContent);
+  writeFileSync(
+    path.join(execDir, 'index.md'),
+    '# Plan Index\n\n**Spec:** docs/pocket/spec/demo-plan/approved-spec.md\n',
+  );
+  writeFileSync(path.join(execDir, 'phase-1.md'), phaseContent);
+  gitIn(projectDir, ['init', '-q']);
+  gitIn(projectDir, ['config', 'user.email', 'test@example.com']);
+  gitIn(projectDir, ['config', 'user.name', 'Test']);
+  gitIn(projectDir, ['config', 'commit.gpgsign', 'false']);
+  gitIn(projectDir, ['add', '-A']);
+  gitIn(projectDir, ['commit', '-q', '-m', 'plan snapshot']);
+  gitIn(projectDir, ['checkout', '-q', '-b', 'feature/demo-plan']);
+
+  const { commitTransition, lifecyclePathFor } = require('../cli/lib/lifecycle-store');
+  const seeded = commitTransition({
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{
+      root: 'spec', kind: 'spec-doc', path: 'approved-spec.md',
+      sha256: sha256Hex(specContent), revision: 1,
+    }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seeded.ok, true, `spec approval should seed the canonical journal: ${JSON.stringify(seeded)}`);
+  const lifecyclePath = lifecyclePathFor(specDir);
+  const before = readFileSync(lifecyclePath, 'utf8');
+
+  // Fail only a replacement whose serialized snapshot contains both the new
+  // phase event and its required branch evidence.
+  const originalRenameSync = fs.renameSync;
+  let interruptedWrites = 0;
+  fs.renameSync = function (source, target) {
+    if (path.resolve(target) === path.resolve(lifecyclePath)) {
+      const candidate = JSON.parse(readFileSync(source, 'utf8'));
+      if (candidate.events.some((event) => event.type === 'phase-complete') && candidate.plan.branch) {
+        interruptedWrites += 1;
+        throw new Error('injected lifecycle replacement failure');
+      }
+    }
+    return originalRenameSync.call(fs, source, target);
+  };
+
+  try {
+    const transition = require('../cli/lib/lifecycle-transition');
+    assert.throws(() => transition.emitPhaseCompleteIfReview({
+      planDir,
+      phaseFile: 'execution-plan/phase-1.md',
+      level: 'phase',
+      oldStatus: 'WAITING',
+      newStatus: 'REVIEW',
+    }));
+  } finally {
+    fs.renameSync = originalRenameSync;
+  }
+
+  assert.equal(interruptedWrites, 1, 'the test must interrupt the branch-bearing lifecycle replacement');
+  assert.equal(
+    readFileSync(lifecyclePath, 'utf8'),
+    before,
+    'failed persistence must not leave the phase event committed without its branch evidence',
+  );
+  const doc = JSON.parse(before);
+  assert.equal(doc.events.length, 1);
+  assert.equal(doc.plan.revision, 1);
+  assert.equal(doc.plan.branch, null);
 });

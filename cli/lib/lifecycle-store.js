@@ -217,12 +217,12 @@ function validateArtifactOnDisk(ref, rootDir, deps) {
 }
 
 // Commits one logical lifecycle transition atomically.
-// Input: { specDir, planDir, planId, type, artifacts,
+// Input: { specDir, planDir, planId, type, artifacts, branch?,
 //          proofRef?, proofHash?, deps?: { now, stat, readFile, realpath, hashFile } }
 // Success: { ok, event, revision }. Failure: { ok:false, code, message }.
 // Failures leave `<spec_dir>/lifecycle.json` untouched (no partial success).
 function commitTransition(input) {
-  const { specDir, planDir, planId, type, artifacts } = input || {};
+  const { specDir, planDir, planId, type, artifacts, branch } = input || {};
   const deps = (input && input.deps) || {};
   const now = deps.now || (() => new Date().toISOString());
 
@@ -322,6 +322,10 @@ function commitTransition(input) {
   if (!valid.ok) return fail(valid.code, valid.message);
 
   applyStateSnapshot(doc, type);
+  if (type === 'phase-complete' && typeof branch === 'string' && branch.length > 0) {
+    doc.plan.branch = branch;
+    doc.plan.plan_dir = planDir;
+  }
   doc.plan.revision = revision;
   doc.events.push(event);
 
