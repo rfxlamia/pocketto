@@ -741,3 +741,67 @@ for (const m of methods) {
     delete process.env.POCKETTO_LIFECYCLE_NOW;
   }
 });
+
+test('SUP-1: log lifecycle transitions keep the authoritative journal under spec_dir', { skip: !hasGit() }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-separate-roots-'));
+  const projectDir = path.join(root, 'project');
+  const specDir = path.join(projectDir, 'docs', 'pocket', 'spec', 'demo-plan');
+  const planDir = path.join(projectDir, 'docs', 'pocket', 'plans', 'demo-plan');
+  const execDir = path.join(planDir, 'execution-plan');
+  mkdirSync(specDir, { recursive: true });
+  mkdirSync(execDir, { recursive: true });
+
+  const specContent = 'approved spec content\n';
+  const phaseContent = '# Phase 1\n\n### Task 1: First\n\nWork done.\n';
+  writeFileSync(path.join(specDir, 'approved-spec.md'), specContent);
+  writeFileSync(path.join(planDir, 'execution-plan.md'), '# Execution Plan\n\n### Task 1: First\n\nBody.\n');
+  writeFileSync(
+    path.join(execDir, 'index.md'),
+    '# Plan Index\n\n**Spec:** docs/pocket/spec/demo-plan/approved-spec.md\n**Source Plan:** ../execution-plan.md\n',
+  );
+  writeFileSync(path.join(execDir, 'phase-1.md'), phaseContent);
+
+  gitIn(projectDir, ['init', '-q']);
+  gitIn(projectDir, ['config', 'user.email', 'test@example.com']);
+  gitIn(projectDir, ['config', 'user.name', 'Test']);
+  gitIn(projectDir, ['config', 'commit.gpgsign', 'false']);
+  gitIn(projectDir, ['add', '-A']);
+  gitIn(projectDir, ['commit', '-q', '-m', 'plan snapshot']);
+  gitIn(projectDir, ['checkout', '-q', '-b', 'feature/demo-plan']);
+
+  run(['log', 'init', planDir, '--json', '--contract', '3']);
+  const log0 = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+  const phaseFile = log0.phases[0].file;
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const seeded = commitTransition({
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{
+      root: 'spec', kind: 'spec-doc', path: 'approved-spec.md',
+      sha256: sha256Hex(specContent), revision: 1,
+    }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seeded.ok, true, `spec approval should seed the canonical journal: ${JSON.stringify(seeded)}`);
+
+  const review = json(['log', 'update', planDir, phaseFile, 'REVIEW', '--json', '--contract', '3']);
+  assert.equal(review.ok, true);
+  let doc = JSON.parse(readFileSync(path.join(specDir, 'lifecycle.json'), 'utf8'));
+  assert.equal(doc.events.length, 2, 'phase completion should extend the journal stored at the spec root');
+  assert.equal(doc.events[1].event_id, 'demo-plan:phase-complete:r2');
+  assert.equal(doc.plan.spec_dir, specDir);
+  assert.equal(doc.plan.plan_dir, planDir);
+  assert.equal(existsSync(path.join(planDir, 'lifecycle.json')), false, 'plan_dir must not become a second journal');
+
+  const done = json(['log', 'update', planDir, phaseFile, 'DONE', '--json', '--contract', '3']);
+  assert.equal(done.ok, true);
+  const closed = json(['log', 'close', planDir, '--json', '--contract', '3']);
+  assert.equal(closed.ok, true);
+  doc = JSON.parse(readFileSync(path.join(specDir, 'lifecycle.json'), 'utf8'));
+  assert.equal(doc.events.length, 3, 'plan closure must update the same authoritative journal');
+  assert.equal(doc.events[2].event_id, 'demo-plan:plan-closed:r3');
+  assert.equal(doc.plan.state.status, 'DONE');
+  assert.equal(existsSync(path.join(planDir, 'lifecycle.json')), false);
+});

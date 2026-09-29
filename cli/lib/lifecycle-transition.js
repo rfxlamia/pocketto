@@ -86,7 +86,7 @@ function runTransition({ specDir, type, artifactFlags, planDir = null, deps = {}
     type,
     revision: res.revision,
     status: res.event.delivery.status,
-    plan_dir: res.event && planDir === undefined ? null : (planDir === undefined ? null : planDir),
+    plan_dir: planDir ?? null,
     dispatch,
   };
   const human = [
@@ -166,6 +166,30 @@ function planIdForLog(planDir) {
   return slug;
 }
 
+// Execution indexes retain the approved spec file reference. Resolve that
+// file from the plan's directory/ancestors so log transitions always find the
+// canonical `<spec_dir>/lifecycle.json`; legacy plans without a Spec field
+// keep their existing colocated-root behavior.
+function lifecycleSpecDirForPlan(planDir) {
+  const indexPath = path.join(planDir, 'execution-plan', 'index.md');
+  if (!existsSync(indexPath)) return planDir;
+  const index = readFileSync(indexPath, 'utf8');
+  const match = index.match(/^\*\*Spec:\*\*\s*(.+?)\s*$/m);
+  if (!match) return planDir;
+  const specFile = match[1].trim();
+  if (path.isAbsolute(specFile)) return path.dirname(specFile);
+
+  let candidateRoot = path.resolve(planDir);
+  while (true) {
+    const candidate = path.resolve(candidateRoot, specFile);
+    if (existsSync(candidate)) return path.dirname(candidate);
+    const parent = path.dirname(candidateRoot);
+    if (parent === candidateRoot) break;
+    candidateRoot = parent;
+  }
+  return path.dirname(path.resolve(specFile));
+}
+
 // Emission hook for `log update`: commits exactly one `phase-complete` event
 // when a phase-level (not task-level) update moves a phase INTO REVIEW, and
 // nothing otherwise. Called by `cli/commands/log.js` BEFORE the log.json
@@ -189,11 +213,12 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
   // file. Only plans already carrying a lifecycle document participate.
   const planId = planIdForLog(planDir);
   if (!planId) return null;
-  const existing = readLifecycleDoc(planDir);
+  const specDir = lifecycleSpecDirForPlan(planDir);
+  const existing = readLifecycleDoc(specDir);
   if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
   const artifacts = [phaseEvidenceRef(planDir, phaseFile)];
   const res = commitTransition({
-    specDir: planDir,
+    specDir,
     planDir,
     planId,
     type: 'phase-complete',
@@ -209,7 +234,7 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
   // no-op replay (identical payload) still stamps the branch.
   const branch = currentBranch(planDir);
   if (branch) {
-    stampBranch(planDir, planId, branch);
+    stampBranch(specDir, planDir, planId, branch);
   }
   return res.event;
 }
@@ -224,12 +249,12 @@ function closureEvidenceRefs(planDir, phaseFiles) {
 // Stamps the captured branch onto the committed lifecycle document (T2
 // store owns persistence; lifecycle.json itself is rewritten atomically
 // here via the shared atomic writer). No-op when the branch is unchanged.
-function stampBranch(planDir, planId, branch) {
-  const doc = readLifecycleDoc(planDir);
+function stampBranch(specDir, planDir, planId, branch) {
+  const doc = readLifecycleDoc(specDir);
   if (doc && doc.plan && doc.plan.plan_id === planId && doc.plan.branch !== branch) {
     doc.plan.branch = branch;
     doc.plan.plan_dir = planDir;
-    writeFileAtomicSync(lifecyclePathFor(planDir), `${JSON.stringify(doc, null, 2)}\n`);
+    writeFileAtomicSync(lifecyclePathFor(specDir), `${JSON.stringify(doc, null, 2)}\n`);
   }
 }
 
@@ -257,11 +282,12 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
   // file. Only plans already carrying a lifecycle document participate.
   const planId = planIdForLog(planDir);
   if (!planId) return null;
-  const existing = readLifecycleDoc(planDir);
+  const specDir = lifecycleSpecDirForPlan(planDir);
+  const existing = readLifecycleDoc(specDir);
   if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
   const artifacts = closureEvidenceRefs(planDir, phaseFiles);
   const res = commitTransition({
-    specDir: planDir,
+    specDir,
     planDir,
     planId,
     type: 'plan-closed',
@@ -277,7 +303,7 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
   // no-op replay (identical payload) still stamps the branch.
   const branch = currentBranch(planDir);
   if (branch) {
-    stampBranch(planDir, planId, branch);
+    stampBranch(specDir, planDir, planId, branch);
   }
   return res.event;
 }
@@ -310,7 +336,7 @@ function defaultDispatchRunner({ event } = {}) {
 // Successful transitions return `{ event, dispatch }`; no-op transitions
 // return `{ event: null, dispatch: { attempted: false, deferred: true,
 // reason: 'no-transition' } }`.
-function runLifecycleTransition({ planDir, logPath, log, prepare, commit, write = defaultWriteProjection, dispatch = dispatchCommittedEvent } = {}) {
+function runLifecycleTransition({ logPath, log, prepare, commit, write = defaultWriteProjection, dispatch = dispatchCommittedEvent } = {}) {
   if (typeof prepare === 'function') prepare();
   const event = typeof commit === 'function' ? commit() : null;
   if (!event) {
