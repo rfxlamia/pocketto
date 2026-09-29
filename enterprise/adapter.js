@@ -6,7 +6,7 @@
 // `gh` invocations, and ownership rules never appear in responses — only
 // opaque proof refs plus redacted diagnostics.
 
-const { validateAdapterResponse, EVENT_TYPES } = require('../cli/lib/lifecycle-contract');
+const { validateEvent, validateAdapterResponse, EVENT_TYPES } = require('../cli/lib/lifecycle-contract');
 const { redactSecrets } = require('./retry');
 
 let CORE_VERSION = null;
@@ -148,6 +148,21 @@ function dispatchEvent(event, opts = {}) {
       `Event type "${eventType}" is not part of the neutral lifecycle vocabulary. The event stays pending and no handler or GitHub call ran.`
     );
   }
+
+  let eventValidation;
+  try {
+    eventValidation = validateEvent(event);
+  } catch (_) {
+    eventValidation = { ok: false, code: 'LIFECYCLE_INVALID_EVENT' };
+  }
+  if (!eventValidation.ok) {
+    const validationCode = typeof eventValidation.code === 'string' ? eventValidation.code : 'LIFECYCLE_INVALID_EVENT';
+    return protocolError(
+      'ADAPTER_PROTOCOL_INVALID_EVENT',
+      `Lifecycle event violates the neutral schema (${validationCode}). The event stays pending/retryable and no handler or GitHub call ran.`
+    );
+  }
+
   if (!record.events.includes(eventType)) {
     return protocolError(
       'ADAPTER_EVENT_NOT_ALLOWED',

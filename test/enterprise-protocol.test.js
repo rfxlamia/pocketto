@@ -542,3 +542,59 @@ test('CYCLE 4: compatible registration dispatches to the handler with zero GitHu
   assert.deepEqual(seen, ['demo-plan:spec-approved:r1'], 'compatible dispatch must reach exactly one handler');
   assert.equal(ghCalls, 0, 'the boundary itself performs no GitHub call');
 });
+
+test('SUP-3: malformed allowlisted lifecycle events fail before handler or transport dispatch', () => {
+  const root = installC4Root(['spec-approved'], [process.execPath, 'adapter-stub.js']);
+  const invalidEvents = [
+    makeC4Event({ unexpected: 'not part of the neutral event contract' }),
+    makeC4Event({
+      artifact_refs: [{
+        root: 'spec',
+        kind: 'spec-doc',
+        path: '../outside-root.md',
+        sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        revision: 1,
+      }],
+    }),
+  ];
+  const seen = [];
+  let handlerCalls = 0;
+  let transportCalls = 0;
+  const dispatch = (event) => adapter.dispatchEvent(event, {
+    projectRoot: root,
+    coreContract: 3,
+    handlers: {
+      'spec-approved': (receivedEvent, { ghRunner }) => {
+        handlerCalls += 1;
+        seen.push(receivedEvent.event_id);
+        ghRunner(['issue', 'create']);
+        return { event_id: receivedEvent.event_id, status: 'succeeded' };
+      },
+    },
+    ghRunner: () => {
+      transportCalls += 1;
+      return { exit: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  const invalidResults = invalidEvents.map(dispatch);
+  assert.deepEqual({
+    outcomes: invalidResults.map(({ status, error }) => [status, error && error.code]),
+    handlerCalls,
+    transportCalls,
+  }, {
+    outcomes: [
+      ['retryable', 'ADAPTER_PROTOCOL_INVALID_EVENT'],
+      ['retryable', 'ADAPTER_PROTOCOL_INVALID_EVENT'],
+    ],
+    handlerCalls: 0,
+    transportCalls: 0,
+  }, 'malformed allowlisted events must fail stably before either side-effect boundary');
+
+  const validResult = dispatch(makeC4Event());
+  assert.equal(validResult.status, 'succeeded', 'a valid event must keep the supported handler path');
+  assert.equal(validResult.event_id, 'demo-plan:spec-approved:r1');
+  assert.deepEqual(seen, ['demo-plan:spec-approved:r1']);
+  assert.equal(handlerCalls, 1);
+  assert.equal(transportCalls, 1);
+});
