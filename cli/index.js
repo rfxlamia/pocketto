@@ -255,7 +255,12 @@ function emitError(command, err, json) {
   const message = err.message || String(err);
   const exitCode = err instanceof CliError ? err.exitCode : 1;
   if (json) {
-    process.stdout.write(JSON.stringify(fail(command, code, message)) + '\n');
+    process.stdout.write(JSON.stringify(fail(
+      command,
+      code,
+      message,
+      err instanceof CliError ? err.details : undefined,
+    )) + '\n');
   } else {
     process.stderr.write((err.human || `Error: ${message}`) + '\n');
   }

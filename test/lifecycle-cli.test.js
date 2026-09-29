@@ -14,9 +14,10 @@ const path = require('node:path');
 
 const CLI = path.join(__dirname, '..', 'cli', 'index.js');
 
-function run(args, { expectFail = false } = {}) {
+function run(args, { expectFail = false, env = process.env, preload = null } = {}) {
   try {
-    const stdout = execFileSync('node', [CLI, ...args], { encoding: 'utf8' });
+    const nodeArgs = [...(preload ? ['-r', preload] : []), CLI, ...args];
+    const stdout = execFileSync('node', nodeArgs, { encoding: 'utf8', env });
     assert.ok(!expectFail, `expected failure but succeeded: ${args.join(' ')}`);
     return { stdout, code: 0 };
   } catch (err) {
@@ -885,4 +886,83 @@ test('SUP-4: failed phase persistence cannot leave a durable event without branc
   assert.equal(doc.events.length, 1);
   assert.equal(doc.plan.revision, 1);
   assert.equal(doc.plan.branch, null);
+});
+
+test('SUP-5: public CLI JSON envelope exposes projection repair details', { skip: !hasGit() }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-json-repair-'));
+  const projectDir = path.join(root, 'project');
+  const specDir = path.join(projectDir, 'docs', 'pocket', 'spec', 'demo-plan');
+  const planDir = path.join(projectDir, 'docs', 'pocket', 'plans', 'demo-plan');
+  const execDir = path.join(planDir, 'execution-plan');
+  mkdirSync(specDir, { recursive: true });
+  mkdirSync(execDir, { recursive: true });
+  const specContent = 'approved spec content\n';
+  const phaseContent = '# Phase 1\n\n### Task 1: First\n\nWork done.\n';
+  writeFileSync(path.join(specDir, 'approved-spec.md'), specContent);
+  writeFileSync(path.join(planDir, 'execution-plan.md'), '# Execution Plan\n\n### Task 1: First\n\nBody.\n');
+  writeFileSync(
+    path.join(execDir, 'index.md'),
+    '# Plan Index\n\n**Spec:** docs/pocket/spec/demo-plan/approved-spec.md\n**Source Plan:** ../execution-plan.md\n',
+  );
+  writeFileSync(path.join(execDir, 'phase-1.md'), phaseContent);
+  gitIn(projectDir, ['init', '-q']);
+  gitIn(projectDir, ['config', 'user.email', 'test@example.com']);
+  gitIn(projectDir, ['config', 'user.name', 'Test']);
+  gitIn(projectDir, ['config', 'commit.gpgsign', 'false']);
+  gitIn(projectDir, ['add', '-A']);
+  gitIn(projectDir, ['commit', '-q', '-m', 'plan snapshot']);
+  gitIn(projectDir, ['checkout', '-q', '-b', 'feature/demo-plan']);
+
+  run(['log', 'init', planDir, '--json', '--contract', '3']);
+  const log = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const seeded = commitTransition({
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{
+      root: 'spec', kind: 'spec-doc', path: 'approved-spec.md',
+      sha256: sha256Hex(specContent), revision: 1,
+    }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seeded.ok, true, `spec approval should seed the canonical journal: ${JSON.stringify(seeded)}`);
+
+  const preload = path.join(root, 'fail-projection-write.js');
+  writeFileSync(preload, `'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const originalWriteFileSync = fs.writeFileSync;
+fs.writeFileSync = function (file, ...args) {
+  if (path.resolve(String(file)) === path.resolve(process.env.POCKET_PROJECTION_FAIL_PATH)) {
+    const error = new Error('injected projection failure');
+    error.code = 'EIO';
+    throw error;
+  }
+  return originalWriteFileSync.call(fs, file, ...args);
+};
+`);
+  const errorEnvelope = json([
+    'log', 'update', planDir, log.phases[0].file, 'REVIEW', '--json', '--contract', '3',
+  ], {
+    expectFail: true,
+    preload,
+    env: { ...process.env, POCKET_PROJECTION_FAIL_PATH: path.join(planDir, 'log.json') },
+  });
+
+  assert.equal(errorEnvelope.ok, false);
+  assert.equal(errorEnvelope.command, 'log');
+  assert.equal(errorEnvelope.error.code, 'PROJECTION_REPAIR_REQUIRED');
+  assert.deepEqual(errorEnvelope.error.details, {
+    event_id: 'demo-plan:phase-complete:r2',
+    revision: 2,
+    lifecycle_committed: true,
+    dispatch_deferred: true,
+  });
+  const doc = JSON.parse(readFileSync(path.join(specDir, 'lifecycle.json'), 'utf8'));
+  assert.equal(doc.events.length, 2);
+  assert.equal(doc.events[1].delivery.status, 'pending');
+  const projected = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+  assert.equal(projected.phases[0].status, 'WAITING');
 });
