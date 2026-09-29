@@ -20,6 +20,15 @@ const LIB = path.join(ROOT, 'cli', 'lib', 'surface-manifest.js');
 
 const EXPECTED_ROLES = ['pi/core', 'pi/enterprise', 'claude/core', 'claude/enterprise'];
 
+const ENTERPRISE_RUNTIME_FILES = [
+  'enterprise/cli.js',
+  'enterprise/adapter.js',
+  'enterprise/registration.js',
+  'enterprise/github.js',
+  'enterprise/meta.js',
+  'enterprise/retry.js',
+];
+
 const NAMED_CLI_MODULES = [
   'cli/commands/mode.js',
   'cli/lib/mode.js',
@@ -134,6 +143,49 @@ test('staged pi/core contains the lifecycle files and its entry starts', () => {
       'staged core must contain cli/lib/lifecycle-transition.js',
     );
     require(path.join(out, 'cli', 'index.js'));
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('Enterprise runtime is staged only in Enterprise roles and selected for the v4 package', () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 't7-enterprise-surfaces-'));
+  try {
+    const staged = {};
+    for (const role of EXPECTED_ROLES) {
+      const out = path.join(parent, role.replace('/', '-'));
+      execFileSync('node', [BUILDER, '--role', role, '--output', out], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      staged[role] = ENTERPRISE_RUNTIME_FILES.filter((rel) =>
+        fs.existsSync(path.join(out, rel)),
+      );
+    }
+
+    const packJson = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+    const packed = new Set((JSON.parse(packJson)[0].files || []).map((file) => file.path));
+    const packedRuntime = ENTERPRISE_RUNTIME_FILES.filter((rel) => packed.has(rel));
+
+    assert.deepEqual(
+      {
+        staged,
+        packed: packedRuntime,
+      },
+      {
+        staged: {
+          'pi/core': [],
+          'pi/enterprise': ENTERPRISE_RUNTIME_FILES,
+          'claude/core': [],
+          'claude/enterprise': ENTERPRISE_RUNTIME_FILES,
+        },
+        packed: ENTERPRISE_RUNTIME_FILES,
+      },
+      'all six T7 runtime modules must ship in both Enterprise roles and the package, never in Core',
+    );
   } finally {
     fs.rmSync(parent, { recursive: true, force: true });
   }
@@ -401,7 +453,7 @@ test('package metadata and role staging use v4 release inputs', () => {
   {
     const copy = fs.mkdtempSync(path.join(os.tmpdir(), 't5-c3-rebuild-'));
     try {
-      for (const entry of ['skills', 'surfaces.json', 'scripts', 'cli', 'assets', 'llms.txt', 'README.md', 'LICENSE', 'rebuild-skills.sh']) {
+      for (const entry of ['skills', 'surfaces.json', 'scripts', 'cli', 'enterprise', 'assets', 'llms.txt', 'README.md', 'LICENSE', 'rebuild-skills.sh']) {
         exec('cp', ['-r', path.join(ROOT, entry), path.join(copy, entry)], { encoding: 'utf8' });
       }
       const rebuildOut = exec('bash', [path.join(copy, 'rebuild-skills.sh')], { cwd: copy, encoding: 'utf8' });

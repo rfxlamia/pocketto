@@ -80,7 +80,13 @@
         "cli/commands/mode.js",
         "cli/lib/mode.js",
         "cli/commands/format.js",
-        "cli/lib/bodies.js"
+        "cli/lib/bodies.js",
+        "enterprise/cli.js",
+        "enterprise/adapter.js",
+        "enterprise/registration.js",
+        "enterprise/github.js",
+        "enterprise/meta.js",
+        "enterprise/retry.js"
       ],
       "requires": [
         "pi/core"
@@ -172,7 +178,13 @@
         "cli/commands/mode.js",
         "cli/lib/mode.js",
         "cli/commands/format.js",
-        "cli/lib/bodies.js"
+        "cli/lib/bodies.js",
+        "enterprise/cli.js",
+        "enterprise/adapter.js",
+        "enterprise/registration.js",
+        "enterprise/github.js",
+        "enterprise/meta.js",
+        "enterprise/retry.js"
       ],
       "requires": [
         "claude/core"
