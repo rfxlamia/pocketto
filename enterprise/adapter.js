@@ -6,7 +6,7 @@
 // `gh` invocations, and ownership rules never appear in responses — only
 // opaque proof refs plus redacted diagnostics.
 
-const { validateEvent, validateAdapterResponse, EVENT_TYPES } = require('../cli/lib/lifecycle-contract');
+const { validateEvent, validateAdapterResponse } = require('../cli/lib/lifecycle-contract');
 const { redactSecrets } = require('./retry');
 
 let CORE_VERSION = null;
@@ -106,6 +106,25 @@ function dispatchEvent(event, opts = {}) {
     error: { code, retryable: true, message },
   }, eventId === 'unknown-event' ? undefined : eventId);
 
+  let eventValidation;
+  try {
+    eventValidation = validateEvent(event);
+  } catch {
+    eventValidation = { ok: false, code: 'LIFECYCLE_INVALID_EVENT' };
+  }
+  if (!eventValidation.ok) {
+    const validationCode = typeof eventValidation.code === 'string' ? eventValidation.code : 'LIFECYCLE_INVALID_EVENT';
+    return serializeResponse({
+      event_id: eventId,
+      status: 'terminal',
+      error: {
+        code: 'ADAPTER_PROTOCOL_INVALID_EVENT',
+        retryable: false,
+        message: `Lifecycle event violates the neutral schema (${validationCode}); no handler or GitHub call ran.`,
+      },
+    }, eventId === 'unknown-event' ? undefined : eventId);
+  }
+
   const expectedCoreContract = CORE_VERSION ? CORE_VERSION.CONTRACT : 3;
   const coreContract = opts.coreContract !== undefined ? opts.coreContract : expectedCoreContract;
   if (coreContract !== expectedCoreContract) {
@@ -142,31 +161,6 @@ function dispatchEvent(event, opts = {}) {
   const record = loaded.record;
 
   const eventType = event && typeof event.type === 'string' ? event.type : null;
-  if (!eventType || !EVENT_TYPES.includes(eventType)) {
-    return protocolError(
-      'ADAPTER_PROTOCOL_UNKNOWN_EVENT',
-      `Event type "${eventType}" is not part of the neutral lifecycle vocabulary. The event stays pending and no handler or GitHub call ran.`
-    );
-  }
-
-  let eventValidation;
-  try {
-    eventValidation = validateEvent(event);
-  } catch (_) {
-    eventValidation = { ok: false, code: 'LIFECYCLE_INVALID_EVENT' };
-  }
-  if (!eventValidation.ok) {
-    const validationCode = typeof eventValidation.code === 'string' ? eventValidation.code : 'LIFECYCLE_INVALID_EVENT';
-    return serializeResponse({
-      event_id: eventId,
-      status: 'terminal',
-      error: {
-        code: 'ADAPTER_PROTOCOL_INVALID_EVENT',
-        retryable: false,
-        message: `Lifecycle event violates the neutral schema (${validationCode}); no handler or GitHub call ran.`,
-      },
-    }, eventId === 'unknown-event' ? undefined : eventId);
-  }
 
   if (!record.events.includes(eventType)) {
     return protocolError(

@@ -545,6 +545,35 @@ test('CYCLE 4: compatible registration dispatches to the handler with zero GitHu
   assert.equal(ghCalls, 0, 'the boundary itself performs no GitHub call');
 });
 
+test('SUP-3 unknown type: terminal before handler or transport dispatch', () => {
+  const root = installC4Root(['spec-approved'], [process.execPath, 'adapter-stub.js']);
+  let handlerCalls = 0;
+  let transportCalls = 0;
+  const event = makeC4Event({ type: 'future-event' });
+  const res = adapter.dispatchEvent(event, {
+    projectRoot: root,
+    coreContract: 3,
+    handlers: {
+      'future-event': (receivedEvent, { ghRunner }) => {
+        handlerCalls += 1;
+        ghRunner(['unexpected', 'transport']);
+        return { event_id: receivedEvent.event_id, status: 'succeeded' };
+      },
+    },
+    ghRunner: () => {
+      transportCalls += 1;
+      return { exit: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  assert.equal(res.event_id, 'demo-plan:future-event:r1');
+  assert.equal(res.status, 'terminal', 'an unknown type rejected by validateEvent must be terminal');
+  assert.equal(res.error.retryable, false, 'an unknown type must not be retried');
+  assert.equal(res.error.code, 'ADAPTER_PROTOCOL_INVALID_EVENT');
+  assert.equal(handlerCalls, 0, 'schema-invalid events must not reach a handler');
+  assert.equal(transportCalls, 0, 'schema-invalid events must not reach transport');
+});
+
 test('SUP-3: malformed allowlisted lifecycle events fail before handler or transport dispatch', () => {
   const root = installC4Root(['spec-approved'], [process.execPath, 'adapter-stub.js']);
   const invalidEvents = [
