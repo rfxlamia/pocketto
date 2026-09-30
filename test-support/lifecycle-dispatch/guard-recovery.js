@@ -21,7 +21,7 @@ process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeed
   return adapterPath;
 }
 
-function makePendingPlan(specRoot, planId, projectDir) {
+function makePendingPlan(specRoot, planId, projectDir, callsPath) {
   const specDir = path.join(specRoot, planId);
   mkdirSync(specDir, { recursive: true });
   const content = `approved spec for ${planId}\n`;
@@ -33,7 +33,7 @@ function makePendingPlan(specRoot, planId, projectDir) {
     artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec.md', sha256: sha256Hex(content), revision: 1 }],
   });
   const lifecyclePath = require('../../cli/lib/lifecycle-store').lifecyclePathFor(specDir);
-  return { specDir, eventId: seeded.event.event_id, lifecyclePath, projectDir };
+  return { specDir, eventId: seeded.event.event_id, lifecyclePath, projectDir, callsPath };
 }
 
 function drain(fixture) {
@@ -122,13 +122,13 @@ test('lifecycle drain reclaims a dead guard owner but never steals from a live o
 
   try {
     registerAdapter(pocketDir, writeSuccessAdapter(root), { events: ['spec-approved'] });
-    const deadOwnerPlan = makePendingPlan(specRoot, 'dead-guard-plan', projectDir);
+    const deadOwnerPlan = makePendingPlan(specRoot, 'dead-guard-plan', projectDir, callsPath);
     const deadGuardPath = path.join(deadOwnerPlan.specDir, '.lifecycle.lock.guard');
     const deadOwnerId = '00000000-0000-4000-8000-000000000091';
     assertDeadGuardExited(createDeadGuardOwner(projectDir, deadGuardPath, deadOwnerId));
     assertDeadGuardRecovered(deadOwnerPlan, callsPath);
 
-    const liveOwnerPlan = makePendingPlan(specRoot, 'live-guard-plan', projectDir);
+    const liveOwnerPlan = makePendingPlan(specRoot, 'live-guard-plan', projectDir, callsPath);
     assertLiveGuardPreserved(liveOwnerPlan);
     assert.deepEqual(readJsonLines(callsPath), [{ event_id: deadOwnerPlan.eventId }], 'the live guard must not permit a second adapter invocation');
   } finally {
