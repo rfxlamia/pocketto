@@ -345,24 +345,128 @@ function invokeAdapter(event, registration) {
   }
 }
 
-function initializeProjection(planDir, logPath) {
-  let projection = null;
-  if (fs.existsSync(logPath)) {
-    try {
-      projection = readLog(logPath);
-    } catch (err) {
-      if (!(err instanceof SyntaxError)) throw err;
-    }
+function taskIdsDeclaredByPhaseFile(planDir, phaseFile) {
+  const phasePath = path.resolve(planDir, phaseFile);
+  const relative = path.relative(planDir, phasePath);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+
+  let content;
+  try {
+    content = fs.readFileSync(phasePath, 'utf8');
+  } catch {
+    return null;
   }
 
-  if (!projection || !projection.header || !Array.isArray(projection.phases)) {
-    if (fs.existsSync(logPath)) fs.rmSync(logPath);
-    const logCommand = require('../commands/log');
-    logCommand.run({ sub: 'init', positionals: [planDir] });
-    projection = readLog(logPath);
+  const ids = new Set();
+  for (const match of content.matchAll(/^### Task (\d+):/gm)) ids.add(`T${Number(match[1])}`);
+  for (const match of content.matchAll(/^\|\s*(T\d+)\s*\|/gm)) ids.add(match[1]);
+  for (const match of content.matchAll(/-\s*\*\*(T\d+):\*\*/gm)) ids.add(match[1]);
+  return [...ids];
+}
+
+function projectionHasCompleteTaskState(planDir, phase) {
+  if (!phase || typeof phase !== 'object' || Array.isArray(phase)) return false;
+  if (typeof phase.file !== 'string' || phase.file.length === 0) return false;
+  if (!['BLOCKED', 'DONE', 'REVIEW', 'WAITING'].includes(phase.status)) return false;
+
+  const declaredTaskIds = taskIdsDeclaredByPhaseFile(planDir, phase.file);
+  if (!Array.isArray(phase.tasks)) {
+    // `tasks` is omitted for taskless phases in log.json. Accept that shape
+    // only when the phase source is readable and declares no task identities.
+    return !Object.prototype.hasOwnProperty.call(phase, 'tasks')
+      && Array.isArray(declaredTaskIds)
+      && declaredTaskIds.length === 0;
   }
-  if (!projection.header || !Array.isArray(projection.phases)) {
-    throw new CliError('LIFECYCLE_REPAIR_FAILED', `could not rebuild lifecycle projection: ${logPath}`);
+
+  const tasks = phase.tasks;
+  if (tasks.some((task) => (
+    !task
+    || typeof task !== 'object'
+    || Array.isArray(task)
+    || typeof task.id !== 'string'
+    || task.id.length === 0
+    || typeof task.name !== 'string'
+    || !['BLOCKED', 'DONE', 'REVIEW', 'WAITING'].includes(task.status)
+    || (Object.prototype.hasOwnProperty.call(task, 'done_sha')
+      && task.done_sha !== null
+      && (typeof task.done_sha !== 'string' || task.done_sha.length === 0))
+  ))) return false;
+
+  if (Array.isArray(declaredTaskIds) && declaredTaskIds.length > 0) {
+    const actual = tasks.map((task) => task.id).sort();
+    const declared = [...declaredTaskIds].sort();
+    if (actual.length !== declared.length || actual.some((id, index) => id !== declared[index])) return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(phase, 'corrections')) {
+    if (!Array.isArray(phase.corrections) || phase.corrections.some((correction) => (
+      !correction
+      || typeof correction !== 'object'
+      || Array.isArray(correction)
+      || typeof correction.sha !== 'string'
+      || correction.sha.length === 0
+      || !Array.isArray(correction.files)
+      || correction.files.some((file) => typeof file !== 'string')
+      || (Object.prototype.hasOwnProperty.call(correction, 'for_task')
+        && typeof correction.for_task !== 'string')
+    ))) return false;
+  }
+  return true;
+}
+
+function projectionHasCompleteRepairState(planDir, projection) {
+  if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return false;
+  const { header, phases } = projection;
+  if (!header || typeof header !== 'object' || Array.isArray(header) || !Array.isArray(phases) || phases.length === 0) {
+    return false;
+  }
+  const requiredHeaderFields = [
+    'plan_dir', 'plan_type', 'status', 'date_started', 'date_completed', 'baseline_sha', 'pipeline',
+  ];
+  if (requiredHeaderFields.some((field) => !Object.prototype.hasOwnProperty.call(header, field))) return false;
+  if (
+    typeof header.plan_dir !== 'string'
+    || path.resolve(header.plan_dir) !== planDir
+    || !['flat', 'phased'].includes(header.plan_type)
+    || !['IN_PROGRESS', 'DONE'].includes(header.status)
+    || typeof header.date_started !== 'string'
+    || (header.date_completed !== null && typeof header.date_completed !== 'string')
+    || (header.baseline_sha !== null && (typeof header.baseline_sha !== 'string' || header.baseline_sha.length === 0))
+    || !Number.isInteger(header.pipeline)
+  ) return false;
+
+  return phases.every((phase) => (
+    phase
+    && typeof phase === 'object'
+    && !Array.isArray(phase)
+    && Number.isInteger(phase.order)
+    && phase.order > 0
+    && projectionHasCompleteTaskState(planDir, phase)
+  ));
+}
+
+function unrecoverableProjectionError(logPath) {
+  return new CliError(
+    'LIFECYCLE_REPAIR_STATE_UNRECOVERABLE',
+    `cannot safely reconstruct the complete task projection from lifecycle.json; restore ${logPath} from a trusted backup before retrying lifecycle repair`,
+  );
+}
+
+function initializeProjection(planDir, logPath) {
+  if (!fs.existsSync(logPath)) throw unrecoverableProjectionError(logPath);
+
+  let projection;
+  try {
+    projection = readLog(logPath);
+  } catch (err) {
+    if (err instanceof SyntaxError || (err && err.code === 'ENOENT')) {
+      throw unrecoverableProjectionError(logPath);
+    }
+    throw new CliError('LIFECYCLE_REPAIR_FAILED', `could not read lifecycle projection: ${logPath}`);
+  }
+
+  if (!projectionHasCompleteRepairState(planDir, projection)) {
+    throw unrecoverableProjectionError(logPath);
   }
   return projection;
 }

@@ -280,11 +280,11 @@ process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeed
   }
 });
 
-test('lifecycle repair rebuilds the log projection without emitting an event or dispatching', () => {
-  // Given committed lifecycle state and event revision 4 with a stale log.json,
+test('lifecycle repair updates a stale phase projection without losing task progress or dispatching', () => {
+  // Given a valid stale log.json with task progress and committed lifecycle state,
   // When public `lifecycle repair <spec_dir> --json --contract 3` runs,
-  // Then log.json is rebuilt while revision, journal length, event IDs, and
-  // delivery state remain unchanged. Only the projection writer is injected.
+  // Then lifecycle-derived phase state is repaired while task progress, original
+  // baseline, revision, journal length, event IDs, and delivery state are preserved.
   const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-repair-'));
   const planDir = path.join(root, 'plan-90');
   mkdirSync(planDir, { recursive: true });
@@ -331,6 +331,23 @@ test('lifecycle repair rebuilds the log projection without emitting an event or 
     const logPath = path.join(planDir, 'log.json');
     const initialProjection = JSON.parse(readFileSync(logPath, 'utf8'));
     const phaseFile = initialProjection.phases[0].file;
+    const originalBaselineSha = initialProjection.header.baseline_sha;
+
+    writeFileSync(path.join(planDir, 'task-output.md'), 'completed task output\n');
+    git(['add', 'task-output.md']);
+    git(['commit', '-q', '-m', 'complete task']);
+    const doneSha = git(['rev-parse', 'HEAD']).trim();
+    writeFileSync(path.join(planDir, 'correction-output.md'), 'follow-up correction\n');
+    git(['add', 'correction-output.md']);
+    git(['commit', '-q', '-m', 'record correction']);
+    const correctionSha = git(['rev-parse', 'HEAD']).trim();
+
+    const progressedProjection = JSON.parse(readFileSync(logPath, 'utf8'));
+    const progressedPhase = progressedProjection.phases[0];
+    progressedPhase.tasks[0].status = 'DONE';
+    progressedPhase.tasks[0].done_sha = doneSha;
+    progressedPhase.corrections = [{ sha: correctionSha, files: ['correction-output.md'], for_task: 'T1' }];
+    writeFileSync(logPath, `${JSON.stringify(progressedProjection, null, 2)}\n`);
 
     const { commitTransition, lifecyclePathFor } = require('../cli/lib/lifecycle-store');
     const seed = (input) => {
@@ -384,8 +401,12 @@ test('lifecycle repair rebuilds the log projection without emitting an event or 
     assert.equal(before.events.length, 4);
     assert.equal(before.events[3].event_id, 'plan-90:phase-complete:r4');
     assert.equal(before.events[3].delivery.status, 'pending');
-    assert.equal(JSON.parse(readFileSync(logPath, 'utf8')).phases[0].status, 'WAITING');
-    rmSync(logPath);
+    const staleProjectionBytes = readFileSync(logPath, 'utf8');
+    const staleProjection = JSON.parse(staleProjectionBytes);
+    assert.equal(staleProjection.phases[0].status, 'WAITING');
+    assert.deepEqual(staleProjection.phases[0].tasks[0], progressedPhase.tasks[0]);
+    assert.deepEqual(staleProjection.phases[0].corrections, progressedPhase.corrections);
+    assert.equal(staleProjection.header.baseline_sha, originalBaselineSha);
 
     const repaired = runCli(
       ['lifecycle', 'repair', planDir, '--json', '--contract', '3'],
@@ -399,6 +420,9 @@ test('lifecycle repair rebuilds the log projection without emitting an event or 
 
     const rebuiltProjection = JSON.parse(readFileSync(logPath, 'utf8'));
     assert.equal(rebuiltProjection.phases[0].status, 'REVIEW');
+    assert.deepEqual(rebuiltProjection.phases[0].tasks, staleProjection.phases[0].tasks, 'repair must preserve task statuses and done_sha');
+    assert.deepEqual(rebuiltProjection.phases[0].corrections, staleProjection.phases[0].corrections, 'repair must preserve correction records');
+    assert.equal(rebuiltProjection.header.baseline_sha, originalBaselineSha, 'repair must preserve the original baseline');
     const after = JSON.parse(readFileSync(lifecyclePath, 'utf8'));
     assert.equal(after.plan.revision, before.plan.revision, 'repair must not change lifecycle revision');
     assert.equal(after.events.length, before.events.length, 'repair must not append an event');
@@ -406,6 +430,183 @@ test('lifecycle repair rebuilds the log projection without emitting an event or 
   } finally {
     if (originalClock === undefined) delete process.env.POCKETTO_LIFECYCLE_NOW;
     else process.env.POCKETTO_LIFECYCLE_NOW = originalClock;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('lifecycle repair fails closed when damaged projection progress is not recoverable', () => {
+  // Given progressed task state in a structurally damaged log.json that the
+  // lifecycle journal cannot reproduce, When repair runs, Then it returns an
+  // actionable error, preserves both files, and never dispatches an adapter.
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-repair-fail-closed-'));
+  const projectDir = path.join(root, 'project');
+  const planDir = path.join(projectDir, 'plans', 'plan-91');
+  const phasePath = path.join(planDir, 'execution-plan-phase-1.md');
+  const logPath = path.join(planDir, 'log.json');
+  const lifecyclePath = path.join(planDir, 'lifecycle.json');
+  const pocketDir = path.join(projectDir, '.pocket');
+  const callsPath = path.join(root, 'adapter-calls.jsonl');
+  mkdirSync(planDir, { recursive: true });
+  mkdirSync(pocketDir, { recursive: true });
+
+  const specContent = 'approved spec for fail-closed repair\n';
+  const phaseContent = '# Phase 1\n\n### Task 1: Completed work\n\n### Task 2: Later work\n';
+  writeFileSync(path.join(planDir, 'spec-doc.md'), specContent);
+  writeFileSync(phasePath, phaseContent);
+
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Pocket Test',
+    GIT_AUTHOR_EMAIL: 'test@example.com',
+    GIT_COMMITTER_NAME: 'Pocket Test',
+    GIT_COMMITTER_EMAIL: 'test@example.com',
+  };
+  const git = (args) => execFileSync('git', args, {
+    cwd: planDir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: gitEnv,
+  });
+
+  try {
+    git(['init', '-q']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'Pocket Test']);
+    git(['config', 'commit.gpgsign', 'false']);
+    git(['add', '-A']);
+    git(['commit', '-q', '-m', 'initial plan snapshot']);
+    const baselineSha = git(['rev-parse', 'HEAD']).trim();
+
+    const initialized = runCli(['log', 'init', planDir, '--json', '--contract', '3'], { cwd: planDir });
+    assert.equal(JSON.parse(initialized.stdout.trim()).ok, true, `log init should succeed: ${initialized.stdout}`);
+    writeFileSync(path.join(planDir, 'task-output.txt'), 'completed task output\n');
+    git(['add', 'task-output.txt']);
+    git(['commit', '-q', '-m', 'complete task one']);
+    const doneSha = git(['rev-parse', 'HEAD']).trim();
+    writeFileSync(path.join(planDir, 'correction-output.txt'), 'follow-up correction\n');
+    git(['add', 'correction-output.txt']);
+    git(['commit', '-q', '-m', 'record correction']);
+    const correctionSha = git(['rev-parse', 'HEAD']).trim();
+
+    const progressed = JSON.parse(readFileSync(logPath, 'utf8'));
+    const phase = progressed.phases[0];
+    const completedTask = phase.tasks.find((task) => task.id === 'T1');
+    const laterTask = phase.tasks.find((task) => task.id === 'T2');
+    assert.ok(completedTask && laterTask, 'fixture must contain both planned tasks');
+    completedTask.status = 'DONE';
+    completedTask.done_sha = doneSha;
+    laterTask.status = 'REVIEW';
+    phase.status = 'REVIEW';
+    phase.corrections = [{ sha: correctionSha, files: ['correction-output.txt'], for_task: 'T1' }];
+    assert.equal(progressed.header.baseline_sha, baselineSha, 'fixture must retain its original baseline before damage');
+    assert.equal(completedTask.status, 'DONE');
+    assert.equal(completedTask.done_sha, doneSha);
+    assert.equal(phase.corrections[0].sha, correctionSha);
+
+    const { commitTransition } = require('../cli/lib/lifecycle-store');
+    const seed = (input) => {
+      const result = commitTransition({ ...input, deps: { now: () => FIXED_CLOCK } });
+      assert.equal(result.ok, true, `lifecycle seed should succeed: ${JSON.stringify(result)}`);
+      return result;
+    };
+    seed({
+      specDir: planDir,
+      planDir: null,
+      planId: 'plan-91',
+      type: 'spec-approved',
+      artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha256Hex(specContent), revision: 1 }],
+    });
+    seed({
+      specDir: planDir,
+      planDir,
+      planId: 'plan-91',
+      type: 'phase-complete',
+      branch: git(['rev-parse', '--abbrev-ref', 'HEAD']).trim(),
+      artifacts: [{ root: 'plan', kind: 'phase-evidence', path: 'execution-plan-phase-1.md', sha256: sha256Hex(phaseContent), revision: 1 }],
+    });
+    const lifecycleBefore = readFileSync(lifecyclePath, 'utf8');
+    const lifecycleDoc = JSON.parse(lifecycleBefore);
+    assert.equal(lifecycleDoc.plan.plan_dir, planDir, 'lifecycle seed must commit the plan root required by repair');
+    assert.equal(lifecycleDoc.plan.revision, 2);
+    assert.equal(lifecycleDoc.events.length, 2);
+    const taskProjectionFields = new Set([
+      'baseline_sha',
+      'done_sha',
+      'corrections',
+      'tasks',
+      'task_id',
+      'task_status',
+      'task_statuses',
+    ]);
+    const hasTaskProjectionField = (value) => {
+      if (Array.isArray(value)) return value.some(hasTaskProjectionField);
+      if (!value || typeof value !== 'object') return false;
+      return Object.entries(value).some(([key, child]) =>
+        taskProjectionFields.has(key) || hasTaskProjectionField(child));
+    };
+    assert.equal(
+      hasTaskProjectionField(lifecycleDoc),
+      false,
+      'authoritative lifecycle schema must not encode task progress or projection-only fields',
+    );
+
+    // Keep the plan path and original baseline metadata. Corrupt the task-state
+    // collection shape while retaining T1 progress in the damaged bytes; the
+    // legacy repair path treats the non-array phases value as rebuildable.
+    const retainedPhase = { ...progressed.phases[0] };
+    retainedPhase.tasks = { retained: retainedPhase.tasks };
+    progressed.phases = { damagedTaskState: [retainedPhase] };
+    const retainedTask = progressed.phases.damagedTaskState[0].tasks.retained.find((task) => task.id === 'T1');
+    assert.equal(progressed.header.plan_dir, planDir, 'fixture must keep the plan path needed by repair');
+    assert.equal(progressed.header.baseline_sha, baselineSha, 'fixture must keep original baseline metadata');
+    assert.equal(retainedTask.status, 'DONE', 'damaged bytes must retain task status');
+    assert.equal(retainedTask.done_sha, doneSha, 'damaged bytes must retain task done_sha');
+    assert.equal(progressed.phases.damagedTaskState[0].corrections[0].sha, correctionSha);
+    const damagedBytes = `${JSON.stringify(progressed, null, 2)}\n`;
+    writeFileSync(logPath, damagedBytes);
+    writeFileSync(callsPath, '');
+    const adapterPath = path.join(root, 'fake-adapter');
+    writeFileSync(adapterPath, `#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const eventPath = process.argv.slice(2).find((arg) => arg.endsWith('.json') && fs.existsSync(arg));
+const event = eventPath ? JSON.parse(fs.readFileSync(eventPath, 'utf8')) : {};
+fs.appendFileSync(process.env.ADAPTER_CALLS, JSON.stringify({ event_id: event.event_id }) + '\\n');
+process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded' }) + '\\n');
+`);
+    chmodSync(adapterPath, 0o755);
+    writeFileSync(path.join(pocketDir, 'lifecycle-adapter.json'), `${JSON.stringify({
+      schema: 1,
+      adapter_contract: 1,
+      argv: [adapterPath],
+      events: ['spec-approved', 'phase-complete'],
+      timeout_ms: 30000,
+    }, null, 2)}\n`);
+
+    const result = runCli(
+      ['lifecycle', 'repair', planDir, '--json', '--contract', '3'],
+      { cwd: projectDir, env: { ADAPTER_CALLS: callsPath, POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK } },
+    );
+    const envelope = JSON.parse(result.stdout.trim());
+    if (envelope.ok) {
+      const unsafeRebuild = JSON.parse(readFileSync(logPath, 'utf8'));
+      const regeneratedTask = unsafeRebuild.phases[0].tasks.find((task) => task.id === 'T1');
+      assert.equal(regeneratedTask.status, 'WAITING', 'unsafe fallback regenerates task progress as WAITING');
+      assert.equal(regeneratedTask.done_sha, undefined, 'unsafe fallback drops the task done_sha');
+      assert.equal(unsafeRebuild.phases[0].corrections, undefined, 'unsafe fallback drops phase corrections');
+      assert.notEqual(unsafeRebuild.header.baseline_sha, baselineSha, 'unsafe fallback replaces the original baseline with current HEAD');
+    }
+    assert.equal(envelope.ok, false, `repair must refuse lossy reconstruction: ${JSON.stringify(envelope)}`);
+    assert.equal(result.code, 1);
+    assert.equal(envelope.error.code, 'LIFECYCLE_REPAIR_STATE_UNRECOVERABLE');
+    assert.match(envelope.error.message, /(restore|backup).*(log\.json|projection)|(log\.json|projection).*(restore|backup)/i);
+    assert.equal(readFileSync(logPath, 'utf8'), damagedBytes, 'repair must preserve the damaged projection bytes');
+    assert.equal(readFileSync(lifecyclePath, 'utf8'), lifecycleBefore, 'repair must preserve the lifecycle journal bytes');
+    const lifecycleAfter = JSON.parse(readFileSync(lifecyclePath, 'utf8'));
+    assert.equal(lifecycleAfter.plan.revision, lifecycleDoc.plan.revision);
+    assert.equal(lifecycleAfter.events.length, lifecycleDoc.events.length);
+    assert.equal(readFileSync(callsPath, 'utf8'), '', 'repair must not dispatch lifecycle events');
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
