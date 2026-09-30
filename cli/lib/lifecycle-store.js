@@ -16,6 +16,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 
 const { writeFileAtomicSync } = require('./atomic-file');
+const { acquireLifecycleGuard, releaseLifecycleGuard } = require('./lifecycle-lock');
 const {
   EVENT_TYPES,
   buildEventId,
@@ -91,6 +92,30 @@ function applyStateSnapshot(doc, type) {
 
 function serializeDoc(doc) {
   return `${JSON.stringify(doc, null, 2)}\n`;
+}
+
+function withLifecycleMutation(specDir, mutate) {
+  let guard;
+  try {
+    guard = acquireLifecycleGuard(path.join(specDir, '.lifecycle.lock'), { wait: true });
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    return fail('LIFECYCLE_MUTATION_LOCK_FAILED', `could not serialize lifecycle mutation: ${detail}`);
+  }
+
+  try {
+    return mutate();
+  } finally {
+    releaseLifecycleGuard(guard);
+  }
+}
+
+function hasSpecDirectory(specDir) {
+  try {
+    return fs.statSync(specDir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 // Current-state gate: the plan's committed state must legally accept the
@@ -229,6 +254,14 @@ function validateArtifactOnDisk(ref, rootDir, deps) {
 // Success: { ok, event, revision }. Failure: { ok:false, code, message }.
 // Failures leave `<spec_dir>/lifecycle.json` untouched (no partial success).
 function commitTransition(input) {
+  const { specDir } = input || {};
+  if (typeof specDir !== 'string' || specDir.length === 0 || !hasSpecDirectory(specDir)) {
+    return commitTransitionUnlocked(input);
+  }
+  return withLifecycleMutation(specDir, () => commitTransitionUnlocked(input));
+}
+
+function commitTransitionUnlocked(input) {
   const { specDir, planDir, planId, type, artifacts, branch } = input || {};
   const deps = (input && input.deps) || {};
   const now = deps.now || (() => new Date().toISOString());
@@ -352,6 +385,13 @@ function commitTransition(input) {
 }
 
 function updateEventDelivery(specDir, eventId, patch) {
+  if (typeof specDir !== 'string' || specDir.length === 0 || !hasSpecDirectory(specDir)) {
+    return updateEventDeliveryUnlocked(specDir, eventId, patch);
+  }
+  return withLifecycleMutation(specDir, () => updateEventDeliveryUnlocked(specDir, eventId, patch));
+}
+
+function updateEventDeliveryUnlocked(specDir, eventId, patch) {
   const doc = readLifecycleDoc(specDir);
   if (!doc) return fail('LIFECYCLE_NOT_FOUND', 'lifecycle document does not exist');
   const event = doc.events.find((candidate) => candidate.event_id === eventId);

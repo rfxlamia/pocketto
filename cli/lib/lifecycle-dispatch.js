@@ -12,6 +12,7 @@ const { CliError } = require('./envelope');
 const { writeFileAtomicSync } = require('./atomic-file');
 const { readLog } = require('./logjson');
 const { validateAdapterResponse } = require('./lifecycle-contract');
+const { acquireLifecycleGuard: acquireGuard, releaseLifecycleGuard: releaseGuard } = require('./lifecycle-lock');
 const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
 
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
@@ -30,42 +31,18 @@ function ownerProcessIsAlive(pid) {
 }
 
 function acquireClaimGuard(lockPath) {
-  const guardPath = `${lockPath}.guard`;
-  const ownerId = randomUUID();
-  let descriptor;
   try {
-    descriptor = fs.openSync(guardPath, 'wx', 0o600);
-  } catch (err) {
-    if (err && err.code === 'EEXIST') return null;
+    return acquireGuard(lockPath);
+  } catch {
     throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not serialize lifecycle claim acquisition');
   }
-
-  try {
-    fs.writeFileSync(descriptor, `${JSON.stringify({ owner_id: ownerId, owner_pid: process.pid })}\n`, 'utf8');
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-  } catch (err) {
-    try { fs.closeSync(descriptor); } catch {}
-    try { fs.unlinkSync(guardPath); } catch {}
-    throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not persist claim guard: ${err.message}`);
-  }
-  return { guardPath, owner_id: ownerId };
 }
 
 function releaseClaimGuard(guard) {
-  let record;
   try {
-    record = JSON.parse(fs.readFileSync(guard.guardPath, 'utf8'));
+    releaseGuard(guard);
   } catch {
-    return;
-  }
-  if (record.owner_id !== guard.owner_id) return;
-  try {
-    fs.unlinkSync(guard.guardPath);
-  } catch (err) {
-    if (!err || err.code !== 'ENOENT') {
-      throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not release lifecycle claim guard');
-    }
+    throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not release lifecycle claim guard');
   }
 }
 

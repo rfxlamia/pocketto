@@ -148,7 +148,7 @@ test('staged pi/core contains the lifecycle files and its entry starts', () => {
   }
 });
 
-test('staged Core roles include the lifecycle dispatcher and load their CLI entries', () => {
+test('staged Core roles include lifecycle dispatch dependencies and load their CLI entries', () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 't4-core-dispatcher-'));
   try {
     for (const role of ['pi/core', 'claude/core']) {
@@ -161,6 +161,10 @@ test('staged Core roles include the lifecycle dispatcher and load their CLI entr
       assert.ok(
         fs.existsSync(path.join(out, 'cli/lib/lifecycle-dispatch.js')),
         `${role} staged Core must include cli/lib/lifecycle-dispatch.js`,
+      );
+      assert.ok(
+        fs.existsSync(path.join(out, 'cli/lib/lifecycle-lock.js')),
+        `${role} staged Core must include cli/lib/lifecycle-lock.js`,
       );
       assert.doesNotThrow(
         () => require(path.join(out, 'cli', 'index.js')),
