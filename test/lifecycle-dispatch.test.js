@@ -2,9 +2,10 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -407,4 +408,173 @@ test('lifecycle repair rebuilds the log projection without emitting an event or 
     else process.env.POCKETTO_LIFECYCLE_NOW = originalClock;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('concurrent lifecycle drains allow only one UUID-owned event claim', async () => {
+  // Given two workers receive the same pending event,
+  // When both attempt processing,
+  // Then only one UUID-owned claim succeeds and only one adapter invocation is possible.
+  // Exercise public drain workers concurrently; use a real .lifecycle.lock and ledger.
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-drain-claim-'));
+  const projectDir = path.join(root, 'project');
+  const specDir = path.join(projectDir, 'spec', 'demo-plan');
+  const pocketDir = path.join(projectDir, '.pocket');
+  const callsPath = path.join(root, 'adapter-calls.jsonl');
+  const releasePath = path.join(root, 'release-adapter');
+  const lockPath = path.join(specDir, '.lifecycle.lock');
+  const workers = [];
+  let results = [];
+  let callsDuringClaim = [];
+  let callsAfterRelease = [];
+  let lockOwner = null;
+  let deliveryDuringClaim = null;
+  let after = null;
+  let adapterStarted = false;
+
+  try {
+    mkdirSync(specDir, { recursive: true });
+    mkdirSync(pocketDir, { recursive: true });
+    const specContent = 'approved spec for claim test\n';
+    writeFileSync(path.join(specDir, 'spec.md'), specContent);
+    writeFileSync(callsPath, '');
+
+    const { commitTransition, lifecyclePathFor } = require('../cli/lib/lifecycle-store');
+    const seeded = commitTransition({
+      specDir,
+      planDir: null,
+      planId: 'demo-plan',
+      type: 'spec-approved',
+      artifacts: [{
+        root: 'spec',
+        kind: 'spec-doc',
+        path: 'spec.md',
+        sha256: sha256Hex(specContent),
+        revision: 1,
+      }],
+      deps: { now: () => FIXED_CLOCK },
+    });
+    assert.equal(seeded.ok, true, `pending event seed should succeed: ${JSON.stringify(seeded)}`);
+
+    const adapterPath = path.join(root, 'fake-adapter');
+    writeFileSync(adapterPath, `#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const eventPath = process.argv.slice(2).find((arg) => arg.endsWith('.json') && fs.existsSync(arg));
+if (!eventPath) process.exit(2);
+const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+fs.appendFileSync(process.env.ADAPTER_CALLS, JSON.stringify({ worker_id: process.env.WORKER_ID, event_id: event.event_id }) + '\\n');
+const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+const deadline = Date.now() + 5000;
+while (!fs.existsSync(process.env.ADAPTER_RELEASE) && Date.now() < deadline) Atomics.wait(waitBuffer, 0, 0, 10);
+if (!fs.existsSync(process.env.ADAPTER_RELEASE)) process.exit(3);
+process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded' }) + '\\n');
+`);
+    chmodSync(adapterPath, 0o755);
+    writeFileSync(path.join(pocketDir, 'lifecycle-adapter.json'), `${JSON.stringify({
+      schema: 1,
+      adapter_contract: 1,
+      argv: [adapterPath],
+      events: ['spec-approved'],
+      timeout_ms: 30000,
+    }, null, 2)}\n`);
+
+    const startWorker = (workerId) => {
+      const child = spawn('node', [
+        CLI,
+        'lifecycle',
+        'drain',
+        specDir,
+        '--json',
+        '--contract',
+        '3',
+      ], {
+        cwd: projectDir,
+        env: {
+          ...process.env,
+          POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK,
+          ADAPTER_CALLS: callsPath,
+          ADAPTER_RELEASE: releasePath,
+          WORKER_ID: workerId,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      const spawned = new Promise((resolve) => {
+        child.once('spawn', () => resolve(true));
+        child.once('error', () => resolve(false));
+      });
+      const done = new Promise((resolve) => {
+        child.once('close', (code, signal) => resolve({ code, signal, stdout, stderr }));
+        child.once('error', (err) => resolve({ code: -1, signal: null, stdout, stderr: `${stderr}${err.message}` }));
+      });
+      return { child, spawned, done };
+    };
+
+    const readCalls = () => {
+      const content = readFileSync(callsPath, 'utf8').trim();
+      return content ? content.split('\n').map((line) => JSON.parse(line)) : [];
+    };
+    const waitForFirstInvocation = async () => {
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        if (readCalls().length > 0) return true;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return readCalls().length > 0;
+    };
+
+    workers.push(startWorker('worker-a'));
+    workers.push(startWorker('worker-b'));
+    const spawned = await Promise.all(workers.map((worker) => worker.spawned));
+    assert.ok(spawned.every(Boolean), 'both drain workers should start');
+    adapterStarted = await waitForFirstInvocation();
+    if (adapterStarted) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      callsDuringClaim = readCalls();
+      if (existsSync(lockPath)) {
+        try {
+          lockOwner = JSON.parse(readFileSync(lockPath, 'utf8'));
+        } catch {
+          lockOwner = null;
+        }
+      }
+      const during = JSON.parse(readFileSync(lifecyclePathFor(specDir), 'utf8'));
+      deliveryDuringClaim = during.events[0].delivery;
+    }
+
+    writeFileSync(releasePath, 'release');
+    results = await Promise.all(workers.map((worker) => worker.done));
+    callsAfterRelease = readCalls();
+    after = JSON.parse(readFileSync(lifecyclePathFor(specDir), 'utf8'));
+  } finally {
+    try {
+      writeFileSync(releasePath, 'release');
+    } catch {}
+    await Promise.all(workers.map((worker) => worker.done));
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  assert.ok(adapterStarted, 'the claimed event should reach the fake adapter');
+  assert.ok(lockOwner, 'the per-plan .lifecycle.lock must contain an owner record during invocation');
+  assert.equal(lockOwner.event_id, 'demo-plan:spec-approved:r1');
+  assert.match(lockOwner.owner_id, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i);
+  assert.equal(deliveryDuringClaim.status, 'claimed', 'the ledger must record the event claim before invocation');
+  assert.equal(deliveryDuringClaim.attempts, 1, 'the first claim must increment attempts before invocation');
+  assert.equal(callsDuringClaim.length, 1, 'only one worker may invoke the adapter for the event');
+  assert.equal(callsAfterRelease.length, 1, 'the competing worker must not invoke after the first completes');
+  assert.equal(results.length, 2);
+  for (const result of results) {
+    assert.equal(result.code, 0, `drain worker should exit cleanly: ${result.stdout}${result.stderr}`);
+    assert.equal(JSON.parse(result.stdout.trim()).ok, true);
+  }
+  assert.equal(after.plan.revision, 1, 'claiming and delivering must not create a lifecycle event');
+  assert.equal(after.events.length, 1);
+  assert.equal(after.events[0].event_id, 'demo-plan:spec-approved:r1');
+  assert.equal(after.events[0].delivery.status, 'succeeded');
+  assert.equal(after.events[0].delivery.attempts, 1);
 });

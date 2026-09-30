@@ -6,6 +6,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { CliError } = require('./envelope');
 const { writeFileAtomicSync } = require('./atomic-file');
@@ -13,6 +14,64 @@ const { readLog } = require('./logjson');
 const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
 
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
+const CLAIM_LEASE_MS = 60_000;
+
+function acquireEventClaim(specDir, planId, eventId) {
+  const lockPath = path.join(specDir, '.lifecycle.lock');
+  const ownerId = randomUUID();
+  const claimedAt = new Date(process.env.POCKETTO_LIFECYCLE_NOW || Date.now()).toISOString();
+  const record = {
+    plan_id: planId,
+    event_id: eventId,
+    owner_id: ownerId,
+    claimed_at: claimedAt,
+    lease_expires_at: new Date(Date.parse(claimedAt) + CLAIM_LEASE_MS).toISOString(),
+  };
+
+  let descriptor;
+  try {
+    descriptor = fs.openSync(lockPath, 'wx', 0o600);
+  } catch (err) {
+    if (err && err.code === 'EEXIST') return null;
+    throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not claim lifecycle plan ${planId}`);
+  }
+
+  try {
+    fs.writeFileSync(descriptor, `${JSON.stringify(record)}\n`, 'utf8');
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+  } catch (err) {
+    try { fs.closeSync(descriptor); } catch {}
+    try { fs.unlinkSync(lockPath); } catch {}
+    throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not persist lifecycle claim for ${eventId}: ${err.message}`);
+  }
+  return { lockPath, owner_id: ownerId };
+}
+
+function releaseEventClaim(claim) {
+  let record;
+  try {
+    record = JSON.parse(fs.readFileSync(claim.lockPath, 'utf8'));
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return;
+    throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not verify lifecycle claim owner before release');
+  }
+  if (record.owner_id !== claim.owner_id) return;
+  try {
+    fs.unlinkSync(claim.lockPath);
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') {
+      throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not release lifecycle claim');
+    }
+  }
+}
+
+function highestContiguousSucceededRevision(doc) {
+  const byRevision = new Map(doc.events.map((event) => [event.revision, event]));
+  let revision = 0;
+  while (byRevision.get(revision + 1)?.delivery.status === 'succeeded') revision += 1;
+  return revision;
+}
 
 function readAdapterRegistration(projectDir) {
   const registrationPath = path.resolve(projectDir, REGISTRATION_PATH);
@@ -144,22 +203,22 @@ function runDrain({ specDir } = {}) {
     .sort((left, right) => left.revision - right.revision);
   const deliveries = [];
   const gaps = [];
-  const eventByRevision = new Map(doc.events.map((event) => [event.revision, event]));
-  let contiguousRevision = 0;
-  while (eventByRevision.get(contiguousRevision + 1)?.delivery.status === 'succeeded') {
-    contiguousRevision += 1;
-  }
 
   if (registration) {
-    for (const event of events) {
+    for (const queuedEvent of events) {
+      let currentDoc = readLifecycleDoc(specDir);
+      let event = currentDoc && currentDoc.events.find((candidate) => candidate.event_id === queuedEvent.event_id);
+      if (!event || !['pending', 'retryable'].includes(event.delivery.status)) continue;
+
+      let contiguousRevision = highestContiguousSucceededRevision(currentDoc);
       if (event.revision <= contiguousRevision) continue;
       const expectedRevision = contiguousRevision + 1;
       if (event.revision > expectedRevision) {
         gaps.push({
-          plan_id: doc.plan.plan_id,
+          plan_id: currentDoc.plan.plan_id,
           blocked_revision: event.revision,
           missing_predecessor: expectedRevision,
-          next_step: `Restore or replay lifecycle revision ${expectedRevision} for plan ${doc.plan.plan_id}, then rerun lifecycle drain.`,
+          next_step: `Restore or replay lifecycle revision ${expectedRevision} for plan ${currentDoc.plan.plan_id}, then rerun lifecycle drain.`,
         });
         deliveries.push({
           event_id: event.event_id,
@@ -175,22 +234,75 @@ function runDrain({ specDir } = {}) {
         break;
       }
 
-      const attempted = updateEventDelivery(specDir, event.event_id, {
-        attempts: event.delivery.attempts + 1,
-      });
-      if (!attempted.ok) throw new CliError(attempted.code, attempted.message);
+      const claim = acquireEventClaim(specDir, currentDoc.plan.plan_id, event.event_id);
+      if (!claim) {
+        deliveries.push({
+          event_id: event.event_id,
+          revision: event.revision,
+          status: event.delivery.status,
+          deferred: true,
+          reason: 'claim-held',
+        });
+        break;
+      }
 
-      invokeAdapter(attempted.event, registration);
+      let releaseClaim = true;
+      try {
+        currentDoc = readLifecycleDoc(specDir);
+        event = currentDoc && currentDoc.events.find((candidate) => candidate.event_id === queuedEvent.event_id);
+        if (!event || !['pending', 'retryable'].includes(event.delivery.status)) continue;
 
-      const completed = updateEventDelivery(specDir, event.event_id, { status: 'succeeded' });
-      if (!completed.ok) throw new CliError(completed.code, completed.message);
-      contiguousRevision = completed.event.revision;
-      deliveries.push({
-        event_id: completed.event.event_id,
-        revision: completed.event.revision,
-        status: completed.event.delivery.status,
-        deferred: false,
-      });
+        contiguousRevision = highestContiguousSucceededRevision(currentDoc);
+        if (event.revision <= contiguousRevision) continue;
+        const latestExpectedRevision = contiguousRevision + 1;
+        if (event.revision > latestExpectedRevision) {
+          gaps.push({
+            plan_id: currentDoc.plan.plan_id,
+            blocked_revision: event.revision,
+            missing_predecessor: latestExpectedRevision,
+            next_step: `Restore or replay lifecycle revision ${latestExpectedRevision} for plan ${currentDoc.plan.plan_id}, then rerun lifecycle drain.`,
+          });
+          deliveries.push({
+            event_id: event.event_id,
+            revision: event.revision,
+            status: event.delivery.status,
+            deferred: true,
+            blocked_by_gap: true,
+          });
+          break;
+        }
+
+        const attempted = updateEventDelivery(specDir, event.event_id, {
+          status: 'claimed',
+          attempts: event.delivery.attempts + 1,
+        });
+        if (!attempted.ok) throw new CliError(attempted.code, attempted.message);
+
+        try {
+          invokeAdapter(attempted.event, registration);
+        } catch (err) {
+          const retryable = updateEventDelivery(specDir, event.event_id, { status: 'retryable' });
+          if (!retryable.ok) {
+            releaseClaim = false;
+            throw new CliError(retryable.code, retryable.message);
+          }
+          throw err;
+        }
+
+        const completed = updateEventDelivery(specDir, event.event_id, { status: 'succeeded' });
+        if (!completed.ok) {
+          releaseClaim = false;
+          throw new CliError(completed.code, completed.message);
+        }
+        deliveries.push({
+          event_id: completed.event.event_id,
+          revision: completed.event.revision,
+          status: completed.event.delivery.status,
+          deferred: false,
+        });
+      } finally {
+        if (releaseClaim) releaseEventClaim(claim);
+      }
     }
   } else {
     for (const event of events) {
