@@ -861,7 +861,7 @@ test("structure splits a 9-task plan into execution-plan/ index, phase files, an
 	const env = json(["structure", plan, "--dry-run", "--json"]);
 	assert.equal(env.ok, true);
 	assert.equal(env.command, "structure");
-	assert.equal(env.contract, 2);
+	assert.equal(env.contract, 3);
 	assert.equal(env.data.action, "split");
 	assert.equal(env.data.taskCount, 9);
 	assert.equal(env.data.phaseCount, 2);
@@ -1357,7 +1357,7 @@ test("log init stamps the pipeline marker into a fresh log.json header", () => {
 	const env = json(["log", "init", dir, "--json"]);
 	assert.equal(env.ok, true);
 	assert.equal(env.command, "log init");
-	assert.equal(env.contract, 2); // CONTRACT is NOT bumped by the pipeline marker
+	assert.equal(env.contract, 3); // CONTRACT is NOT bumped by the pipeline marker
 	assert.equal(env.data.migrated, false);
 	// `init`'s data never echoed the header — the envelope shape stays unchanged.
 	assert.equal("header" in env.data, false);
@@ -1854,7 +1854,7 @@ test("contract handshake fails loudly on mismatch", () => {
 	const env = JSON.parse(res.stdout.trim());
 	assert.equal(env.error.code, "CONTRACT_MISMATCH");
 	// Matching contract passes.
-	assert.equal(json(["structure", plan, "--contract", "2", "--json"]).ok, true);
+	assert.equal(json(["structure", plan, "--contract", "3", "--json"]).ok, true);
 });
 
 test("a value-taking flag as the last arg fails instead of being silently dropped", () => {
@@ -2351,7 +2351,7 @@ test("doctor reports all-installed (exit 0, --json data.ok true)", () => {
 	});
 	assert.equal(env.ok, true);
 	assert.equal(env.command, "doctor");
-	assert.equal(env.contract, 2);
+	assert.equal(env.contract, 3);
 	assert.equal(env.data.ok, true);
 	assert.deepEqual(env.data.missingRequired, []);
 	assert.deepEqual(env.data.missingRecommended, []);
