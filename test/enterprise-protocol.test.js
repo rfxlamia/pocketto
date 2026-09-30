@@ -479,6 +479,7 @@ test('CYCLE 4: Core contract 3 plus adapter registration contract 2 fails closed
     },
   });
   assert.equal(res.status, 'retryable', 'mixed-major mismatch must leave the event pending/retryable for Core replay');
+  assert.equal(res.error.retryable, true, 'contract mismatch must remain explicitly retryable');
   assert.match(res.error.code, /ADAPTER_CONTRACT|ADAPTER_PROTOCOL/, 'mismatch needs an actionable protocol code');
   assert.equal(res.event_id, 'demo-plan:spec-approved:r1', 'protocol result must carry the original event ID');
   assert.equal(handlerCalls, 0, 'no handler may run on contract mismatch');
@@ -504,6 +505,7 @@ test('CYCLE 4: event allowlist omission fails closed before any handler or GitHu
     },
   });
   assert.equal(res.status, 'retryable', 'allowlist omission must leave the event pending/retryable for Core replay');
+  assert.equal(res.error.retryable, true, 'event allowlist mismatch must remain explicitly retryable');
   assert.match(res.error.code, /ADAPTER_EVENT_NOT_ALLOWED|ADAPTER_PROTOCOL/, 'omission needs an actionable protocol code');
   assert.equal(res.event_id, 'demo-plan:phase-complete:r1');
   assert.equal(handlerCalls, 0, 'no handler may run when the event is not allowlisted');
@@ -579,13 +581,13 @@ test('SUP-3: malformed allowlisted lifecycle events fail before handler or trans
 
   const invalidResults = invalidEvents.map(dispatch);
   assert.deepEqual({
-    outcomes: invalidResults.map(({ status, error }) => [status, error && error.code]),
+    outcomes: invalidResults.map(({ status, error }) => [status, error && error.retryable, error && error.code]),
     handlerCalls,
     transportCalls,
   }, {
     outcomes: [
-      ['retryable', 'ADAPTER_PROTOCOL_INVALID_EVENT'],
-      ['retryable', 'ADAPTER_PROTOCOL_INVALID_EVENT'],
+      ['terminal', false, 'ADAPTER_PROTOCOL_INVALID_EVENT'],
+      ['terminal', false, 'ADAPTER_PROTOCOL_INVALID_EVENT'],
     ],
     handlerCalls: 0,
     transportCalls: 0,

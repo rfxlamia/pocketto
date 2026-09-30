@@ -157,10 +157,15 @@ function dispatchEvent(event, opts = {}) {
   }
   if (!eventValidation.ok) {
     const validationCode = typeof eventValidation.code === 'string' ? eventValidation.code : 'LIFECYCLE_INVALID_EVENT';
-    return protocolError(
-      'ADAPTER_PROTOCOL_INVALID_EVENT',
-      `Lifecycle event violates the neutral schema (${validationCode}). The event stays pending/retryable and no handler or GitHub call ran.`
-    );
+    return serializeResponse({
+      event_id: eventId,
+      status: 'terminal',
+      error: {
+        code: 'ADAPTER_PROTOCOL_INVALID_EVENT',
+        retryable: false,
+        message: `Lifecycle event violates the neutral schema (${validationCode}); no handler or GitHub call ran.`,
+      },
+    }, eventId === 'unknown-event' ? undefined : eventId);
   }
 
   if (!record.events.includes(eventType)) {
