@@ -148,6 +148,30 @@ test('staged pi/core contains the lifecycle files and its entry starts', () => {
   }
 });
 
+test('staged Core roles include the lifecycle dispatcher and load their CLI entries', () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 't4-core-dispatcher-'));
+  try {
+    for (const role of ['pi/core', 'claude/core']) {
+      const out = path.join(parent, role.replace('/', '-'));
+      const stdout = execFileSync('node', [BUILDER, '--role', role, '--output', out], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      assert.ok(stdout.includes(`staged ${role}`), `${role} must be staged`);
+      assert.ok(
+        fs.existsSync(path.join(out, 'cli/lib/lifecycle-dispatch.js')),
+        `${role} staged Core must include cli/lib/lifecycle-dispatch.js`,
+      );
+      assert.doesNotThrow(
+        () => require(path.join(out, 'cli', 'index.js')),
+        `${role} staged CLI entry must load with its lifecycle dispatcher`,
+      );
+    }
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
 test('Enterprise runtime is staged only in Enterprise roles and selected for the v4 package', () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 't7-enterprise-surfaces-'));
   try {

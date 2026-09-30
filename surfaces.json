@@ -8,6 +8,7 @@
       "host": "pi",
       "kind": "core",
       "includes": [
+        "cli/lib/lifecycle-dispatch.js",
         "skills/brand-design/**",
         "skills/bug-hunting/**",
         "skills/hotfix/**",
@@ -106,6 +107,7 @@
       "host": "claude",
       "kind": "core",
       "includes": [
+        "cli/lib/lifecycle-dispatch.js",
         "skills/brand-design/**",
         "skills/bug-hunting/**",
         "skills/hotfix/**",
