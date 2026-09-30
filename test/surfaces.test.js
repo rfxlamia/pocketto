@@ -19,6 +19,15 @@ const BUILDER = path.join(ROOT, 'scripts', 'build-surfaces.js');
 const LIB = path.join(ROOT, 'cli', 'lib', 'surface-manifest.js');
 
 const EXPECTED_ROLES = ['pi/core', 'pi/enterprise', 'claude/core', 'claude/enterprise'];
+const LIFECYCLE_CORE_MODULES = [
+  'cli/lib/lifecycle-dispatch.js',
+  'cli/lib/lifecycle-drain.js',
+  'cli/lib/lifecycle-projection.js',
+  'cli/lib/lifecycle-claims.js',
+  'cli/lib/lifecycle-adapter.js',
+  'cli/lib/lifecycle-retry.js',
+  'cli/lib/lifecycle-lock.js',
+];
 
 const ENTERPRISE_RUNTIME_FILES = [
   'enterprise/cli.js',
@@ -158,14 +167,12 @@ test('staged Core roles include lifecycle dispatch dependencies and load their C
         encoding: 'utf8',
       });
       assert.ok(stdout.includes(`staged ${role}`), `${role} must be staged`);
-      assert.ok(
-        fs.existsSync(path.join(out, 'cli/lib/lifecycle-dispatch.js')),
-        `${role} staged Core must include cli/lib/lifecycle-dispatch.js`,
-      );
-      assert.ok(
-        fs.existsSync(path.join(out, 'cli/lib/lifecycle-lock.js')),
-        `${role} staged Core must include cli/lib/lifecycle-lock.js`,
-      );
+      for (const modulePath of LIFECYCLE_CORE_MODULES) {
+        assert.ok(
+          fs.existsSync(path.join(out, modulePath)),
+          `${role} staged Core must include ${modulePath}`,
+        );
+      }
       assert.doesNotThrow(
         () => require(path.join(out, 'cli', 'index.js')),
         `${role} staged CLI entry must load with its lifecycle dispatcher`,

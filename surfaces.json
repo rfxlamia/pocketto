@@ -9,6 +9,11 @@
       "kind": "core",
       "includes": [
         "cli/lib/lifecycle-dispatch.js",
+        "cli/lib/lifecycle-drain.js",
+        "cli/lib/lifecycle-projection.js",
+        "cli/lib/lifecycle-claims.js",
+        "cli/lib/lifecycle-adapter.js",
+        "cli/lib/lifecycle-retry.js",
         "cli/lib/lifecycle-lock.js",
         "skills/brand-design/**",
         "skills/bug-hunting/**",
@@ -109,6 +114,11 @@
       "kind": "core",
       "includes": [
         "cli/lib/lifecycle-dispatch.js",
+        "cli/lib/lifecycle-drain.js",
+        "cli/lib/lifecycle-projection.js",
+        "cli/lib/lifecycle-claims.js",
+        "cli/lib/lifecycle-adapter.js",
+        "cli/lib/lifecycle-retry.js",
         "cli/lib/lifecycle-lock.js",
         "skills/brand-design/**",
         "skills/bug-hunting/**",
