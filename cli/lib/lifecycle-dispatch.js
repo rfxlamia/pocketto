@@ -8,6 +8,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { CliError } = require('./envelope');
+const { writeFileAtomicSync } = require('./atomic-file');
+const { readLog } = require('./logjson');
 const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
 
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
@@ -76,6 +78,59 @@ function invokeAdapter(event, registration) {
   }
 }
 
+function initializeProjection(planDir, logPath) {
+  let projection = null;
+  if (fs.existsSync(logPath)) {
+    try {
+      projection = readLog(logPath);
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
+    }
+  }
+
+  if (!projection || !projection.header || !Array.isArray(projection.phases)) {
+    if (fs.existsSync(logPath)) fs.rmSync(logPath);
+    const logCommand = require('../commands/log');
+    logCommand.run({ sub: 'init', positionals: [planDir] });
+    projection = readLog(logPath);
+  }
+  if (!projection.header || !Array.isArray(projection.phases)) {
+    throw new CliError('LIFECYCLE_REPAIR_FAILED', `could not rebuild lifecycle projection: ${logPath}`);
+  }
+  return projection;
+}
+
+function projectionPathKey(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function applyLifecycleProjection(doc, projection) {
+  const phases = projection.phases;
+  const events = [...doc.events].sort((left, right) => left.revision - right.revision);
+  for (const event of events) {
+    if (event.type !== 'phase-complete') continue;
+    for (const ref of event.artifact_refs || []) {
+      if (ref.root !== 'plan' || ref.kind !== 'phase-evidence') continue;
+      const phase = phases.find((candidate) => projectionPathKey(candidate.file) === projectionPathKey(ref.path));
+      if (phase && phase.status === 'WAITING') phase.status = 'REVIEW';
+    }
+  }
+
+  const planState = (doc.plan && doc.plan.state) || {};
+  if (planState.status === 'DONE') {
+    for (const phase of phases) phase.status = 'DONE';
+    projection.header.status = 'DONE';
+    const closeEvent = events.find((event) => event.type === 'plan-closed');
+    if (closeEvent && typeof closeEvent.occurred_at === 'string') {
+      projection.header.date_completed = closeEvent.occurred_at.slice(0, 10);
+    }
+  } else {
+    projection.header.status = 'IN_PROGRESS';
+    projection.header.date_completed = null;
+  }
+  return projection;
+}
+
 function runDrain({ specDir } = {}) {
   if (typeof specDir !== 'string' || specDir.length === 0) {
     throw new CliError('USAGE', 'Usage: pocketto-pi lifecycle drain <spec_dir>');
@@ -95,11 +150,7 @@ function runDrain({ specDir } = {}) {
     contiguousRevision += 1;
   }
 
-  if (!registration) {
-    for (const event of events) {
-      deliveries.push({ event_id: event.event_id, revision: event.revision, status: event.delivery.status, deferred: true });
-    }
-  } else {
+  if (registration) {
     for (const event of events) {
       if (event.revision <= contiguousRevision) continue;
       const expectedRevision = contiguousRevision + 1;
@@ -141,6 +192,10 @@ function runDrain({ specDir } = {}) {
         deferred: false,
       });
     }
+  } else {
+    for (const event of events) {
+      deliveries.push({ event_id: event.event_id, revision: event.revision, status: event.delivery.status, deferred: true });
+    }
   }
 
   return {
@@ -156,4 +211,43 @@ function runDrain({ specDir } = {}) {
   };
 }
 
-module.exports = { runDrain };
+function runRepair({ specDir } = {}) {
+  if (typeof specDir !== 'string' || specDir.length === 0) {
+    throw new CliError('USAGE', 'Usage: pocketto-pi lifecycle repair <spec_dir>');
+  }
+
+  const doc = readLifecycleDoc(specDir);
+  if (!doc) throw new CliError('LIFECYCLE_NOT_FOUND', `lifecycle document not found: ${specDir}`);
+  if (!doc.plan || typeof doc.plan.plan_dir !== 'string' || doc.plan.plan_dir.length === 0) {
+    throw new CliError('LIFECYCLE_PLAN_DIR_REQUIRED', 'lifecycle repair requires a committed plan_dir');
+  }
+
+  const planDir = path.resolve(doc.plan.plan_dir);
+  const logPath = path.join(planDir, 'log.json');
+  const projection = initializeProjection(planDir, logPath);
+  applyLifecycleProjection(doc, projection);
+  const serialized = `${JSON.stringify(projection, null, 2)}\n`;
+  const current = fs.readFileSync(logPath, 'utf8');
+  if (current !== serialized) {
+    try {
+      writeFileAtomicSync(logPath, serialized);
+    } catch (err) {
+      throw new CliError('LIFECYCLE_REPAIR_FAILED', `could not write repaired projection: ${err.message}`);
+    }
+  }
+
+  return {
+    command: 'lifecycle repair',
+    exit: 0,
+    human: [`Rebuilt ${logPath} from committed lifecycle state (revision ${doc.plan.revision}).`],
+    data: {
+      plan_id: doc.plan.plan_id,
+      plan_dir: planDir,
+      log_path: logPath,
+      revision: doc.plan.revision,
+      journal_length: doc.events.length,
+    },
+  };
+}
+
+module.exports = { runDrain, runRepair };
