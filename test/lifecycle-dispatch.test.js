@@ -900,6 +900,140 @@ process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeed
   }
 });
 
+test('lifecycle drain reclaims a dead guard owner but never steals from a live owner', () => {
+  // Given a real per-plan guard written by an exited owner and another guard
+  // owned by this live process, When drain runs, Then only the dead owner's
+  // guard is reclaimed and each pending event can be invoked at most once.
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-drain-stale-guard-'));
+  const projectDir = path.join(root, 'project');
+  const specRoot = path.join(projectDir, 'spec');
+  const pocketDir = path.join(projectDir, '.pocket');
+  const callsPath = path.join(root, 'adapter-calls.jsonl');
+  mkdirSync(specRoot, { recursive: true });
+  mkdirSync(pocketDir, { recursive: true });
+  writeFileSync(callsPath, '');
+
+  const adapterPath = path.join(root, 'fake-adapter');
+  writeFileSync(adapterPath, `#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const eventPath = process.argv.slice(2).find((arg) => arg.endsWith('.json') && fs.existsSync(arg));
+if (!eventPath) process.exit(2);
+const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+fs.appendFileSync(process.env.ADAPTER_CALLS, JSON.stringify({ event_id: event.event_id }) + '\\n');
+process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded' }) + '\\n');
+`);
+  chmodSync(adapterPath, 0o755);
+  writeFileSync(path.join(pocketDir, 'lifecycle-adapter.json'), `${JSON.stringify({
+    schema: 1,
+    adapter_contract: 1,
+    argv: [adapterPath],
+    events: ['spec-approved'],
+    timeout_ms: 30000,
+  }, null, 2)}\n`);
+
+  const { commitTransition, lifecyclePathFor } = require('../cli/lib/lifecycle-store');
+  const makePendingPlan = (planId) => {
+    const specDir = path.join(specRoot, planId);
+    mkdirSync(specDir, { recursive: true });
+    const content = `approved spec for ${planId}\n`;
+    writeFileSync(path.join(specDir, 'spec.md'), content);
+    const seeded = commitTransition({
+      specDir,
+      planDir: null,
+      planId,
+      type: 'spec-approved',
+      artifacts: [{
+        root: 'spec',
+        kind: 'spec-doc',
+        path: 'spec.md',
+        sha256: sha256Hex(content),
+        revision: 1,
+      }],
+      deps: { now: () => FIXED_CLOCK },
+    });
+    assert.equal(seeded.ok, true, `pending event should seed: ${JSON.stringify(seeded)}`);
+    return { specDir, eventId: seeded.event.event_id, lifecyclePath: lifecyclePathFor(specDir) };
+  };
+  const drain = (fixture) => runCli(
+    ['lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3'],
+    {
+      cwd: projectDir,
+      env: { ADAPTER_CALLS: callsPath, POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK },
+    },
+  );
+  const readCalls = () => readFileSync(callsPath, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+  try {
+    const deadOwnerPlan = makePendingPlan('dead-guard-plan');
+    const deadGuardPath = path.join(deadOwnerPlan.specDir, '.lifecycle.lock.guard');
+    const deadOwnerId = '00000000-0000-4000-8000-000000000091';
+    const deadOwnerPid = Number(execFileSync(process.execPath, ['-e', `
+      const fs = require('node:fs');
+      const fd = fs.openSync(process.env.GUARD_PATH, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify({ owner_id: process.env.GUARD_OWNER_ID, owner_pid: process.pid }) + '\\n');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      process.stdout.write(String(process.pid));
+    `], {
+      cwd: projectDir,
+      encoding: 'utf8',
+      env: { ...process.env, GUARD_PATH: deadGuardPath, GUARD_OWNER_ID: deadOwnerId },
+    }).trim());
+    assert.ok(Number.isInteger(deadOwnerPid) && deadOwnerPid > 0, 'guard fixture must record its creator PID');
+    let deadOwnerAlive = true;
+    try {
+      process.kill(deadOwnerPid, 0);
+    } catch (err) {
+      if (err && err.code === 'ESRCH') deadOwnerAlive = false;
+      else throw err;
+    }
+    assert.equal(deadOwnerAlive, false, 'dead-guard fixture owner must have exited before drain');
+
+    const deadDrain = drain(deadOwnerPlan);
+    const deadEnvelope = JSON.parse(deadDrain.stdout.trim());
+    assert.equal(deadEnvelope.ok, true, `drain should reclaim a dead guard: ${JSON.stringify(deadEnvelope)}${deadDrain.stderr}`);
+    assert.equal(deadDrain.code, 0);
+    assert.deepEqual(readCalls(), [{ event_id: deadOwnerPlan.eventId }], 'the reclaimed event must invoke the adapter exactly once');
+    assert.equal(
+      existsSync(path.join(deadOwnerPlan.specDir, '.lifecycle.lock')),
+      false,
+      'successful delivery must release the per-plan event lease',
+    );
+    const deadLedger = JSON.parse(readFileSync(deadOwnerPlan.lifecyclePath, 'utf8'));
+    assert.equal(deadLedger.events[0].delivery.status, 'succeeded');
+    assert.equal(deadLedger.events[0].delivery.attempts, 1, 'guard recovery must preserve one initial attempt');
+
+    const repeatDeadDrain = drain(deadOwnerPlan);
+    assert.equal(JSON.parse(repeatDeadDrain.stdout.trim()).ok, true);
+    assert.equal(readCalls().length, 1, 'a completed event must not be invoked again');
+
+    const liveOwnerPlan = makePendingPlan('live-guard-plan');
+    const liveGuardPath = path.join(liveOwnerPlan.specDir, '.lifecycle.lock.guard');
+    const liveGuardBytes = `${JSON.stringify({
+      owner_id: '00000000-0000-4000-8000-000000000092',
+      owner_pid: process.pid,
+    })}\n`;
+    writeFileSync(liveGuardPath, liveGuardBytes, { flag: 'wx', mode: 0o600 });
+
+    const liveDrain = drain(liveOwnerPlan);
+    const liveEnvelope = JSON.parse(liveDrain.stdout.trim());
+    assert.equal(liveEnvelope.ok, true, `drain should defer to a live guard owner: ${JSON.stringify(liveEnvelope)}${liveDrain.stderr}`);
+    assert.equal(liveDrain.code, 0);
+    assert.equal(readFileSync(liveGuardPath, 'utf8'), liveGuardBytes, "a live owner's guard must not be replaced or removed");
+    const liveLedger = JSON.parse(readFileSync(liveOwnerPlan.lifecyclePath, 'utf8'));
+    assert.equal(liveLedger.events[0].delivery.status, 'pending');
+    assert.equal(liveLedger.events[0].delivery.attempts, 0, 'a live guard must block claim attempts');
+    assert.deepEqual(readCalls(), [{ event_id: deadOwnerPlan.eventId }], 'the live guard must not permit a second adapter invocation');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Core classifies adapter protocol failures with bounded retry scheduling and no GitHub calls', () => {
   // Given missing registration, wrong adapter contract, timeout, non-zero exit,
   // malformed response, or rate-limit failure, When Core drains committed events,
