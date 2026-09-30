@@ -16,36 +16,113 @@ const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
 const CLAIM_LEASE_MS = 60_000;
 
-function acquireEventClaim(specDir, planId, eventId) {
-  const lockPath = path.join(specDir, '.lifecycle.lock');
-  const ownerId = randomUUID();
-  const claimedAt = new Date(process.env.POCKETTO_LIFECYCLE_NOW || Date.now()).toISOString();
-  const record = {
-    plan_id: planId,
-    event_id: eventId,
-    owner_id: ownerId,
-    claimed_at: claimedAt,
-    lease_expires_at: new Date(Date.parse(claimedAt) + CLAIM_LEASE_MS).toISOString(),
-  };
+function ownerProcessIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid < 1) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return !err || !['ESRCH', 'EINVAL'].includes(err.code);
+  }
+}
 
+function acquireClaimGuard(lockPath) {
+  const guardPath = `${lockPath}.guard`;
+  const ownerId = randomUUID();
   let descriptor;
   try {
-    descriptor = fs.openSync(lockPath, 'wx', 0o600);
+    descriptor = fs.openSync(guardPath, 'wx', 0o600);
   } catch (err) {
     if (err && err.code === 'EEXIST') return null;
-    throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not claim lifecycle plan ${planId}`);
+    throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not serialize lifecycle claim acquisition');
   }
 
   try {
-    fs.writeFileSync(descriptor, `${JSON.stringify(record)}\n`, 'utf8');
+    fs.writeFileSync(descriptor, `${JSON.stringify({ owner_id: ownerId, owner_pid: process.pid })}\n`, 'utf8');
     fs.fsyncSync(descriptor);
     fs.closeSync(descriptor);
   } catch (err) {
     try { fs.closeSync(descriptor); } catch {}
-    try { fs.unlinkSync(lockPath); } catch {}
-    throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not persist lifecycle claim for ${eventId}: ${err.message}`);
+    try { fs.unlinkSync(guardPath); } catch {}
+    throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not persist claim guard: ${err.message}`);
   }
-  return { lockPath, owner_id: ownerId };
+  return { guardPath, owner_id: ownerId };
+}
+
+function releaseClaimGuard(guard) {
+  let record;
+  try {
+    record = JSON.parse(fs.readFileSync(guard.guardPath, 'utf8'));
+  } catch {
+    return;
+  }
+  if (record.owner_id !== guard.owner_id) return;
+  try {
+    fs.unlinkSync(guard.guardPath);
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') {
+      throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not release lifecycle claim guard');
+    }
+  }
+}
+
+function acquireEventClaim(specDir, planId, eventId) {
+  const lockPath = path.join(specDir, '.lifecycle.lock');
+  const guard = acquireClaimGuard(lockPath);
+  if (!guard) return null;
+
+  try {
+    const clock = new Date(process.env.POCKETTO_LIFECYCLE_NOW || Date.now());
+    if (Number.isNaN(clock.getTime())) {
+      throw new CliError('LIFECYCLE_BAD_CLOCK', 'lifecycle clock must be a valid timestamp');
+    }
+    const now = clock.getTime();
+    if (fs.existsSync(lockPath)) {
+      let existing;
+      try {
+        existing = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') return null;
+      }
+      if (existing) {
+        const expiresAt = Date.parse(existing.lease_expires_at);
+        if (!Number.isFinite(expiresAt) || expiresAt > now || ownerProcessIsAlive(existing.owner_pid)) return null;
+        fs.unlinkSync(lockPath);
+      }
+    }
+
+    const ownerId = randomUUID();
+    const claimedAt = clock.toISOString();
+    const record = {
+      plan_id: planId,
+      event_id: eventId,
+      owner_id: ownerId,
+      owner_pid: process.pid,
+      claimed_at: claimedAt,
+      lease_expires_at: new Date(now + CLAIM_LEASE_MS).toISOString(),
+    };
+
+    let descriptor;
+    try {
+      descriptor = fs.openSync(lockPath, 'wx', 0o600);
+    } catch (err) {
+      if (err && err.code === 'EEXIST') return null;
+      throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not claim lifecycle plan ${planId}`);
+    }
+
+    try {
+      fs.writeFileSync(descriptor, `${JSON.stringify(record)}\n`, 'utf8');
+      fs.fsyncSync(descriptor);
+      fs.closeSync(descriptor);
+    } catch (err) {
+      try { fs.closeSync(descriptor); } catch {}
+      try { fs.unlinkSync(lockPath); } catch {}
+      throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not persist lifecycle claim for ${eventId}: ${err.message}`);
+    }
+    return { lockPath, owner_id: ownerId };
+  } finally {
+    releaseClaimGuard(guard);
+  }
 }
 
 function releaseEventClaim(claim) {
@@ -199,7 +276,7 @@ function runDrain({ specDir } = {}) {
   if (!doc) throw new CliError('LIFECYCLE_NOT_FOUND', `lifecycle document not found: ${specDir}`);
   const registration = readAdapterRegistration(process.cwd());
   const events = doc.events
-    .filter((event) => ['pending', 'retryable'].includes(event.delivery.status))
+    .filter((event) => ['pending', 'retryable', 'claimed'].includes(event.delivery.status))
     .sort((left, right) => left.revision - right.revision);
   const deliveries = [];
   const gaps = [];
@@ -208,7 +285,7 @@ function runDrain({ specDir } = {}) {
     for (const queuedEvent of events) {
       let currentDoc = readLifecycleDoc(specDir);
       let event = currentDoc && currentDoc.events.find((candidate) => candidate.event_id === queuedEvent.event_id);
-      if (!event || !['pending', 'retryable'].includes(event.delivery.status)) continue;
+      if (!event || !['pending', 'retryable', 'claimed'].includes(event.delivery.status)) continue;
 
       let contiguousRevision = highestContiguousSucceededRevision(currentDoc);
       if (event.revision <= contiguousRevision) continue;
@@ -250,7 +327,7 @@ function runDrain({ specDir } = {}) {
       try {
         currentDoc = readLifecycleDoc(specDir);
         event = currentDoc && currentDoc.events.find((candidate) => candidate.event_id === queuedEvent.event_id);
-        if (!event || !['pending', 'retryable'].includes(event.delivery.status)) continue;
+        if (!event || !['pending', 'retryable', 'claimed'].includes(event.delivery.status)) continue;
 
         contiguousRevision = highestContiguousSucceededRevision(currentDoc);
         if (event.revision <= contiguousRevision) continue;
