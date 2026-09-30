@@ -391,11 +391,7 @@ function updateEventDelivery(specDir, eventId, patch) {
   return withLifecycleMutation(specDir, () => updateEventDeliveryUnlocked(specDir, eventId, patch));
 }
 
-function updateEventDeliveryUnlocked(specDir, eventId, patch) {
-  const doc = readLifecycleDoc(specDir);
-  if (!doc) return fail('LIFECYCLE_NOT_FOUND', 'lifecycle document does not exist');
-  const event = doc.events.find((candidate) => candidate.event_id === eventId);
-  if (!event) return fail('LIFECYCLE_EVENT_NOT_FOUND', `event not found: ${eventId}`);
+function validateDeliveryPatch(event, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
     return fail('LIFECYCLE_BAD_DELIVERY', 'delivery update must be an object');
   }
@@ -446,7 +442,17 @@ function updateEventDeliveryUnlocked(specDir, eventId, patch) {
   const updated = { ...event, delivery: { ...event.delivery, ...deliveryPatch } };
   const validation = validateEvent(updated);
   if (!validation.ok) return fail(validation.code, validation.message);
-  event.delivery = updated.delivery;
+  return { ok: true, delivery: updated.delivery };
+}
+
+function updateEventDeliveryUnlocked(specDir, eventId, patch) {
+  const doc = readLifecycleDoc(specDir);
+  if (!doc) return fail('LIFECYCLE_NOT_FOUND', 'lifecycle document does not exist');
+  const event = doc.events.find((candidate) => candidate.event_id === eventId);
+  if (!event) return fail('LIFECYCLE_EVENT_NOT_FOUND', `event not found: ${eventId}`);
+  const validation = validateDeliveryPatch(event, patch);
+  if (!validation.ok) return validation;
+  event.delivery = validation.delivery;
 
   try {
     writeFileAtomicSync(lifecyclePathFor(specDir), serializeDoc(doc));
