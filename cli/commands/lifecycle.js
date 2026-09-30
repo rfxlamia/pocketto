@@ -6,14 +6,18 @@
 
 const { CliError } = require('../lib/envelope');
 const { runTransition } = require('../lib/lifecycle-transition');
+const { runDrain } = require('../lib/lifecycle-dispatch');
 
 function run({ positionals, artifacts } = {}) {
   const list = Array.isArray(positionals) ? positionals : [];
   const [sub, specDir, type] = list;
-  if (sub !== 'transition') {
-    throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'lifecycle' subcommand: ${sub || '(none)'}. Use transition.`);
+  if (sub === 'transition') {
+    return runTransition({ specDir, type, artifactFlags: artifacts });
   }
-  return runTransition({ specDir, type, artifactFlags: artifacts });
+  if (sub === 'drain') {
+    return runDrain({ specDir });
+  }
+  throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'lifecycle' subcommand: ${sub || '(none)'}. Use transition | drain.`);
 }
 
 module.exports = { run };

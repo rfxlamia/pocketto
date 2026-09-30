@@ -39,7 +39,14 @@ function fail(code, message, extra = {}) {
 function readLifecycleDoc(specDir) {
   const target = lifecyclePathFor(specDir);
   if (!fs.existsSync(target)) return null;
-  return JSON.parse(fs.readFileSync(target, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(target, 'utf8'));
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    const invalid = new Error(`invalid lifecycle document at ${target}: ${err.message}`, { cause: err });
+    invalid.code = 'LIFECYCLE_CORRUPT';
+    throw invalid;
+  }
 }
 
 function initDoc({ planId, specDir, planDir }) {
@@ -207,7 +214,7 @@ function validateArtifactOnDisk(ref, rootDir, deps) {
     digest = hashFn
       ? hashFn(candidate)
       : hashBytes(readFn(candidate));
-  } catch (err) {
+  } catch {
     return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
   }
   if (String(digest).toLowerCase() !== ref.sha256) {
@@ -344,11 +351,40 @@ function commitTransition(input) {
   return { ok: true, event, revision };
 }
 
+function updateEventDelivery(specDir, eventId, patch) {
+  const doc = readLifecycleDoc(specDir);
+  if (!doc) return fail('LIFECYCLE_NOT_FOUND', 'lifecycle document does not exist');
+  const event = doc.events.find((candidate) => candidate.event_id === eventId);
+  if (!event) return fail('LIFECYCLE_EVENT_NOT_FOUND', `event not found: ${eventId}`);
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery update must be an object');
+  }
+  for (const key of Object.keys(patch)) {
+    if (!['status', 'attempts'].includes(key)) {
+      return fail('LIFECYCLE_BAD_DELIVERY', `unsupported delivery update field: ${key}`);
+    }
+  }
+
+  const updated = { ...event, delivery: { ...event.delivery, ...patch } };
+  const validation = validateEvent(updated);
+  if (!validation.ok) return fail(validation.code, validation.message);
+  event.delivery = updated.delivery;
+
+  try {
+    writeFileAtomicSync(lifecyclePathFor(specDir), serializeDoc(doc));
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    return fail('LIFECYCLE_PERSISTENCE', `lifecycle persistence failed: ${detail}`);
+  }
+  return { ok: true, event };
+}
+
 module.exports = {
   LIFECYCLE_FILE,
   LIFECYCLE_SCHEMA,
   lifecyclePathFor,
   readLifecycleDoc,
   commitTransition,
+  updateEventDelivery,
   hashBytes,
 };
