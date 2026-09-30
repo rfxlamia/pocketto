@@ -11,10 +11,13 @@ const { spawnSync } = require('node:child_process');
 const { CliError } = require('./envelope');
 const { writeFileAtomicSync } = require('./atomic-file');
 const { readLog } = require('./logjson');
+const { validateAdapterResponse } = require('./lifecycle-contract');
 const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
 
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
 const CLAIM_LEASE_MS = 60_000;
+const MAX_DELIVERY_ATTEMPTS = 6;
+const RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000, 600_000];
 
 function ownerProcessIsAlive(pid) {
   if (!Number.isInteger(pid) || pid < 1) return true;
@@ -150,28 +153,171 @@ function highestContiguousSucceededRevision(doc) {
   return revision;
 }
 
+function protocolFailure(code, message, retryable = true) {
+  const error = new Error(message);
+  error.code = code;
+  error.retryable = retryable;
+  return error;
+}
+
+function currentTimeMs() {
+  const now = new Date(process.env.POCKETTO_LIFECYCLE_NOW || Date.now()).getTime();
+  if (!Number.isFinite(now)) throw new CliError('LIFECYCLE_BAD_CLOCK', 'lifecycle clock must be a valid timestamp');
+  return now;
+}
+
+function safeErrorCode(code, fallback = 'ADAPTER_PROTOCOL_ERROR') {
+  return typeof code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(code) ? code : fallback;
+}
+
+function failureDeliveryPatch(error, attempts, nowMs) {
+  const retryable = error.retryable !== false;
+  const canRetry = retryable && attempts < MAX_DELIVERY_ATTEMPTS;
+  const code = safeErrorCode(error.code);
+  if (canRetry) {
+    const delay = RETRY_DELAYS_MS[Math.min(attempts - 1, RETRY_DELAYS_MS.length - 1)];
+    return {
+      status: 'retryable',
+      next_attempt_at: new Date(nowMs + delay).toISOString(),
+      manual_resolution: false,
+      error: {
+        code,
+        retryable: true,
+        message: 'registered lifecycle adapter returned a retryable protocol failure',
+        attempts,
+      },
+    };
+  }
+  return {
+    status: 'terminal',
+    next_attempt_at: null,
+    manual_resolution: true,
+    error: {
+      code: attempts >= MAX_DELIVERY_ATTEMPTS ? 'MAX_ADAPTER_ATTEMPTS_EXCEEDED' : code,
+      retryable: false,
+      message: attempts >= MAX_DELIVERY_ATTEMPTS
+        ? 'maximum lifecycle adapter attempts reached; manual resolution required'
+        : 'registered lifecycle adapter requires manual resolution',
+      attempts,
+    },
+  };
+}
+
+function responseDeliveryPatch(response, attempts, nowMs) {
+  const proof = {};
+  for (const key of ['proof_ref', 'proof_hash']) {
+    if (Object.prototype.hasOwnProperty.call(response, key)) proof[key] = response[key];
+  }
+  if (response.status === 'succeeded') {
+    return {
+      ...proof,
+      status: 'succeeded',
+      error: null,
+      next_attempt_at: null,
+      manual_resolution: false,
+    };
+  }
+  if (response.status === 'retryable') {
+    const adapterError = response.error || {
+      code: 'ADAPTER_RETRYABLE',
+      retryable: true,
+      message: 'adapter requested a retry',
+    };
+    const outcome = failureDeliveryPatch(
+      protocolFailure(
+        safeErrorCode(adapterError.code),
+        'registered lifecycle adapter reported a retryable outcome',
+        adapterError.retryable,
+      ),
+      attempts,
+      nowMs,
+    );
+    return { ...proof, ...outcome };
+  }
+  if (response.status === 'terminal') {
+    const adapterError = response.error || {
+      code: 'ADAPTER_TERMINAL',
+      retryable: false,
+      message: 'adapter requested manual resolution',
+    };
+    return {
+      ...proof,
+      ...failureDeliveryPatch(
+        protocolFailure(
+          safeErrorCode(adapterError.code, 'ADAPTER_TERMINAL'),
+          'registered lifecycle adapter requires manual resolution',
+          false,
+        ),
+        attempts,
+        nowMs,
+      ),
+    };
+  }
+  if (attempts >= MAX_DELIVERY_ATTEMPTS || (response.error && response.error.retryable === false)) {
+    const reconciliationError = response.error || {
+      code: 'ADAPTER_RECONCILIATION_LIMIT',
+      retryable: false,
+      message: 'adapter requires manual reconciliation',
+    };
+    return {
+      ...proof,
+      ...failureDeliveryPatch(
+        protocolFailure(
+          safeErrorCode(reconciliationError.code, 'ADAPTER_RECONCILIATION_LIMIT'),
+          'adapter requires manual resolution after bounded reconciliation attempts',
+          false,
+        ),
+        attempts,
+        nowMs,
+      ),
+    };
+  }
+  return {
+    ...proof,
+    status: 'reconciling',
+    error: response.error ? {
+      code: safeErrorCode(response.error.code),
+      retryable: response.error.retryable,
+      message: 'registered lifecycle adapter reported an outcome requiring reconciliation',
+      attempts,
+    } : null,
+    next_attempt_at: null,
+    manual_resolution: false,
+  };
+}
+
 function readAdapterRegistration(projectDir) {
   const registrationPath = path.resolve(projectDir, REGISTRATION_PATH);
-  if (!fs.existsSync(registrationPath)) return null;
+  if (!fs.existsSync(registrationPath)) {
+    return { registration: null, error: protocolFailure('ADAPTER_NOT_REGISTERED', 'lifecycle adapter registration is missing') };
+  }
 
   let registration;
   try {
     registration = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
-  } catch (err) {
-    throw new CliError('LIFECYCLE_ADAPTER_INVALID', `cannot read lifecycle adapter registration: ${err.message}`);
+  } catch {
+    return { registration: null, error: protocolFailure('ADAPTER_REGISTRATION_MALFORMED', 'lifecycle adapter registration is malformed') };
+  }
+  if (!registration || typeof registration !== 'object' || Array.isArray(registration)) {
+    return { registration: null, error: protocolFailure('ADAPTER_REGISTRATION_INVALID', 'lifecycle adapter registration is invalid') };
+  }
+  if (registration.adapter_contract !== 1) {
+    return { registration: null, error: protocolFailure('ADAPTER_CONTRACT_MISMATCH', 'registered lifecycle adapter contract is incompatible') };
   }
   if (
-    !registration
-    || registration.schema !== 1
-    || registration.adapter_contract !== 1
+    registration.schema !== 1
     || !Array.isArray(registration.argv)
     || registration.argv.length === 0
     || registration.argv.some((arg) => typeof arg !== 'string' || arg.length === 0)
     || !Array.isArray(registration.events)
+    || registration.events.some((event) => typeof event !== 'string')
+    || !Number.isInteger(registration.timeout_ms)
+    || registration.timeout_ms < 1
+    || registration.timeout_ms > 30_000
   ) {
-    throw new CliError('LIFECYCLE_ADAPTER_INVALID', 'lifecycle adapter registration is invalid');
+    return { registration: null, error: protocolFailure('ADAPTER_REGISTRATION_INVALID', 'lifecycle adapter registration is invalid') };
   }
-  return registration;
+  return { registration, error: null };
 }
 
 function invokeAdapter(event, registration) {
@@ -193,20 +339,28 @@ function invokeAdapter(event, registration) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     if (result.error) {
-      throw new CliError('LIFECYCLE_ADAPTER_FAILED', 'registered lifecycle adapter invocation failed');
+      const timedOut = result.error.code === 'ETIMEDOUT' || result.error.errno === 'ETIMEDOUT';
+      throw protocolFailure(
+        timedOut ? 'ADAPTER_TIMEOUT' : 'ADAPTER_EXECUTION_FAILED',
+        timedOut ? 'registered lifecycle adapter timed out' : 'registered lifecycle adapter could not be executed',
+      );
     }
     if (result.status !== 0) {
-      throw new CliError('LIFECYCLE_ADAPTER_FAILED', `registered lifecycle adapter exited with status ${result.status}`);
+      throw protocolFailure('ADAPTER_EXIT_NON_ZERO', 'registered lifecycle adapter exited unsuccessfully');
     }
 
     let response;
     try {
       response = JSON.parse(String(result.stdout || '').trim());
     } catch {
-      throw new CliError('LIFECYCLE_ADAPTER_RESPONSE', 'registered lifecycle adapter returned invalid JSON');
+      throw protocolFailure('ADAPTER_RESPONSE_MALFORMED', 'registered lifecycle adapter returned malformed JSON');
     }
-    if (!response || response.event_id !== event.event_id || response.status !== 'succeeded') {
-      throw new CliError('LIFECYCLE_ADAPTER_RESPONSE', 'registered lifecycle adapter did not confirm the event');
+    const validation = validateAdapterResponse(response, event.event_id);
+    if (!validation.ok) {
+      throw protocolFailure('ADAPTER_RESPONSE_INVALID', 'registered lifecycle adapter returned an invalid response');
+    }
+    if (response.status === 'succeeded' && response.error) {
+      throw protocolFailure('ADAPTER_RESPONSE_INVALID', 'registered lifecycle adapter returned a contradictory success response');
     }
     return response;
   } finally {
@@ -274,28 +428,97 @@ function runDrain({ specDir } = {}) {
 
   const doc = readLifecycleDoc(specDir);
   if (!doc) throw new CliError('LIFECYCLE_NOT_FOUND', `lifecycle document not found: ${specDir}`);
-  const registration = readAdapterRegistration(process.cwd());
+  const adapter = readAdapterRegistration(process.cwd());
   const events = doc.events
-    .filter((event) => ['pending', 'retryable', 'claimed'].includes(event.delivery.status))
+    .filter((event) => ['pending', 'retryable', 'claimed', 'reconciling'].includes(event.delivery.status))
     .sort((left, right) => left.revision - right.revision);
   const deliveries = [];
   const gaps = [];
 
-  if (registration) {
-    for (const queuedEvent of events) {
-      let currentDoc = readLifecycleDoc(specDir);
-      let event = currentDoc && currentDoc.events.find((candidate) => candidate.event_id === queuedEvent.event_id);
-      if (!event || !['pending', 'retryable', 'claimed'].includes(event.delivery.status)) continue;
+  for (const queuedEvent of events) {
+    let currentDoc = readLifecycleDoc(specDir);
+    let event = currentDoc && currentDoc.events.find((candidate) => candidate.event_id === queuedEvent.event_id);
+    if (!event || !['pending', 'retryable', 'claimed', 'reconciling'].includes(event.delivery.status)) continue;
 
-      let contiguousRevision = highestContiguousSucceededRevision(currentDoc);
+    let now = currentTimeMs();
+    if (event.delivery.status === 'retryable' && typeof event.delivery.next_attempt_at === 'string') {
+      const nextAttempt = Date.parse(event.delivery.next_attempt_at);
+      if (Number.isFinite(nextAttempt) && now < nextAttempt) {
+        deliveries.push({
+          event_id: event.event_id,
+          revision: event.revision,
+          status: event.delivery.status,
+          deferred: true,
+          reason: 'retry-backoff',
+          next_attempt_at: event.delivery.next_attempt_at,
+        });
+        break;
+      }
+    }
+
+    let contiguousRevision = highestContiguousSucceededRevision(currentDoc);
+    if (event.revision <= contiguousRevision) continue;
+    const expectedRevision = contiguousRevision + 1;
+    if (event.revision > expectedRevision) {
+      gaps.push({
+        plan_id: currentDoc.plan.plan_id,
+        blocked_revision: event.revision,
+        missing_predecessor: expectedRevision,
+        next_step: `Restore or replay lifecycle revision ${expectedRevision} for plan ${currentDoc.plan.plan_id}, then rerun lifecycle drain.`,
+      });
+      deliveries.push({
+        event_id: event.event_id,
+        revision: event.revision,
+        status: event.delivery.status,
+        deferred: true,
+        blocked_by_gap: true,
+      });
+      break;
+    }
+
+    const claim = acquireEventClaim(specDir, currentDoc.plan.plan_id, event.event_id);
+    if (!claim) {
+      deliveries.push({
+        event_id: event.event_id,
+        revision: event.revision,
+        status: event.delivery.status,
+        deferred: true,
+        reason: 'claim-held',
+      });
+      break;
+    }
+
+    let releaseClaim = true;
+    try {
+      currentDoc = readLifecycleDoc(specDir);
+      event = currentDoc && currentDoc.events.find((candidate) => candidate.event_id === queuedEvent.event_id);
+      if (!event || !['pending', 'retryable', 'claimed', 'reconciling'].includes(event.delivery.status)) continue;
+
+      now = currentTimeMs();
+      if (event.delivery.status === 'retryable' && typeof event.delivery.next_attempt_at === 'string') {
+        const nextAttempt = Date.parse(event.delivery.next_attempt_at);
+        if (Number.isFinite(nextAttempt) && now < nextAttempt) {
+          deliveries.push({
+            event_id: event.event_id,
+            revision: event.revision,
+            status: event.delivery.status,
+            deferred: true,
+            reason: 'retry-backoff',
+            next_attempt_at: event.delivery.next_attempt_at,
+          });
+          break;
+        }
+      }
+
+      contiguousRevision = highestContiguousSucceededRevision(currentDoc);
       if (event.revision <= contiguousRevision) continue;
-      const expectedRevision = contiguousRevision + 1;
-      if (event.revision > expectedRevision) {
+      const latestExpectedRevision = contiguousRevision + 1;
+      if (event.revision > latestExpectedRevision) {
         gaps.push({
           plan_id: currentDoc.plan.plan_id,
           blocked_revision: event.revision,
-          missing_predecessor: expectedRevision,
-          next_step: `Restore or replay lifecycle revision ${expectedRevision} for plan ${currentDoc.plan.plan_id}, then rerun lifecycle drain.`,
+          missing_predecessor: latestExpectedRevision,
+          next_step: `Restore or replay lifecycle revision ${latestExpectedRevision} for plan ${currentDoc.plan.plan_id}, then rerun lifecycle drain.`,
         });
         deliveries.push({
           event_id: event.event_id,
@@ -306,91 +529,65 @@ function runDrain({ specDir } = {}) {
         });
         break;
       }
-      if (!registration.events.includes(event.type)) {
-        deliveries.push({ event_id: event.event_id, revision: event.revision, status: event.delivery.status, deferred: true });
-        break;
+
+      const attempts = event.delivery.attempts + 1;
+      const attempted = updateEventDelivery(specDir, event.event_id, {
+        status: 'claimed',
+        attempts,
+        error: null,
+        next_attempt_at: null,
+        manual_resolution: false,
+      });
+      if (!attempted.ok) throw new CliError(attempted.code, attempted.message);
+
+      let response = null;
+      let failure = adapter.error;
+      if (!failure && !adapter.registration.events.includes(event.type)) {
+        failure = protocolFailure('ADAPTER_EVENT_UNSUPPORTED', 'registered lifecycle adapter does not support this event type');
       }
-
-      const claim = acquireEventClaim(specDir, currentDoc.plan.plan_id, event.event_id);
-      if (!claim) {
-        deliveries.push({
-          event_id: event.event_id,
-          revision: event.revision,
-          status: event.delivery.status,
-          deferred: true,
-          reason: 'claim-held',
-        });
-        break;
-      }
-
-      let releaseClaim = true;
-      try {
-        currentDoc = readLifecycleDoc(specDir);
-        event = currentDoc && currentDoc.events.find((candidate) => candidate.event_id === queuedEvent.event_id);
-        if (!event || !['pending', 'retryable', 'claimed'].includes(event.delivery.status)) continue;
-
-        contiguousRevision = highestContiguousSucceededRevision(currentDoc);
-        if (event.revision <= contiguousRevision) continue;
-        const latestExpectedRevision = contiguousRevision + 1;
-        if (event.revision > latestExpectedRevision) {
-          gaps.push({
-            plan_id: currentDoc.plan.plan_id,
-            blocked_revision: event.revision,
-            missing_predecessor: latestExpectedRevision,
-            next_step: `Restore or replay lifecycle revision ${latestExpectedRevision} for plan ${currentDoc.plan.plan_id}, then rerun lifecycle drain.`,
-          });
-          deliveries.push({
-            event_id: event.event_id,
-            revision: event.revision,
-            status: event.delivery.status,
-            deferred: true,
-            blocked_by_gap: true,
-          });
-          break;
-        }
-
-        const attempted = updateEventDelivery(specDir, event.event_id, {
-          status: 'claimed',
-          attempts: event.delivery.attempts + 1,
-        });
-        if (!attempted.ok) throw new CliError(attempted.code, attempted.message);
-
+      if (!failure) {
         try {
-          invokeAdapter(attempted.event, registration);
+          response = invokeAdapter(attempted.event, adapter.registration);
         } catch (err) {
-          const retryable = updateEventDelivery(specDir, event.event_id, { status: 'retryable' });
-          if (!retryable.ok) {
-            releaseClaim = false;
-            throw new CliError(retryable.code, retryable.message);
-          }
-          throw err;
+          failure = err && typeof err.code === 'string'
+            ? protocolFailure(err.code, 'registered lifecycle adapter failed protocol validation', err.retryable !== false)
+            : protocolFailure('ADAPTER_PROTOCOL_ERROR', 'registered lifecycle adapter failed protocol validation');
         }
-
-        const completed = updateEventDelivery(specDir, event.event_id, { status: 'succeeded' });
-        if (!completed.ok) {
-          releaseClaim = false;
-          throw new CliError(completed.code, completed.message);
-        }
-        deliveries.push({
-          event_id: completed.event.event_id,
-          revision: completed.event.revision,
-          status: completed.event.delivery.status,
-          deferred: false,
-        });
-      } finally {
-        if (releaseClaim) releaseEventClaim(claim);
       }
-    }
-  } else {
-    for (const event of events) {
-      deliveries.push({ event_id: event.event_id, revision: event.revision, status: event.delivery.status, deferred: true });
+
+      let persisted;
+      if (failure) {
+        const outcome = failureDeliveryPatch(failure, attempts, currentTimeMs());
+        persisted = updateEventDelivery(specDir, event.event_id, outcome);
+      } else {
+        const outcome = responseDeliveryPatch(response, attempts, currentTimeMs());
+        persisted = updateEventDelivery(specDir, event.event_id, outcome);
+      }
+      if (!persisted.ok) {
+        releaseClaim = false;
+        throw new CliError(persisted.code, persisted.message);
+      }
+
+      const delivery = persisted.event.delivery;
+      const result = {
+        event_id: persisted.event.event_id,
+        revision: persisted.event.revision,
+        status: delivery.status,
+        deferred: delivery.status !== 'succeeded',
+      };
+      if (delivery.error) result.error = delivery.error;
+      if (delivery.next_attempt_at) result.next_attempt_at = delivery.next_attempt_at;
+      deliveries.push(result);
+      if (delivery.status !== 'succeeded') break;
+    } finally {
+      if (releaseClaim) releaseEventClaim(claim);
     }
   }
 
   return {
     command: 'lifecycle drain',
     exit: 0,
-    human: [`Processed ${deliveries.filter((delivery) => !delivery.deferred).length} lifecycle event(s).`],
+    human: [`Processed ${deliveries.filter((delivery) => delivery.status === 'succeeded').length} lifecycle event(s).`],
     data: {
       plan_id: doc.plan.plan_id,
       revision: doc.plan.revision,

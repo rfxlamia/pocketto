@@ -359,13 +359,51 @@ function updateEventDelivery(specDir, eventId, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
     return fail('LIFECYCLE_BAD_DELIVERY', 'delivery update must be an object');
   }
-  for (const key of Object.keys(patch)) {
-    if (!['status', 'attempts'].includes(key)) {
+
+  const deliveryPatch = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (['status', 'attempts', 'error', 'next_attempt_at', 'manual_resolution', 'proof_ref', 'proof_hash'].includes(key)) {
+      deliveryPatch[key] = value;
+    } else {
       return fail('LIFECYCLE_BAD_DELIVERY', `unsupported delivery update field: ${key}`);
     }
   }
 
-  const updated = { ...event, delivery: { ...event.delivery, ...patch } };
+  if ('error' in deliveryPatch && deliveryPatch.error !== null) {
+    const error = deliveryPatch.error;
+    if (!error || typeof error !== 'object' || Array.isArray(error)) {
+      return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error must be an object or null');
+    }
+    const errorFields = ['code', 'retryable', 'message', 'attempts'];
+    if (Object.keys(error).some((key) => !errorFields.includes(key))) {
+      return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error has unsupported fields');
+    }
+    if (typeof error.code !== 'string' || error.code.length === 0 || error.code.length > 128) {
+      return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error.code must be a bounded non-empty string');
+    }
+    if (typeof error.retryable !== 'boolean' || typeof error.message !== 'string' || error.message.length === 0 || error.message.length > 256) {
+      return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error must include a retryable flag and bounded message');
+    }
+    if ('attempts' in error && (!Number.isInteger(error.attempts) || error.attempts < 1 || error.attempts > 6)) {
+      return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error.attempts must be between 1 and 6');
+    }
+  }
+  if ('next_attempt_at' in deliveryPatch && deliveryPatch.next_attempt_at !== null) {
+    if (typeof deliveryPatch.next_attempt_at !== 'string' || Number.isNaN(Date.parse(deliveryPatch.next_attempt_at))) {
+      return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.next_attempt_at must be a timestamp or null');
+    }
+  }
+  if ('manual_resolution' in deliveryPatch && typeof deliveryPatch.manual_resolution !== 'boolean') {
+    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.manual_resolution must be a boolean');
+  }
+  // Adapter proofs belong to delivery metadata, preserving the committed event payload hash.
+  for (const key of ['proof_ref', 'proof_hash']) {
+    if (key in deliveryPatch && deliveryPatch[key] !== null && typeof deliveryPatch[key] !== 'string') {
+      return fail('LIFECYCLE_BAD_DELIVERY', `delivery.${key} must be an opaque string or null`);
+    }
+  }
+
+  const updated = { ...event, delivery: { ...event.delivery, ...deliveryPatch } };
   const validation = validateEvent(updated);
   if (!validation.ok) return fail(validation.code, validation.message);
   event.delivery = updated.delivery;

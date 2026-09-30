@@ -698,3 +698,176 @@ process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeed
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Core classifies adapter protocol failures with bounded retry scheduling and no GitHub calls', () => {
+  // Given missing registration, wrong adapter contract, timeout, non-zero exit,
+  // malformed response, or rate-limit failure, When Core drains committed events,
+  // Then it records retryable protocol errors with original IDs and bounded attempts.
+  // Timeout/rate-limit retries use 1s, 5s, 30s, 120s, and 600s before terminal state.
+  // All remote command calls are trapped by a recording fake `gh`; no network is used.
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-adapter-protocol-'));
+  try {
+    const binDir = path.join(root, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    const ghCallsPath = path.join(root, 'gh-calls.txt');
+    const ghPath = path.join(binDir, 'gh');
+    writeFileSync(ghCallsPath, '');
+    writeFileSync(ghPath, `#!/usr/bin/env node
+'use strict';
+require('node:fs').appendFileSync(process.env.GH_CALLS, 'called\\n');
+process.exit(91);
+`);
+    chmodSync(ghPath, 0o755);
+
+    const adapterPath = path.join(root, 'fake-adapter');
+    writeFileSync(adapterPath, `#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const eventPath = process.argv.slice(2).find((arg) => arg.endsWith('.json') && fs.existsSync(arg));
+if (!eventPath) process.exit(2);
+const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+const mode = process.env.ADAPTER_MODE;
+fs.appendFileSync(process.env.ADAPTER_CALLS, JSON.stringify({ event_id: event.event_id, mode }) + '\\n');
+if (mode === 'timeout') {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+  process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded' }) + '\\n');
+} else if (mode === 'non-zero') {
+  process.stderr.write('injected adapter exit\\n');
+  process.exit(7);
+} else if (mode === 'malformed') {
+  process.stdout.write('{malformed response\\n');
+} else if (mode === 'rate-limit') {
+  process.stdout.write(JSON.stringify({
+    event_id: event.event_id,
+    status: 'retryable',
+    error: { code: 'RATE_LIMIT', retryable: true, message: 'injected rate limit' },
+  }) + '\\n');
+} else {
+  process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded' }) + '\\n');
+}
+`);
+    chmodSync(adapterPath, 0o755);
+
+    const { commitTransition, lifecyclePathFor } = require('../cli/lib/lifecycle-store');
+    const createPlan = (slug) => {
+      const projectDir = path.join(root, slug);
+      const specDir = path.join(projectDir, 'spec', slug);
+      const pocketDir = path.join(projectDir, '.pocket');
+      mkdirSync(specDir, { recursive: true });
+      mkdirSync(pocketDir, { recursive: true });
+      const specContent = `approved spec for ${slug}\n`;
+      writeFileSync(path.join(specDir, 'spec.md'), specContent);
+      const seeded = commitTransition({
+        specDir,
+        planDir: null,
+        planId: slug,
+        type: 'spec-approved',
+        artifacts: [{
+          root: 'spec',
+          kind: 'spec-doc',
+          path: 'spec.md',
+          sha256: sha256Hex(specContent),
+          revision: 1,
+        }],
+        deps: { now: () => FIXED_CLOCK },
+      });
+      assert.equal(seeded.ok, true, `event seed should succeed: ${JSON.stringify(seeded)}`);
+      const callsPath = path.join(projectDir, 'adapter-calls.jsonl');
+      writeFileSync(callsPath, '');
+      return { projectDir, specDir, pocketDir, callsPath, lifecyclePath: lifecyclePathFor(specDir), eventId: seeded.event.event_id };
+    };
+    const registerAdapter = (fixture, { adapterContract = 1, timeoutMs = 1000 } = {}) => {
+      writeFileSync(path.join(fixture.pocketDir, 'lifecycle-adapter.json'), `${JSON.stringify({
+        schema: 1,
+        adapter_contract: adapterContract,
+        argv: [adapterPath],
+        events: ['spec-approved'],
+        timeout_ms: timeoutMs,
+      }, null, 2)}\n`);
+    };
+    const runDrain = (fixture, { mode = 'success', now = FIXED_CLOCK } = {}) => runCli(
+      ['lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3'],
+      {
+        cwd: fixture.projectDir,
+        env: {
+          PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+          GH_CALLS: ghCallsPath,
+          ADAPTER_CALLS: fixture.callsPath,
+          ADAPTER_MODE: mode,
+          POCKETTO_LIFECYCLE_NOW: now,
+        },
+      },
+    );
+    const readCalls = (fixture) => readFileSync(fixture.callsPath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const assertRetryableFailure = (fixture, label) => {
+      const doc = JSON.parse(readFileSync(fixture.lifecyclePath, 'utf8'));
+      assert.equal(doc.plan.revision, 1, `${label} must not create lifecycle events`);
+      assert.equal(doc.events.length, 1, `${label} must preserve the journal length`);
+      assert.equal(doc.events[0].event_id, fixture.eventId, `${label} must preserve the original event ID`);
+      assert.equal(doc.events[0].delivery.status, 'retryable', `${label} must be classified as retryable`);
+      assert.equal(doc.events[0].delivery.attempts, 1, `${label} must record one bounded attempt`);
+      assert.ok(doc.events[0].delivery.error, `${label} must record a protocol error`);
+      assert.equal(doc.events[0].delivery.error.retryable, true, `${label} error must be marked retryable`);
+      assert.equal(doc.events[0].delivery.error.attempts, 1, `${label} error must carry the bounded attempt count`);
+      return doc.events[0].delivery;
+    };
+
+    const scenarios = [
+      { label: 'missing-registration', mode: 'success', registration: null },
+      { label: 'wrong-adapter-contract', mode: 'success', registration: { adapterContract: 2 } },
+      { label: 'timeout', mode: 'timeout', registration: { timeoutMs: 150 } },
+      { label: 'non-zero-exit', mode: 'non-zero', registration: {} },
+      { label: 'malformed-response', mode: 'malformed', registration: {} },
+    ];
+    for (const scenario of scenarios) {
+      const fixture = createPlan(`plan-${scenario.label}`);
+      if (scenario.registration) registerAdapter(fixture, scenario.registration);
+      runDrain(fixture, { mode: scenario.mode });
+      assertRetryableFailure(fixture, scenario.label);
+    }
+
+    const retryFixture = createPlan('plan-rate-limit-retry');
+    registerAdapter(retryFixture, { timeoutMs: 1000 });
+    const baseMs = Date.parse(FIXED_CLOCK);
+    const isoAt = (milliseconds) => new Date(milliseconds).toISOString();
+    const retryDelays = [1_000, 5_000, 30_000, 120_000, 600_000];
+    runDrain(retryFixture, { mode: 'rate-limit', now: FIXED_CLOCK });
+
+    let event = JSON.parse(readFileSync(retryFixture.lifecyclePath, 'utf8')).events[0];
+    assert.equal(event.delivery.status, 'retryable');
+    assert.equal(event.delivery.attempts, 1);
+    assert.equal(event.delivery.next_attempt_at, isoAt(baseMs + retryDelays[0]));
+
+    let previousAttemptCount = 1;
+    let scheduledAt = baseMs;
+    for (let index = 0; index < retryDelays.length; index += 1) {
+      const retryAt = scheduledAt + retryDelays[index];
+      runDrain(retryFixture, { mode: 'rate-limit', now: isoAt(retryAt - 1) });
+      event = JSON.parse(readFileSync(retryFixture.lifecyclePath, 'utf8')).events[0];
+      assert.equal(event.delivery.attempts, previousAttemptCount, 'drain must not retry before its scheduled delay');
+      assert.equal(readCalls(retryFixture).length, previousAttemptCount, 'no adapter invocation may occur before the delay');
+
+      runDrain(retryFixture, { mode: 'rate-limit', now: isoAt(retryAt) });
+      previousAttemptCount += 1;
+      scheduledAt = retryAt;
+      event = JSON.parse(readFileSync(retryFixture.lifecyclePath, 'utf8')).events[0];
+      assert.equal(event.delivery.attempts, previousAttemptCount);
+      assert.equal(readCalls(retryFixture).length, previousAttemptCount);
+      if (previousAttemptCount < 6) {
+        assert.equal(event.delivery.status, 'retryable');
+        assert.equal(event.delivery.next_attempt_at, isoAt(retryAt + retryDelays[index + 1]));
+      } else {
+        assert.equal(event.delivery.status, 'terminal', 'event must become terminal after five retries');
+        assert.equal(event.delivery.error.retryable, false);
+      }
+    }
+
+    assert.equal(readFileSync(ghCallsPath, 'utf8'), '', 'Core must perform zero GitHub calls');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
