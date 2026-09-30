@@ -88,28 +88,59 @@ function runDrain({ specDir } = {}) {
     .filter((event) => ['pending', 'retryable'].includes(event.delivery.status))
     .sort((left, right) => left.revision - right.revision);
   const deliveries = [];
+  const gaps = [];
+  const eventByRevision = new Map(doc.events.map((event) => [event.revision, event]));
+  let contiguousRevision = 0;
+  while (eventByRevision.get(contiguousRevision + 1)?.delivery.status === 'succeeded') {
+    contiguousRevision += 1;
+  }
 
-  for (const event of events) {
-    if (!registration || !registration.events.includes(event.type)) {
+  if (!registration) {
+    for (const event of events) {
       deliveries.push({ event_id: event.event_id, revision: event.revision, status: event.delivery.status, deferred: true });
-      continue;
     }
+  } else {
+    for (const event of events) {
+      if (event.revision <= contiguousRevision) continue;
+      const expectedRevision = contiguousRevision + 1;
+      if (event.revision > expectedRevision) {
+        gaps.push({
+          plan_id: doc.plan.plan_id,
+          blocked_revision: event.revision,
+          missing_predecessor: expectedRevision,
+          next_step: `Restore or replay lifecycle revision ${expectedRevision} for plan ${doc.plan.plan_id}, then rerun lifecycle drain.`,
+        });
+        deliveries.push({
+          event_id: event.event_id,
+          revision: event.revision,
+          status: event.delivery.status,
+          deferred: true,
+          blocked_by_gap: true,
+        });
+        break;
+      }
+      if (!registration.events.includes(event.type)) {
+        deliveries.push({ event_id: event.event_id, revision: event.revision, status: event.delivery.status, deferred: true });
+        break;
+      }
 
-    const attempted = updateEventDelivery(specDir, event.event_id, {
-      attempts: event.delivery.attempts + 1,
-    });
-    if (!attempted.ok) throw new CliError(attempted.code, attempted.message);
+      const attempted = updateEventDelivery(specDir, event.event_id, {
+        attempts: event.delivery.attempts + 1,
+      });
+      if (!attempted.ok) throw new CliError(attempted.code, attempted.message);
 
-    invokeAdapter(attempted.event, registration);
+      invokeAdapter(attempted.event, registration);
 
-    const completed = updateEventDelivery(specDir, event.event_id, { status: 'succeeded' });
-    if (!completed.ok) throw new CliError(completed.code, completed.message);
-    deliveries.push({
-      event_id: completed.event.event_id,
-      revision: completed.event.revision,
-      status: completed.event.delivery.status,
-      deferred: false,
-    });
+      const completed = updateEventDelivery(specDir, event.event_id, { status: 'succeeded' });
+      if (!completed.ok) throw new CliError(completed.code, completed.message);
+      contiguousRevision = completed.event.revision;
+      deliveries.push({
+        event_id: completed.event.event_id,
+        revision: completed.event.revision,
+        status: completed.event.delivery.status,
+        deferred: false,
+      });
+    }
   }
 
   return {
@@ -120,6 +151,7 @@ function runDrain({ specDir } = {}) {
       plan_id: doc.plan.plan_id,
       revision: doc.plan.revision,
       deliveries,
+      gaps,
     },
   };
 }
