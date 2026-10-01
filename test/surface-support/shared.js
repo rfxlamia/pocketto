@@ -35,6 +35,12 @@ const T8_ISSUE_RUNTIME_FILES = [
   'enterprise/issue-handler-proof.js',
   'enterprise/issue-handler-reconcile.js',
 ];
+const T10_CLOSURE_RUNTIME_FILES = [
+  'enterprise/closure-handler.js',
+  'enterprise/closure-plan.js',
+  'enterprise/closure-prerequisites.js',
+  'enterprise/closure-tasklist.js',
+];
 
 const NAMED_CLI_MODULES = [
   'cli/commands/mode.js',
@@ -87,5 +93,6 @@ module.exports = {
   NAMED_CLI_MODULES,
   ROOT,
   T8_ISSUE_RUNTIME_FILES,
+  T10_CLOSURE_RUNTIME_FILES,
   makeFixtureSource,
 };

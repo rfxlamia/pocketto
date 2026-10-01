@@ -13,6 +13,7 @@ const {
 	walkFiles,
 } = require("../test-support/surface-test-utils");
 const { packedPaths, withPackedPackage } = require("../test-support/package/fixture");
+const { T10_CLOSURE_RUNTIME_FILES } = require("./surface-support/shared");
 
 const ROOT = path.join(__dirname, "..");
 
@@ -101,6 +102,22 @@ function assertPackedPackageLayout(extracted) {
 test("packed package keeps moved review files and drops deprecated skills", () =>
 	withPackedPackage(ROOT, assertPackedPackageLayout),
 );
+
+test("T10 closure runtime modules are explicitly allowlisted and shipped", () => {
+	withPackedPackage(ROOT, (extracted) => {
+		const files = packedPaths(extracted);
+		for (const rel of T10_CLOSURE_RUNTIME_FILES) {
+			assert.ok(files.has(rel), `npm package must include ${rel}`);
+		}
+	});
+
+	const packageFiles = JSON.parse(
+		readFileSync(path.join(ROOT, "package.json"), "utf8"),
+	).files;
+	for (const rel of T10_CLOSURE_RUNTIME_FILES) {
+		assert.ok(packageFiles.includes(rel), `package.json files must explicitly include ${rel}`);
+	}
+});
 
 test("bundled .skill archive members match their role-owned source sets", () => {
 	const archives = walkFiles(path.join(ROOT, "skills"))

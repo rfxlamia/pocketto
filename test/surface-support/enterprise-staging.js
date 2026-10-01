@@ -10,6 +10,7 @@ const {
   EXPECTED_ROLES,
   ROOT,
   T8_ISSUE_RUNTIME_FILES,
+  T10_CLOSURE_RUNTIME_FILES,
 } = require('./shared');
 
 function assertEnterpriseRuntimeShipsOnlyForEnterpriseRoles() {
@@ -80,10 +81,44 @@ function assertIssueHandlerIsEnterpriseOnlyInRolesAndPackage() {
   }
 }
 
+function assertClosureRuntimeIsEnterpriseOnlyInRoles() {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 't10-closure-surfaces-'));
+  try {
+    const staged = {};
+    for (const role of EXPECTED_ROLES) {
+      const out = path.join(parent, role.replace('/', '-'));
+      execFileSync('node', [BUILDER, '--role', role, '--output', out], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      staged[role] = T10_CLOSURE_RUNTIME_FILES.filter((rel) =>
+        fs.existsSync(path.join(out, rel)),
+      );
+    }
+
+    assert.deepEqual(
+      staged,
+      {
+        'pi/core': [],
+        'pi/enterprise': T10_CLOSURE_RUNTIME_FILES,
+        'claude/core': [],
+        'claude/enterprise': T10_CLOSURE_RUNTIME_FILES,
+      },
+      'all four T10 closure runtime modules must stage only in Enterprise roles',
+    );
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+}
+
 test('Enterprise runtime is staged only in Enterprise roles and selected for the v4 package', () => {
   assertEnterpriseRuntimeShipsOnlyForEnterpriseRoles();
 });
 
 test('T8 issue handler is shipped in Enterprise roles and package only', () => {
   assertIssueHandlerIsEnterpriseOnlyInRolesAndPackage();
+});
+
+test('T10 plan-closed runtime stages only in Enterprise roles', () => {
+  assertClosureRuntimeIsEnterpriseOnlyInRoles();
 });

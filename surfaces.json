@@ -107,7 +107,11 @@
         "enterprise/issue-handler.js",
         "enterprise/issue-handler-identity.js",
         "enterprise/issue-handler-proof.js",
-        "enterprise/issue-handler-reconcile.js"
+        "enterprise/issue-handler-reconcile.js",
+        "enterprise/closure-handler.js",
+        "enterprise/closure-plan.js",
+        "enterprise/closure-prerequisites.js",
+        "enterprise/closure-tasklist.js"
       ],
       "requires": [
         "pi/core"
@@ -226,7 +230,11 @@
         "enterprise/issue-handler.js",
         "enterprise/issue-handler-identity.js",
         "enterprise/issue-handler-proof.js",
-        "enterprise/issue-handler-reconcile.js"
+        "enterprise/issue-handler-reconcile.js",
+        "enterprise/closure-handler.js",
+        "enterprise/closure-plan.js",
+        "enterprise/closure-prerequisites.js",
+        "enterprise/closure-tasklist.js"
       ],
       "requires": [
         "claude/core"
