@@ -540,17 +540,19 @@ function reconcileFindings({ repo, pr, threads, prior, findings, options }) {
   const saved = [];
   for (const record of [...reconciliation.keep, ...reconciliation.post]) {
     const thread = threadMap.get(record.fingerprint);
-    if (!thread || !thread.id) {
+    const priorRecord = byFingerprint.get(record.fingerprint);
+    const threadId = thread && thread.id ? thread.id : (record.thread || (priorRecord && priorRecord.thread));
+    if (!threadId) {
       if (record.fingerprint && reconciliation.post.some((posted) => posted.fingerprint === record.fingerprint)) {
         throw new PhaseHandlerError('PHASE_THREAD_RECONCILING', 'A finding was posted but its review thread is not visible yet.', {
           status: 'reconciling',
           retryable: true,
         });
       }
-      saved.push({ fingerprint: record.fingerprint, ...(record.thread ? { thread: record.thread } : {}) });
+      saved.push({ fingerprint: record.fingerprint });
       continue;
     }
-    saved.push({ fingerprint: record.fingerprint, thread: thread.id });
+    saved.push({ fingerprint: record.fingerprint, thread: threadId });
   }
   return saved.sort((left, right) => left.fingerprint.localeCompare(right.fingerprint));
 }

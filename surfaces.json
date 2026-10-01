@@ -84,6 +84,7 @@
       "host": "pi",
       "kind": "enterprise",
       "includes": [
+        "enterprise/phase-handler.js",
         "skills/create-pr/**",
         "skills/pocket-development/references/enterprise-reporting.md",
         "skills/pocket-enterprise/**",
@@ -192,6 +193,7 @@
       "host": "claude",
       "kind": "enterprise",
       "includes": [
+        "enterprise/phase-handler.js",
         "skills/create-pr/**",
         "skills/pocket-development/references/enterprise-reporting.md",
         "skills/pocket-enterprise/**",

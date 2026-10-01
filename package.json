@@ -48,6 +48,7 @@
     "enterprise/registration.js",
     "enterprise/github.js",
     "enterprise/meta.js",
+    "enterprise/phase-handler.js",
     "enterprise/retry.js",
     "skills/*/*.skill",
     "skills/*/.skillkit-mode",
