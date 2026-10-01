@@ -9,15 +9,39 @@ function isInside(root, candidate) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
-function resolveLifecyclePath(root, value, label) {
+function invalidLifecyclePath(label) {
+  return new PhaseHandlerError('PHASE_LIFECYCLE_PATH_INVALID', `Lifecycle ${label} must resolve inside the registered project root.`);
+}
+
+function resolveLifecyclePath(root, registeredRoot, value, label) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new PhaseHandlerError('PHASE_LIFECYCLE_PATH_REQUIRED', `Lifecycle metadata does not contain ${label}.`);
   }
-  const resolved = path.isAbsolute(value) ? path.resolve(value) : path.resolve(root, value);
-  if (!isInside(root, resolved)) {
-    throw new PhaseHandlerError('PHASE_LIFECYCLE_PATH_INVALID', `Lifecycle ${label} must resolve inside the registered project root.`);
+  const resolved = path.isAbsolute(value) ? path.resolve(value) : path.resolve(registeredRoot, value);
+  if (!isInside(registeredRoot, resolved) && !isInside(root, resolved)) {
+    throw invalidLifecyclePath(label);
   }
-  return resolved;
+
+  let physical;
+  try {
+    physical = fs.realpathSync(resolved);
+  } catch {
+    throw invalidLifecyclePath(label);
+  }
+  if (!isInside(root, physical)) throw invalidLifecyclePath(label);
+  return { resolved, physical };
+}
+
+function resolveLifecycleFile(root, candidate) {
+  let physical;
+  try {
+    physical = fs.realpathSync(candidate);
+  } catch {
+    // Keep the normal unavailable-evidence response for a missing lifecycle file.
+    return candidate;
+  }
+  if (!isInside(root, physical)) throw invalidLifecyclePath('lifecycle document');
+  return physical;
 }
 
 function loadContext(event, options = {}) {
@@ -27,9 +51,19 @@ function loadContext(event, options = {}) {
   if (typeof options.projectRoot !== 'string' || !path.isAbsolute(options.projectRoot)) {
     throw new PhaseHandlerError('PHASE_PROJECT_ROOT_REQUIRED', 'Lifecycle context requires the explicit absolute registered project root.');
   }
-  const root = path.resolve(options.projectRoot);
-  const specDir = path.resolve(root, 'docs', 'pocket', 'spec', event.plan_id);
-  const lifecyclePath = path.join(specDir, 'lifecycle.json');
+  const registeredRoot = path.resolve(options.projectRoot);
+  let root;
+  try {
+    root = fs.realpathSync(registeredRoot);
+    if (!fs.statSync(root).isDirectory()) throw new Error('registered root is not a directory');
+  } catch {
+    throw new PhaseHandlerError('PHASE_PROJECT_ROOT_INVALID', 'Registered project root must resolve to an accessible directory.');
+  }
+
+  const specCandidate = path.resolve(registeredRoot, 'docs', 'pocket', 'spec', event.plan_id);
+  const specPath = resolveLifecyclePath(root, registeredRoot, specCandidate, 'spec directory');
+  const specDir = specPath.physical;
+  const lifecyclePath = resolveLifecycleFile(root, path.join(specDir, 'lifecycle.json'));
   let lifecycle;
   try {
     lifecycle = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
@@ -42,24 +76,25 @@ function loadContext(event, options = {}) {
   if (!lifecycle || lifecycle.schema !== 1 || !lifecycle.plan || lifecycle.plan.plan_id !== event.plan_id) {
     throw new PhaseHandlerError('PHASE_PLAN_IDENTITY_MISMATCH', 'Lifecycle metadata does not identify this event plan.');
   }
-  const recordedSpecDir = resolveLifecyclePath(root, lifecycle.plan.spec_dir, 'spec_dir');
+  const recordedSpecDir = resolveLifecyclePath(root, registeredRoot, lifecycle.plan.spec_dir, 'spec_dir');
   const overrideSpecDir = options.specDir
-    ? resolveLifecyclePath(root, options.specDir, 'specDir override')
-    : specDir;
-  if (recordedSpecDir !== specDir || overrideSpecDir !== specDir) {
+    ? resolveLifecyclePath(root, registeredRoot, options.specDir, 'specDir override')
+    : { physical: specDir };
+  if (recordedSpecDir.physical !== specDir || overrideSpecDir.physical !== specDir) {
     throw new PhaseHandlerError('PHASE_SPEC_DIR_MISMATCH', 'Lifecycle metadata does not resolve to this plan’s registered spec directory.');
   }
-  const planDir = resolveLifecyclePath(root, lifecycle.plan.plan_dir, 'plan_dir');
+  const recordedPlanDir = resolveLifecyclePath(root, registeredRoot, lifecycle.plan.plan_dir, 'plan_dir');
   const overridePlanDir = options.planDir
-    ? resolveLifecyclePath(root, options.planDir, 'planDir override')
-    : planDir;
-  if (path.basename(planDir) !== event.plan_id || overridePlanDir !== planDir) {
+    ? resolveLifecyclePath(root, registeredRoot, options.planDir, 'planDir override')
+    : { physical: recordedPlanDir.physical };
+  if (path.basename(recordedPlanDir.resolved) !== event.plan_id
+      || overridePlanDir.physical !== recordedPlanDir.physical) {
     throw new PhaseHandlerError('PHASE_PLAN_DIR_MISMATCH', 'Lifecycle metadata does not resolve to this plan’s registered plan directory.');
   }
   if (typeof lifecycle.plan.branch !== 'string' || lifecycle.plan.branch.length === 0) {
     throw new PhaseHandlerError('PHASE_BRANCH_REQUIRED', 'Lifecycle metadata does not contain the captured plan branch.');
   }
-  return { root, specDir, planDir, branch: lifecycle.plan.branch, lifecycle };
+  return { root, specDir, planDir: recordedPlanDir.physical, branch: lifecycle.plan.branch, lifecycle };
 }
 
 

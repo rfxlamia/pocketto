@@ -176,6 +176,53 @@ function registeredAdapter(root) {
   return loaded.registration;
 }
 
+function prepareRegisteredRunner(t, fixture) {
+  const tracePath = path.join(fixture.root, 'fake-gh.jsonl');
+  fs.writeFileSync(tracePath, '');
+  const fakeGh = writeFakeGh(fixture.root, tracePath);
+  const oldPath = process.env.PATH;
+  const oldTrace = process.env.FAKE_GH_TRACE;
+  const oldToken = process.env.GITHUB_TOKEN;
+  process.env.PATH = `${fakeGh.binDir}${path.delimiter}${oldPath || ''}`;
+  process.env.FAKE_GH_TRACE = tracePath;
+  process.env.GITHUB_TOKEN = 'ghp_symlink_guard_secret_must_never_escape';
+  t.after(() => {
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+    if (oldTrace === undefined) delete process.env.FAKE_GH_TRACE;
+    else process.env.FAKE_GH_TRACE = oldTrace;
+    if (oldToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = oldToken;
+  });
+
+  const installed = runCli(['install', fixture.root, '--json']);
+  assert.equal(installed.exit, 0, `default install must register the event adapter: ${installed.stdout}`);
+  return { tracePath, record: registeredAdapter(fixture.root) };
+}
+
+function snapshotTree(root) {
+  const snapshot = {};
+  const visit = (directory, relative = '') => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const absolute = path.join(directory, entry.name);
+      const name = path.join(relative, entry.name);
+      if (entry.isDirectory()) visit(absolute, name);
+      else if (entry.isFile()) snapshot[name] = fs.readFileSync(absolute);
+      else snapshot[name] = `<${entry.isSymbolicLink() ? 'symlink' : 'other'}>`;
+    }
+  };
+  visit(root);
+  return snapshot;
+}
+
+function assertBoundedFailure(response, event) {
+  assert.equal(response.event_id, event.event_id);
+  assert.notEqual(response.status, 'succeeded');
+  assert.ok(response.error, 'a rejected event must include a bounded adapter error');
+  assert.ok(Object.keys(response).every((key) => ['event_id', 'status', 'proof_ref', 'proof_hash', 'error'].includes(key)),
+    'Core must receive only the bounded adapter response fields');
+}
+
 function assertRawResponse(response, event) {
   assert.equal(response.event_id, event.event_id, 'adapter response must preserve the original event ID');
   assert.equal(response.status, 'succeeded');
@@ -286,4 +333,50 @@ test('registered event runner fails closed before GitHub calls and keeps diagnos
   assert.equal(response.error.code, 'ADAPTER_EVENT_NOT_ALLOWED');
   assert.equal(readCalls(tracePath).length, before, 'allowlist failure must happen before any gh process');
   assert.ok(!JSON.stringify(response).includes(process.env.GITHUB_TOKEN), 'fail-closed diagnostics must not expose secrets');
+});
+
+test('registered plan-closed rejects a plan_dir symlink escaping the explicit project root', (t) => {
+  const fixture = createFixture(t);
+  const externalParent = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-dispatch-external-plan-'));
+  t.after(() => fs.rmSync(externalParent, { recursive: true, force: true }));
+  const externalPlanDir = path.join(externalParent, PLAN_ID);
+  fs.cpSync(fixture.planDir, externalPlanDir, { recursive: true });
+  const logBefore = fs.readFileSync(path.join(externalPlanDir, 'log.json'));
+  const closeoutSentinel = 'external closeout must remain byte-for-byte unchanged\n';
+  fs.writeFileSync(path.join(externalPlanDir, 'closeout.md'), closeoutSentinel);
+  const externalBefore = snapshotTree(externalPlanDir);
+  fs.rmSync(fixture.planDir, { recursive: true, force: true });
+  fs.symlinkSync(externalPlanDir, fixture.planDir, 'dir');
+
+  const { tracePath, record } = prepareRegisteredRunner(t, fixture);
+  const response = invokeAdapter(fixture.closeEvent, record);
+
+  assert.equal(readCalls(tracePath).length, 0,
+    'an escaping plan_dir must be rejected before the closure handler reaches fake GitHub');
+  assertBoundedFailure(response, fixture.closeEvent);
+  assert.equal(fs.readFileSync(path.join(externalPlanDir, 'closeout.md'), 'utf8'), closeoutSentinel);
+  assert.deepEqual(fs.readFileSync(path.join(externalPlanDir, 'log.json')), logBefore);
+  assert.deepEqual(snapshotTree(externalPlanDir), externalBefore, 'the external plan tree must not be written');
+});
+
+test('registered phase-complete rejects a spec directory symlink escaping the explicit project root', (t) => {
+  const fixture = createFixture(t);
+  const externalParent = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-dispatch-external-spec-'));
+  t.after(() => fs.rmSync(externalParent, { recursive: true, force: true }));
+  const externalSpecDir = path.join(externalParent, PLAN_ID);
+  fs.cpSync(fixture.specDir, externalSpecDir, { recursive: true });
+  const lifecycleBefore = fs.readFileSync(path.join(externalSpecDir, 'lifecycle.json'));
+  fs.writeFileSync(path.join(externalSpecDir, 'external-sentinel.txt'), 'external spec must remain unchanged\n');
+  const externalBefore = snapshotTree(externalSpecDir);
+  fs.rmSync(fixture.specDir, { recursive: true, force: true });
+  fs.symlinkSync(externalSpecDir, fixture.specDir, 'dir');
+
+  const { tracePath, record } = prepareRegisteredRunner(t, fixture);
+  const response = invokeAdapter(fixture.phaseEvent, record);
+
+  assert.equal(readCalls(tracePath).length, 0,
+    'an escaping spec directory must be rejected before phase reconciliation reaches fake GitHub');
+  assertBoundedFailure(response, fixture.phaseEvent);
+  assert.deepEqual(fs.readFileSync(path.join(externalSpecDir, 'lifecycle.json')), lifecycleBefore);
+  assert.deepEqual(snapshotTree(externalSpecDir), externalBefore, 'the external spec tree must not be written');
 });

@@ -16,7 +16,10 @@ const { defaultRunner } = require('./github');
 
 const handlers = {
   'spec-approved': (event, options) => handleSpecApproved(event, options),
-  'phase-complete': (event, options) => handlePhaseComplete(event, options),
+  'phase-complete': (event, options) => {
+    loadContext(event, { projectRoot: options.projectRoot });
+    return handlePhaseComplete(event, options);
+  },
   'plan-closed': (event, options) => {
     const context = loadContext(event, { projectRoot: options.projectRoot });
     return handlePlanClosed(event, {
