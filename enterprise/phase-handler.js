@@ -56,26 +56,12 @@ function handlePhaseComplete(event, options = {}) {
       options,
     });
 
-    const latestMeta = enterpriseMeta.readMetaFor(context.specDir);
-    latestMeta.github_issue = { ...(latestMeta.github_issue || {}), number: issue.number, url: issue.url };
-    const entry = phaseEntry(latestMeta, phase.key);
-    entry.github_pr = { ...(entry.github_pr || {}), number: pr.number, url: pr.url };
-    entry.review = { ...(entry.review || {}), fingerprints };
-    try {
-      enterpriseMeta.writeMetaFor(context.specDir, latestMeta);
-    } catch (error) {
-      throw new PhaseHandlerError('PHASE_PROOF_RECONCILING', `Remote phase proof succeeded but local metadata could not be saved: ${safeMessage(error)}`, {
-        status: 'reconciling',
-        retryable: true,
-      });
-    }
-
-    const proof = JSON.stringify({ marker, fingerprints });
+    const proofHash = persistPhaseProof(context, issue, phase, pr, marker, fingerprints);
     return {
       event_id: eventId,
       status: 'succeeded',
       proof_ref: `meta:phases.${phase.key}.github_pr+meta:phases.${phase.key}.review.fingerprints`,
-      proof_hash: crypto.createHash('sha256').update(proof).digest('hex'),
+      proof_hash: proofHash,
     };
   } catch (error) {
     if (error instanceof PhaseHandlerError) {
@@ -83,6 +69,23 @@ function handlePhaseComplete(event, options = {}) {
     }
     return phaseFailure(eventId, 'PHASE_HANDLER_FAILED', safeMessage(error), 'retryable', true);
   }
+}
+
+function persistPhaseProof(context, issue, phase, pr, marker, fingerprints) {
+  const meta = enterpriseMeta.readMetaFor(context.specDir);
+  meta.github_issue = { ...(meta.github_issue || {}), number: issue.number, url: issue.url };
+  const entry = phaseEntry(meta, phase.key);
+  entry.github_pr = { ...(entry.github_pr || {}), number: pr.number, url: pr.url };
+  entry.review = { ...(entry.review || {}), fingerprints };
+  try {
+    enterpriseMeta.writeMetaFor(context.specDir, meta);
+  } catch (error) {
+    throw new PhaseHandlerError('PHASE_PROOF_RECONCILING', `Remote phase proof succeeded but local metadata could not be saved: ${safeMessage(error)}`, {
+      status: 'reconciling',
+      retryable: true,
+    });
+  }
+  return crypto.createHash('sha256').update(JSON.stringify({ marker, fingerprints })).digest('hex');
 }
 
 function phaseFailure(eventId, code, message, status, retryable) {
@@ -396,11 +399,19 @@ function requiredPr(message) {
 }
 
 function runJson(args, options) {
+  return runRequest(args, options, true);
+}
+
+function runNoContent(args, options) {
+  return runRequest(args, options, false);
+}
+
+function runRequest(args, options, expectJson) {
   const result = github.runGh(args, {
     runner: options.ghRunner,
     timeoutMs: options.timeoutMs,
     attemptsMade: 1,
-    expectJson: true,
+    expectJson,
   });
   if (!result.ok) {
     const classification = result.classification || {};
@@ -429,7 +440,7 @@ function upsertSummary(endpoint, comments, marker, body, options) {
   }
   runJson(['api', commentEndpointForId(endpoint, matches[0].id), '--method', 'PATCH', '-f', `body=${body}`], options);
   for (const duplicate of matches.slice(1)) {
-    runJson(['api', commentEndpointForId(endpoint, duplicate.id), '--method', 'DELETE'], options);
+    runNoContent(['api', commentEndpointForId(endpoint, duplicate.id), '--method', 'DELETE'], options);
   }
 }
 
