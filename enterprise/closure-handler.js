@@ -33,6 +33,10 @@ function adapterResult(eventId, status, code, message, retryable = false) {
   };
 }
 
+function withTasklistProof(result, proofHash) {
+  return { ...result, proof_ref: PROOF_REF, proof_hash: proofHash };
+}
+
 function fromTransport(eventId, result, fallbackCode) {
   const classification = result && result.classification;
   const status = classification && classification.status === 'terminal' ? 'terminal' : 'retryable';
@@ -213,19 +217,35 @@ function evaluateClosureProof({ event, comments, metadata } = {}) {
   const tasklist = metadata && metadata.github_issue && metadata.github_issue.tasklist;
   const metadataMatches = Boolean(event && tasklist
     && tasklist.event_id === event.event_id
-    && tasklist.marker === TASKLIST_MARKER);
+    && tasklist.marker === TASKLIST_MARKER
+    && tasklist.proof_ref === PROOF_REF
+    && Number.isInteger(tasklist.comment_id)
+    && typeof tasklist.proof_hash === 'string'
+    && /^[0-9a-f]{64}$/.test(tasklist.proof_hash));
+  const markerMatches = metadataMatches && markers.some((comment) => comment.id === tasklist.comment_id);
   return {
-    proven: markers.length > 0 && metadataMatches,
+    proven: markers.length > 0 && markerMatches,
     markerCount: markers.length,
     metadataMatches,
+    proof_ref: metadataMatches ? tasklist.proof_ref : null,
+    proof_hash: metadataMatches ? tasklist.proof_hash : null,
   };
 }
 
-function upsertTasklist(event, repository, issueNumber, body, opts) {
+function listTasklistComments(event, repository, issueNumber, opts) {
   const endpoint = `repos/${repository}/issues/${issueNumber}/comments`;
   const listed = ghJson(['api', endpoint, '--paginate', '--slurp'], opts);
   if (!listed.ok) return { ok: false, result: fromTransport(event.event_id, listed, 'TASKLIST_LOOKUP_FAILED') };
-  const markers = selectTasklistComments(flattenPages(listed.data));
+  return { ok: true, markers: selectTasklistComments(flattenPages(listed.data)) };
+}
+
+function upsertTasklist(event, repository, issueNumber, body, opts, markers) {
+  const endpoint = `repos/${repository}/issues/${issueNumber}/comments`;
+  if (!markers) {
+    const listed = listTasklistComments(event, repository, issueNumber, opts);
+    if (!listed.ok) return listed;
+    markers = listed.markers;
+  }
 
   if (markers.length === 0) {
     const created = updateComment(event.event_id, endpoint, 'POST', body, opts);
@@ -265,6 +285,16 @@ function upsertTasklist(event, repository, issueNumber, body, opts) {
     if (!deleted.ok) return { ok: false, result: deleted.result };
   }
   return { ok: true, comment: { ...earliest, ...updated.data } };
+}
+
+function writeCloseoutFile(planDir, content, opts) {
+  const filePath = path.join(planDir, 'closeout.md');
+  try {
+    if (fs.readFileSync(filePath, 'utf8') === content) return;
+  } catch {
+    // A missing or unreadable closeout is repaired by the same local write path.
+  }
+  (opts.writeFile || fs.writeFileSync)(filePath, content, 'utf8');
 }
 
 function handlePlanClosed(event, opts = {}) {
@@ -315,7 +345,28 @@ function handlePlanClosed(event, opts = {}) {
     issue: selected.issue.number,
     phases: plan.log.phases.length,
   });
-  const upserted = upsertTasklist(event, repository, selected.issue.number, tasklist, opts);
+  const listed = listTasklistComments(event, repository, selected.issue.number, opts);
+  if (!listed.ok) return listed.result;
+  const existingProof = evaluateClosureProof({ event, comments: listed.markers, metadata });
+  const previousRecord = metadata.github_issue && metadata.github_issue.tasklist;
+  const existingMarker = listed.markers.find((comment) => comment.id === (previousRecord && previousRecord.comment_id));
+  if (existingProof.proven && listed.markers.length === 1 && existingMarker
+      && existingMarker.body === tasklist && previousRecord.body_sha256 === sha256(tasklist)) {
+    try {
+      writeCloseoutFile(opts.planDir, closeout, opts);
+    } catch (error) {
+      return adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',
+        `Canonical tasklist proof is present but local closeout.md could not be written: ${error && error.message ? error.message : String(error)}. Replay will reconcile the local artifact.`, true);
+    }
+    return {
+      event_id: eventId,
+      status: 'succeeded',
+      proof_ref: existingProof.proof_ref,
+      proof_hash: existingProof.proof_hash,
+    };
+  }
+
+  const upserted = upsertTasklist(event, repository, selected.issue.number, tasklist, opts, listed.markers);
   if (!upserted.ok) return upserted.result;
 
   const record = {
@@ -326,8 +377,10 @@ function handlePlanClosed(event, opts = {}) {
     body_sha256: sha256(tasklist),
     final_state: proofState(plan.log),
     artifact_refs: event.artifact_refs.map((ref) => ({ ...ref })),
+    proof_ref: PROOF_REF,
   };
   const proofHash = sha256(JSON.stringify(record));
+  record.proof_hash = proofHash;
   metadata.github_issue = {
     ...(metadata.github_issue || {}),
     number: selected.issue.number,
@@ -338,16 +391,21 @@ function handlePlanClosed(event, opts = {}) {
   try {
     (opts.writeMeta || enterpriseMeta.writeMetaFor)(opts.specDir, metadata);
   } catch (error) {
-    return adapterResult(eventId, 'reconciling', 'CLOSEOUT_LEDGER_WRITE_FAILED',
-      `Remote tasklist proof is present but local metadata persistence failed: ${error && error.message ? error.message : String(error)}. Replay will reconcile the existing marker.`, true);
+    return withTasklistProof(
+      adapterResult(eventId, 'reconciling', 'CLOSEOUT_LEDGER_WRITE_FAILED',
+        `Remote tasklist proof is present but local metadata persistence failed: ${error && error.message ? error.message : String(error)}. Replay will reconcile the existing marker.`, true),
+      proofHash
+    );
   }
 
   try {
-    const writeFile = opts.writeFile || fs.writeFileSync;
-    writeFile(path.join(opts.planDir, 'closeout.md'), closeout, 'utf8');
+    writeCloseoutFile(opts.planDir, closeout, opts);
   } catch (error) {
-    return adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',
-      `Remote tasklist proof is present but local closeout.md could not be written: ${error && error.message ? error.message : String(error)}. Replay will reconcile the existing marker.`, true);
+    return withTasklistProof(
+      adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',
+        `Remote tasklist proof is present but local closeout.md could not be written: ${error && error.message ? error.message : String(error)}. Replay will reconcile the existing marker.`, true),
+      proofHash
+    );
   }
 
   return {
