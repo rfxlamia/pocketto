@@ -49,7 +49,7 @@ function gitRunner(planDir) {
   });
 }
 
-function initializeProgressedProjection(planDir, git) {
+function initializeProgressedProjection(planDir, git, phaseStatus = 'WAITING') {
   git(['init', '-q']);
   git(['config', 'user.email', 'test@example.com']);
   git(['config', 'user.name', 'Pocket Test']);
@@ -78,6 +78,7 @@ function initializeProgressedProjection(planDir, git) {
   const progressedPhase = progressedProjection.phases[0];
   progressedPhase.tasks[0].status = 'DONE';
   progressedPhase.tasks[0].done_sha = doneSha;
+  progressedPhase.status = phaseStatus;
   progressedPhase.corrections = [{ sha: correctionSha, files: ['correction-output.md'], for_task: 'T1' }];
   writeFileSync(logPath, `${JSON.stringify(progressedProjection, null, 2)}\n`);
   return { logPath, phaseFile, originalBaselineSha, progressedPhase };
@@ -118,7 +119,7 @@ function forceProjectionWriterFailure(planDir, phaseFile) {
   assert.equal(projectionError.code, 'PROJECTION_REPAIR_REQUIRED');
 }
 
-function createRepairFixture(root) {
+function createRepairFixture(root, { phaseStatus = 'WAITING' } = {}) {
   const planDir = path.join(root, 'plan-90');
   const pocketDir = path.join(planDir, '.pocket');
   const adapterCallsPath = path.join(root, 'adapter-calls.jsonl');
@@ -135,7 +136,7 @@ process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeed
 `);
   registerAdapter(pocketDir, adapterPath, { events: ['spec-approved', 'phase-complete'] });
   const sources = writePlanSources(planDir);
-  const progress = initializeProgressedProjection(planDir, gitRunner(planDir));
+  const progress = initializeProgressedProjection(planDir, gitRunner(planDir), phaseStatus);
   const lifecyclePath = seedRepairEvents(planDir, sources);
   forceProjectionWriterFailure(planDir, progress.phaseFile);
   return { planDir, lifecyclePath, adapterCallsPath, ...progress };
@@ -227,6 +228,43 @@ test('lifecycle repair fails closed when log projection is missing without a tru
   }
 });
 
+test('lifecycle repair reconciles a stale BLOCKED phase from the committed event', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-repair-blocked-'));
+  const originalClock = process.env.POCKETTO_LIFECYCLE_NOW;
+  try {
+    const fixture = createRepairFixture(root, { phaseStatus: 'BLOCKED' });
+    const lifecycleBefore = readFileSync(fixture.lifecyclePath, 'utf8');
+    const before = parseJson(lifecycleBefore, 'lifecycle state before BLOCKED repair');
+    const staleProjection = parseJson(readFileSync(fixture.logPath, 'utf8'), 'stale BLOCKED projection');
+    assert.equal(staleProjection.phases[0].status, 'BLOCKED');
+    assert.deepEqual(staleProjection.phases[0].tasks[0], fixture.progressedPhase.tasks[0]);
+
+    const repaired = runCli(
+      ['lifecycle', 'repair', fixture.planDir, '--json', '--contract', '3'],
+      { cwd: fixture.planDir, env: { POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK, ADAPTER_CALLS: fixture.adapterCallsPath } },
+    );
+    const envelope = parseJson(repaired.stdout.trim(), 'BLOCKED phase repair response');
+    assert.equal(envelope.ok, true, `public repair should reconcile BLOCKED phase: ${JSON.stringify(envelope)}${repaired.stderr}`);
+    assert.equal(repaired.code, 0);
+
+    const reconciled = parseJson(readFileSync(fixture.logPath, 'utf8'), 'reconciled BLOCKED projection');
+    assert.equal(reconciled.phases[0].status, 'REVIEW', 'committed phase-complete event must reconcile BLOCKED to REVIEW');
+    assert.deepEqual(reconciled.phases[0].tasks, staleProjection.phases[0].tasks, 'task status and done_sha must be preserved');
+    assert.deepEqual(reconciled.phases[0].corrections, staleProjection.phases[0].corrections, 'corrections must be preserved');
+    assert.equal(reconciled.header.baseline_sha, staleProjection.header.baseline_sha);
+    assert.equal(readFileSync(fixture.lifecyclePath, 'utf8'), lifecycleBefore, 'repair must not mutate lifecycle bytes');
+    const after = parseJson(readFileSync(fixture.lifecyclePath, 'utf8'), 'lifecycle state after BLOCKED repair');
+    assert.equal(after.plan.revision, before.plan.revision);
+    assert.deepEqual(after.events.map((event) => event.event_id), before.events.map((event) => event.event_id));
+    assert.deepEqual(after.events, before.events, 'repair must not mutate journal or delivery state');
+    assert.equal(readFileSync(fixture.adapterCallsPath, 'utf8'), '', 'repair must not invoke the adapter');
+  } finally {
+    if (originalClock === undefined) delete process.env.POCKETTO_LIFECYCLE_NOW;
+    else process.env.POCKETTO_LIFECYCLE_NOW = originalClock;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('lifecycle repair updates a stale phase projection without losing task progress or dispatching', () => {
   // Given a valid stale log.json with task progress and committed lifecycle state,
   // When public `lifecycle repair <spec_dir> --json --contract 3` runs,
@@ -242,3 +280,5 @@ test('lifecycle repair updates a stale phase projection without losing task prog
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+module.exports = { createRepairFixture, gitRunner };

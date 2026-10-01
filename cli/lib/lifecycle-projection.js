@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { CliError } = require('./envelope');
 const { writeFileAtomicSync } = require('./atomic-file');
-const { readLog } = require('./logjson');
+const { readLog, withProjectionMutation } = require('./logjson');
 const { readLifecycleDoc } = require('./lifecycle-store');
 
 function taskIdsDeclaredByPhaseFile(planDir, phaseFile) {
@@ -69,6 +69,7 @@ function projectionHasCompleteTaskState(planDir, phase) {
   if (!phase || typeof phase !== 'object' || Array.isArray(phase)) return false;
   if (typeof phase.file !== 'string' || phase.file.length === 0) return false;
   if (!['BLOCKED', 'DONE', 'REVIEW', 'WAITING'].includes(phase.status)) return false;
+  if (!correctionsAreValid(phase)) return false;
 
   const declaredTaskIds = taskIdsDeclaredByPhaseFile(planDir, phase.file);
   if (!Array.isArray(phase.tasks)) {
@@ -81,8 +82,7 @@ function projectionHasCompleteTaskState(planDir, phase) {
 
   const tasks = phase.tasks;
   return taskRowsAreValid(tasks)
-    && taskRowsMatchDeclarations(tasks, declaredTaskIds)
-    && correctionsAreValid(phase);
+    && taskRowsMatchDeclarations(tasks, declaredTaskIds);
 }
 
 function projectionHasCompleteRepairState(planDir, projection) {
@@ -154,7 +154,7 @@ function applyLifecycleProjection(doc, projection) {
     for (const ref of event.artifact_refs || []) {
       if (ref.root !== 'plan' || ref.kind !== 'phase-evidence') continue;
       const phase = phases.find((candidate) => projectionPathKey(candidate.file) === projectionPathKey(ref.path));
-      if (phase && phase.status === 'WAITING') phase.status = 'REVIEW';
+      if (phase && ['WAITING', 'BLOCKED'].includes(phase.status)) phase.status = 'REVIEW';
     }
   }
 
@@ -178,38 +178,48 @@ function runRepair({ specDir } = {}) {
     throw new CliError('USAGE', 'Usage: pocketto-pi lifecycle repair <spec_dir>');
   }
 
-  const doc = readLifecycleDoc(specDir);
-  if (!doc) throw new CliError('LIFECYCLE_NOT_FOUND', `lifecycle document not found: ${specDir}`);
-  if (!doc.plan || typeof doc.plan.plan_dir !== 'string' || doc.plan.plan_dir.length === 0) {
+  const initialDoc = readLifecycleDoc(specDir);
+  if (!initialDoc) throw new CliError('LIFECYCLE_NOT_FOUND', `lifecycle document not found: ${specDir}`);
+  if (!initialDoc.plan || typeof initialDoc.plan.plan_dir !== 'string' || initialDoc.plan.plan_dir.length === 0) {
     throw new CliError('LIFECYCLE_PLAN_DIR_REQUIRED', 'lifecycle repair requires a committed plan_dir');
   }
 
-  const planDir = path.resolve(doc.plan.plan_dir);
+  const planDir = path.resolve(initialDoc.plan.plan_dir);
   const logPath = path.join(planDir, 'log.json');
-  const projection = initializeProjection(planDir, logPath);
-  applyLifecycleProjection(doc, projection);
-  const serialized = `${JSON.stringify(projection, null, 2)}\n`;
-  const current = fs.readFileSync(logPath, 'utf8');
-  if (current !== serialized) {
-    try {
-      writeFileAtomicSync(logPath, serialized);
-    } catch (err) {
-      throw new CliError('LIFECYCLE_REPAIR_FAILED', `could not write repaired projection: ${err.message}`);
-    }
-  }
+  initializeProjection(planDir, logPath);
 
-  return {
-    command: 'lifecycle repair',
-    exit: 0,
-    human: [`Rebuilt ${logPath} from committed lifecycle state (revision ${doc.plan.revision}).`],
-    data: {
-      plan_id: doc.plan.plan_id,
-      plan_dir: planDir,
-      log_path: logPath,
-      revision: doc.plan.revision,
-      journal_length: doc.events.length,
-    },
-  };
+  return withProjectionMutation(logPath, () => {
+    const doc = readLifecycleDoc(specDir);
+    if (!doc) throw new CliError('LIFECYCLE_NOT_FOUND', `lifecycle document not found: ${specDir}`);
+    if (!doc.plan || typeof doc.plan.plan_dir !== 'string' || path.resolve(doc.plan.plan_dir) !== planDir) {
+      throw new CliError('LIFECYCLE_REPAIR_FAILED', 'lifecycle plan_dir changed while acquiring the projection guard');
+    }
+
+    const projection = initializeProjection(planDir, logPath);
+    applyLifecycleProjection(doc, projection);
+    const serialized = `${JSON.stringify(projection, null, 2)}\n`;
+    const current = fs.readFileSync(logPath, 'utf8');
+    if (current !== serialized) {
+      try {
+        writeFileAtomicSync(logPath, serialized);
+      } catch (err) {
+        throw new CliError('LIFECYCLE_REPAIR_FAILED', `could not write repaired projection: ${err.message}`);
+      }
+    }
+
+    return {
+      command: 'lifecycle repair',
+      exit: 0,
+      human: [`Reconciled ${logPath} with committed lifecycle state (revision ${doc.plan.revision}).`],
+      data: {
+        plan_id: doc.plan.plan_id,
+        plan_dir: planDir,
+        log_path: logPath,
+        revision: doc.plan.revision,
+        journal_length: doc.events.length,
+      },
+    };
+  });
 }
 
 module.exports = {

@@ -13,10 +13,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { createHash } = require('node:crypto');
-
 const { writeFileAtomicSync } = require('./atomic-file');
-const { acquireLifecycleGuard, releaseLifecycleGuard } = require('./lifecycle-lock');
+const { hasSpecDirectory, withLifecycleMutation } = require('./lifecycle-lock');
+const {
+  allowedRootsFor, hashBytes, requiredPlanDir, rootDirFor, validateArtifactOnDisk,
+} = require('./lifecycle-artifact-validation');
+const { validateDeliveryPatch } = require('./lifecycle-delivery-validation');
+const { createDeliveryWriter } = require('./lifecycle-delivery-store');
 const {
   EVENT_TYPES,
   buildEventId,
@@ -94,30 +97,6 @@ function serializeDoc(doc) {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
-function withLifecycleMutation(specDir, mutate) {
-  let guard;
-  try {
-    guard = acquireLifecycleGuard(path.join(specDir, '.lifecycle.lock'), { wait: true });
-  } catch (err) {
-    const detail = err && err.message ? err.message : String(err);
-    return fail('LIFECYCLE_MUTATION_LOCK_FAILED', `could not serialize lifecycle mutation: ${detail}`);
-  }
-
-  try {
-    return mutate();
-  } finally {
-    releaseLifecycleGuard(guard);
-  }
-}
-
-function hasSpecDirectory(specDir) {
-  try {
-    return fs.statSync(specDir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
 // Current-state gate: the plan's committed state must legally accept the
 // requested event type. `spec-approved` fires once (PENDING → APPROVED);
 // once the plan is closed (DONE) no further transition is legal. Rejection
@@ -154,98 +133,6 @@ function findReplayEvent(doc, type, payloadHash) {
     if (event.type === type && event.payload_hash === payloadHash) return event;
   }
   return null;
-}
-
-// Event-specific artifact roots (spec, normative): `spec-approved` may
-// reference only `spec` and runs with `plan_dir: null`; phase/closure
-// events require a non-null `plan_dir` and may reference `plan` (plus
-// `spec` evidence carried alongside).
-function requiredPlanDir(type) {
-  return type === 'phase-complete' || type === 'plan-closed';
-}
-
-function allowedRootsFor(type) {
-  if (type === 'spec-approved') return ['spec'];
-  return ['spec', 'plan'];
-}
-
-function rootDirFor(root, specDir, planDir) {
-  return root === 'spec' ? specDir : planDir;
-}
-
-function hashBytes(bytes) {
-  return createHash('sha256').update(bytes).digest('hex');
-}
-
-// Fail-closed filesystem validation of ONE artifact ref against its
-// declared root directory: rejects symlinks escaping the root, missing
-// files, and hash mismatches. Classifies transient read/I/O failures as
-// retryable (LIFECYCLE_ARTIFACT_IO) without touching the journal.
-function validateArtifactOnDisk(ref, rootDir, deps) {
-  const statFn = (deps && deps.stat) || fs.statSync;
-  const readFn = (deps && deps.readFile) || fs.readFileSync;
-  const realpathFn = (deps && deps.realpath) || fs.realpathSync;
-  const hashFn = (deps && deps.hashFile) || null;
-
-  const candidate = path.resolve(rootDir, ref.path);
-  // Syntactic check first (unresolved paths): catches `..` escapes and
-  // absolute-path confusion before touching the filesystem.
-  const rootSyntactic = path.resolve(rootDir);
-  const rel = path.relative(rootSyntactic, candidate);
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
-    return fail('LIFECYCLE_BAD_ARTIFACT_PATH', `artifact escapes its root: ${ref.path}`);
-  }
-  // Resolve the root itself for the symlink comparison: temp dirs
-  // (e.g. macOS /var → /private/var) may live under symlinks, so compare
-  // real path against real path.
-  let rootResolved;
-  try {
-    rootResolved = realpathFn(rootDir);
-  } catch (err) {
-    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
-      return fail('LIFECYCLE_ARTIFACT_MISSING', `artifact not found: ${ref.path}`);
-    }
-    return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
-  }
-  let st;
-  try {
-    st = statFn(candidate);
-  } catch (err) {
-    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
-      return fail('LIFECYCLE_ARTIFACT_MISSING', `artifact not found: ${ref.path}`);
-    }
-    return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
-  }
-  if (st && typeof st.isDirectory === 'function' && st.isDirectory()) {
-    return fail('LIFECYCLE_ARTIFACT_MISSING', `artifact not found: ${ref.path}`);
-  }
-  // Resolve symlinks AFTER stat: a link pointing outside the root is a
-  // cross-plan escape even when the syntactic path looks inside.
-  let real;
-  try {
-    real = realpathFn(candidate);
-  } catch (err) {
-    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
-      return fail('LIFECYCLE_ARTIFACT_MISSING', `artifact not found: ${ref.path}`);
-    }
-    return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
-  }
-  const realRel = path.relative(rootResolved, real);
-  if (realRel === '' || realRel.startsWith('..') || path.isAbsolute(realRel)) {
-    return fail('LIFECYCLE_ARTIFACT_ESCAPE', `artifact escapes its root: ${ref.path}`);
-  }
-  let digest;
-  try {
-    digest = hashFn
-      ? hashFn(candidate)
-      : hashBytes(readFn(candidate));
-  } catch {
-    return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
-  }
-  if (String(digest).toLowerCase() !== ref.sha256) {
-    return fail('LIFECYCLE_ARTIFACT_STALE', `artifact hash mismatch: ${ref.path}`);
-  }
-  return { ok: true, code: null, message: null };
 }
 
 // Commits one logical lifecycle transition atomically.
@@ -384,107 +271,20 @@ function commitTransitionUnlocked(input) {
   return { ok: true, event, revision };
 }
 
+const updateEventDeliveryUnlocked = createDeliveryWriter({
+  readLifecycleDoc,
+  lifecyclePathFor,
+  serializeDoc,
+  writeFileAtomicSync,
+  fail,
+  validateDeliveryPatch,
+});
+
 function updateEventDelivery(specDir, eventId, patch) {
   if (typeof specDir !== 'string' || specDir.length === 0 || !hasSpecDirectory(specDir)) {
     return updateEventDeliveryUnlocked(specDir, eventId, patch);
   }
   return withLifecycleMutation(specDir, () => updateEventDeliveryUnlocked(specDir, eventId, patch));
-}
-
-function normalizeDeliveryPatch(patch) {
-  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
-    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery update must be an object');
-  }
-
-  const deliveryPatch = {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (['status', 'attempts', 'error', 'next_attempt_at', 'manual_resolution', 'proof_ref', 'proof_hash'].includes(key)) {
-      deliveryPatch[key] = value;
-    } else {
-      return fail('LIFECYCLE_BAD_DELIVERY', `unsupported delivery update field: ${key}`);
-    }
-  }
-  return { ok: true, deliveryPatch };
-}
-
-function validateDeliveryError(error) {
-  if (!error || typeof error !== 'object' || Array.isArray(error)) {
-    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error must be an object or null');
-  }
-  const errorFields = ['code', 'retryable', 'message', 'attempts'];
-  if (Object.keys(error).some((key) => !errorFields.includes(key))) {
-    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error has unsupported fields');
-  }
-  if (typeof error.code !== 'string' || error.code.length === 0 || error.code.length > 128) {
-    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error.code must be a bounded non-empty string');
-  }
-  if (typeof error.retryable !== 'boolean' || typeof error.message !== 'string' || error.message.length === 0 || error.message.length > 256) {
-    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error must include a retryable flag and bounded message');
-  }
-  if ('attempts' in error && (!Number.isInteger(error.attempts) || error.attempts < 1 || error.attempts > 6)) {
-    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.error.attempts must be between 1 and 6');
-  }
-  return null;
-}
-
-function validateDeliveryTimingAndResolution(deliveryPatch) {
-  if ('next_attempt_at' in deliveryPatch && deliveryPatch.next_attempt_at !== null) {
-    if (typeof deliveryPatch.next_attempt_at !== 'string' || Number.isNaN(Date.parse(deliveryPatch.next_attempt_at))) {
-      return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.next_attempt_at must be a timestamp or null');
-    }
-  }
-  if ('manual_resolution' in deliveryPatch && typeof deliveryPatch.manual_resolution !== 'boolean') {
-    return fail('LIFECYCLE_BAD_DELIVERY', 'delivery.manual_resolution must be a boolean');
-  }
-  return null;
-}
-
-function validateDeliveryProofs(deliveryPatch) {
-  // Adapter proofs belong to delivery metadata, preserving the committed event payload hash.
-  for (const key of ['proof_ref', 'proof_hash']) {
-    if (key in deliveryPatch && deliveryPatch[key] !== null && typeof deliveryPatch[key] !== 'string') {
-      return fail('LIFECYCLE_BAD_DELIVERY', `delivery.${key} must be an opaque string or null`);
-    }
-  }
-  return null;
-}
-
-function validateDeliveryPatch(event, patch) {
-  const normalized = normalizeDeliveryPatch(patch);
-  if (!normalized.ok) return normalized;
-  const deliveryPatch = normalized.deliveryPatch;
-
-  if ('error' in deliveryPatch && deliveryPatch.error !== null) {
-    const errorValidation = validateDeliveryError(deliveryPatch.error);
-    if (errorValidation) return errorValidation;
-  }
-  const timingValidation = validateDeliveryTimingAndResolution(deliveryPatch);
-  if (timingValidation) return timingValidation;
-  const proofValidation = validateDeliveryProofs(deliveryPatch);
-  if (proofValidation) return proofValidation;
-
-  const updated = { ...event, delivery: { ...event.delivery, ...deliveryPatch } };
-  const validation = validateEvent(updated);
-  if (!validation.ok) return fail(validation.code, validation.message);
-  return { ok: true, delivery: updated.delivery };
-}
-
-function updateEventDeliveryUnlocked(specDir, eventId, patch) {
-  const doc = readLifecycleDoc(specDir);
-  if (!doc) return fail('LIFECYCLE_NOT_FOUND', 'lifecycle document does not exist');
-  const event = doc.events.find((candidate) => candidate.event_id === eventId);
-  if (!event) return fail('LIFECYCLE_EVENT_NOT_FOUND', `event not found: ${eventId}`);
-  const validation = validateDeliveryPatch(event, patch);
-  if (!validation.ok) return validation;
-  event.delivery = validation.delivery;
-
-  try {
-    writeFileAtomicSync(lifecyclePathFor(specDir), serializeDoc(doc));
-  } catch (err) {
-    const detail = err && err.message ? err.message : String(err);
-    return fail('LIFECYCLE_PERSISTENCE', `lifecycle persistence failed: ${detail}`);
-  }
-  return { ok: true, event };
 }
 
 module.exports = {

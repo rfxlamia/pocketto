@@ -27,6 +27,9 @@ const LIFECYCLE_CORE_MODULES = [
   'cli/lib/lifecycle-adapter.js',
   'cli/lib/lifecycle-retry.js',
   'cli/lib/lifecycle-lock.js',
+  'cli/lib/lifecycle-artifact-validation.js',
+  'cli/lib/lifecycle-delivery-store.js',
+  'cli/lib/lifecycle-delivery-validation.js',
 ];
 
 const ENTERPRISE_RUNTIME_FILES = [

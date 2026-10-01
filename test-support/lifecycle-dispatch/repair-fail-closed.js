@@ -118,7 +118,7 @@ function damageProjection(planDir, progressed, baselineSha, doneSha, correctionS
   return damagedBytes;
 }
 
-function createFailClosedFixture(root) {
+function createFailClosedFixture(root, { damage = true } = {}) {
   const projectDir = path.join(root, 'project');
   const planDir = path.join(projectDir, 'plans', 'plan-91');
   const phasePath = path.join(planDir, 'execution-plan-phase-1.md');
@@ -143,7 +143,9 @@ function createFailClosedFixture(root) {
 
   const doneSha = progressed.phases[0].tasks.find((task) => task.id === 'T1').done_sha;
   const correctionSha = progressed.phases[0].corrections[0].sha;
-  const damagedBytes = damageProjection(planDir, progressed, baselineSha, doneSha, correctionSha, logPath);
+  const damagedBytes = damage
+    ? damageProjection(planDir, progressed, baselineSha, doneSha, correctionSha, logPath)
+    : readFileSync(logPath, 'utf8');
   writeFileSync(callsPath, '');
   const adapterPath = writeExecutable(path.join(root, 'fake-adapter'), `#!/usr/bin/env node
 'use strict';
@@ -182,6 +184,35 @@ function assertRepairFailsClosed(fixture) {
   assert.equal(lifecycleAfter.events.length, fixture.lifecycleDoc.events.length);
   assert.equal(readFileSync(fixture.callsPath, 'utf8'), '', 'repair must not dispatch lifecycle events');
 }
+
+test('lifecycle repair rejects malformed corrections on a taskless phase without mutation', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-repair-taskless-'));
+  try {
+    const fixture = createFailClosedFixture(root, { damage: false });
+    const projection = parseJson(readFileSync(fixture.logPath, 'utf8'), 'taskless projection fixture');
+    const phase = projection.phases[0];
+    writeFileSync(path.resolve(fixture.planDir, phase.file), '# Phase 1\n\nNo tasks are declared.\n');
+    delete phase.tasks;
+    phase.corrections = { malformed: true };
+    const untrustedBytes = `${JSON.stringify(projection, null, 2)}\n`;
+    writeFileSync(fixture.logPath, untrustedBytes);
+    const lifecycleBefore = readFileSync(fixture.lifecyclePath, 'utf8');
+
+    const result = runCli(
+      ['lifecycle', 'repair', fixture.planDir, '--json', '--contract', '3'],
+      { cwd: fixture.projectDir, env: { ADAPTER_CALLS: fixture.callsPath, POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK } },
+    );
+    const envelope = parseJson(result.stdout.trim(), 'taskless malformed-corrections repair response');
+    assert.equal(envelope.ok, false, `repair must reject untrusted taskless projection: ${JSON.stringify(envelope)}${result.stderr}`);
+    assert.equal(result.code, 1);
+    assert.equal(envelope.error.code, 'LIFECYCLE_REPAIR_STATE_UNRECOVERABLE');
+    assert.equal(readFileSync(fixture.logPath, 'utf8'), untrustedBytes, 'repair must preserve the untrusted projection bytes');
+    assert.equal(readFileSync(fixture.lifecyclePath, 'utf8'), lifecycleBefore, 'repair must preserve lifecycle bytes');
+    assert.equal(readFileSync(fixture.callsPath, 'utf8'), '', 'repair must not dispatch an adapter');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('lifecycle repair fails closed when damaged projection progress is not recoverable', () => {
   // Given progressed task state in a structurally damaged log.json that the

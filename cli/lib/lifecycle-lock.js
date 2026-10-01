@@ -4,6 +4,7 @@
 // lifecycle.json read-modify-write operations.
 
 const fs = require('node:fs');
+const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const OWNER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -131,4 +132,37 @@ function releaseLifecycleGuard(guard) {
   }
 }
 
-module.exports = { acquireLifecycleGuard, releaseLifecycleGuard };
+function hasSpecDirectory(specDir) {
+  try {
+    return fs.statSync(specDir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function withLifecycleMutation(specDir, mutate) {
+  let guard;
+  try {
+    guard = acquireLifecycleGuard(path.join(specDir, '.lifecycle.lock'), { wait: true });
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    return {
+      ok: false,
+      code: 'LIFECYCLE_MUTATION_LOCK_FAILED',
+      message: `could not serialize lifecycle mutation: ${detail}`,
+    };
+  }
+
+  try {
+    return mutate();
+  } finally {
+    releaseLifecycleGuard(guard);
+  }
+}
+
+module.exports = {
+  acquireLifecycleGuard,
+  releaseLifecycleGuard,
+  hasSpecDirectory,
+  withLifecycleMutation,
+};

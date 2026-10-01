@@ -8,7 +8,7 @@
 const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
-const { writeLog, todayISO, readLogChecked } = require('../lib/logjson');
+const { writeLog, todayISO, readLogChecked, withProjectionMutation } = require('../lib/logjson');
 const { runPhaseUpdateTransition, runPlanCloseTransition } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 const { PIPELINE } = require('../lib/version');
@@ -835,7 +835,20 @@ function close(positionals, { projectionWriter = null, adapterRunner = null } = 
 
 // ─── DISPATCH ───────────────────────────────────────────────────────────────
 
-function run({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha, projectionWriter = null, adapterRunner = null }) {
+function run(input = {}) {
+  const { sub, positionals, correction } = input;
+  const args = Array.isArray(positionals) ? positionals : [];
+  let expectedCount = null;
+  if (sub === 'init' || sub === 'close') expectedCount = 1;
+  else if (sub === 'update') expectedCount = correction ? 2 : 3;
+  if (expectedCount === null || args.length !== expectedCount) return runUnlocked(input);
+
+  const planDir = resolvePlanDir(args[0]);
+  const logPath = path.join(planDir, 'log.json');
+  return withProjectionMutation(logPath, () => runUnlocked(input));
+}
+
+function runUnlocked({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha, projectionWriter = null, adapterRunner = null } = {}) {
   if (sub === 'init') return init(positionals);
   if (sub === 'update') {
     if (correction) {
