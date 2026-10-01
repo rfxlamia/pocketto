@@ -25,6 +25,15 @@ function resultError(event, code, message, retryable = false) {
   };
 }
 
+function resultSucceeded(event, proofHash) {
+  return {
+    event_id: event.event_id,
+    status: 'succeeded',
+    proof_ref: meta.issueProofRef(),
+    proof_hash: proofHash,
+  };
+}
+
 function repoView(runner) {
   return github.runGh(['repo', 'view', '--json', 'nameWithOwner,url'], {
     runner,
@@ -172,6 +181,36 @@ function computeProofHash({ event, issue, repository, specPath, identity }) {
   return crypto.createHash('sha256').update(JSON.stringify(proof), 'utf8').digest('hex');
 }
 
+function replayIssueProof(event, spec) {
+  if (event.delivery.status !== 'succeeded') return null;
+  const recorded = meta.readMetaFor(spec.specDir).github_issue || {};
+  const ownership = recorded.ownership || {};
+  const identity = ownership.identity;
+  const validIdentity = ['title', 'full-spec-path', 'title+full-spec-path'].includes(identity);
+  if (event.proof_ref !== meta.issueProofRef()
+      || typeof event.proof_hash !== 'string'
+      || ownership.event_id !== event.event_id
+      || ownership.plan_id !== event.plan_id
+      || ownership.spec_path !== spec.specPath
+      || typeof ownership.repository !== 'string'
+      || !Number.isInteger(recorded.number) || recorded.number <= 0
+      || typeof recorded.url !== 'string' || recorded.url.length === 0
+      || !validIdentity) {
+    return resultError(event, 'ISSUE_PROOF_MISMATCH', 'Succeeded event has no matching persisted issue ownership proof; resolve metadata manually before replay.');
+  }
+  const expectedHash = computeProofHash({
+    event,
+    issue: { number: recorded.number, url: recorded.url },
+    repository: ownership.repository,
+    specPath: ownership.spec_path,
+    identity,
+  });
+  if (expectedHash !== ownership.proof_hash || event.proof_hash !== expectedHash) {
+    return resultError(event, 'ISSUE_PROOF_MISMATCH', 'Succeeded event issue proof does not match persisted metadata; resolve metadata manually before replay.');
+  }
+  return resultSucceeded(event, event.proof_hash);
+}
+
 function saveIssueProof(specDir, event, issue, repo, specPath, identity, clock) {
   const proofHash = computeProofHash({
     event,
@@ -260,12 +299,7 @@ function proveIssue(event, issue, spec, repo, clock) {
     ? 'title+full-spec-path'
     : identity.titleMatch ? 'title' : 'full-spec-path';
   const proofHash = saveIssueProof(spec.specDir, event, issue, repo, spec.specPath, identityProof, clock);
-  return {
-    event_id: event.event_id,
-    status: 'succeeded',
-    proof_ref: meta.issueProofRef(),
-    proof_hash: proofHash,
-  };
+  return resultSucceeded(event, proofHash);
 }
 
 function mapGhFailure(event, operation, result) {
@@ -342,6 +376,8 @@ function handleSpecApproved(event, opts = {}) {
   }
   const spec = specContext(event, projectRoot);
   if (spec.error) return resultError(event, 'STALE_ARTIFACT', `${spec.error}; verify the committed spec artifact before retrying.`);
+  const replay = replayIssueProof(event, spec);
+  if (replay) return replay;
 
   const runner = opts.ghRunner;
   const clock = typeof opts.clock === 'function' ? opts.clock : () => new Date();

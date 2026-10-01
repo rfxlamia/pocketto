@@ -17,6 +17,8 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const enterpriseMeta = require('../enterprise/meta');
+const enterpriseAdapter = require('../enterprise/adapter');
+const enterpriseRegistration = require('../enterprise/registration');
 
 const PLAN_ID = 'demo-approved-plan';
 const REPOSITORY = 'pocketto/example';
@@ -387,4 +389,59 @@ test('CYCLE 3: valid positive metadata is validated before search and reused', (
   assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'list').length, 0,
     'valid metadata should be reconciled before search');
   assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'create').length, 0);
+});
+
+// T8 Cycle 4: a succeeded event replays from persisted issue proof.
+// Given a succeeded event ID and recorded issue proof, When the same event is
+// replayed, Then the handler returns the existing proof, performs no
+// create/update, and leaves `.pocket-meta.json` semantically unchanged.
+// Exercise through adapter dispatch to the issue handler with persisted
+// event/metadata fixtures. Recording fake GitHub transport; real metadata files.
+test('CYCLE 4: succeeded adapter replay returns persisted proof without GitHub or metadata mutation', () => {
+  const fixture = makeProject();
+  const initialTransport = makeZeroMatchTransport();
+  const handler = loadIssueHandler();
+  assert.ok(handler && typeof handler.handleSpecApproved === 'function', 'issue handler must be available');
+  const first = handler.handleSpecApproved(fixture.event, {
+    projectRoot: fixture.projectRoot,
+    ghRunner: initialTransport.runner,
+    clock: () => new Date(FIXED_TIME),
+  });
+  assert.equal(first.status, 'succeeded');
+
+  const registered = enterpriseRegistration.installRegistration(fixture.projectRoot, {
+    argv: [process.execPath, 'unused-adapter.js'],
+  });
+  assert.equal(registered.ok, true, 'adapter dispatch fixture must be registered');
+  const succeededEvent = {
+    ...fixture.event,
+    proof_ref: first.proof_ref,
+    proof_hash: first.proof_hash,
+    delivery: { status: 'succeeded', attempts: 1 },
+  };
+  const metadataPath = enterpriseMeta.resolveMetaPath(fixture.specDir);
+  const before = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+  const replayCalls = [];
+  const replay = enterpriseAdapter.dispatchEvent(succeededEvent, {
+    projectRoot: fixture.projectRoot,
+    coreContract: 3,
+    handlers: {
+      'spec-approved': (event, context) => handler.handleSpecApproved(event, {
+        ...context,
+        clock: () => new Date(FIXED_TIME),
+      }),
+    },
+    ghRunner: (args) => {
+      replayCalls.push(args.slice());
+      return { exit: 1, stdout: '', stderr: 'replay must use persisted issue proof' };
+    },
+  });
+
+  assert.equal(replay.status, 'succeeded');
+  assert.equal(replay.event_id, EVENT_ID);
+  assert.equal(replay.proof_ref, first.proof_ref);
+  assert.equal(replay.proof_hash, first.proof_hash);
+  assert.deepEqual(replayCalls, [], 'persisted proof must be resolved before any GitHub transport call');
+  assert.deepEqual(JSON.parse(fs.readFileSync(metadataPath, 'utf8')), before,
+    'replay must leave real metadata semantically unchanged');
 });
