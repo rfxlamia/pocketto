@@ -26,12 +26,21 @@ function reconcileFindings(input) {
   const recoveryProof = [...priorByFingerprint.values()];
   resolveDuplicateThreads(duplicates, input, recoveryProof);
 
-  const reconciliation = setDiff([...priorByFingerprint.values()], input.findings);
+  const reconciliation = setDiff([...priorByFingerprint.values()], uniqueFindingsByFingerprint(input.findings));
   resolveRemovedFindings(reconciliation.resolve, threadMap, priorByFingerprint, input);
   postFindings(reconciliation.post, input);
   const currentThreads = threadsAfterPosts(reconciliation.post, input);
   addObservedFingerprints(currentThreads, threadMap);
   return saveCanonicalFingerprints(reconciliation, threadMap, priorByFingerprint);
+}
+
+function uniqueFindingsByFingerprint(findings) {
+  const seen = new Set();
+  return findings.filter((record) => {
+    if (seen.has(record.fingerprint)) return false;
+    seen.add(record.fingerprint);
+    return true;
+  });
 }
 
 function collectRemoteFingerprints(threads) {
@@ -42,9 +51,9 @@ function collectRemoteFingerprints(threads) {
       FINGERPRINT_PATTERN.lastIndex = 0;
       let match;
       while ((match = FINGERPRINT_PATTERN.exec(String(comment.body || ''))) !== null) {
-        const matches = fingerprints.get(match[1]) || [];
-        matches.push(thread);
-        fingerprints.set(match[1], matches);
+        const threadsById = fingerprints.get(match[1]) || new Map();
+        if (!threadsById.has(thread.id)) threadsById.set(thread.id, thread);
+        fingerprints.set(match[1], threadsById);
       }
     }
   }
@@ -55,7 +64,7 @@ function selectCanonicalThreads(remoteFingerprints) {
   const threadMap = new Map();
   const duplicates = [];
   for (const [fingerprint, matches] of remoteFingerprints) {
-    const sorted = matches.slice().sort((left, right) => String(left.id).localeCompare(String(right.id)));
+    const sorted = [...matches.values()].sort((left, right) => String(left.id).localeCompare(String(right.id)));
     threadMap.set(fingerprint, sorted[0]);
     duplicates.push(...sorted.slice(1));
   }
