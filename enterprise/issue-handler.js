@@ -75,12 +75,18 @@ function labelsOf(issue) {
   return issue.labels.map((label) => typeof label === 'string' ? label : label && label.name).filter(Boolean);
 }
 
+function containsExactPath(text, expectedPath) {
+  const escapedPath = expectedPath.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+  const boundary = new RegExp(`(?:^|[^A-Za-z0-9._/-])${escapedPath}(?=$|[^A-Za-z0-9._/-])`);
+  return boundary.test(text);
+}
+
 function hasPlanIdentity(issue, planId, specPath) {
   const title = typeof issue.title === 'string' ? issue.title : '';
   const token = new RegExp(`(^|[^a-z0-9-])${planId}($|[^a-z0-9-])`);
   const titleMatch = token.test(title);
   const body = typeof issue.body === 'string' ? issue.body : '';
-  const pathMatch = body.includes(specPath);
+  const pathMatch = containsExactPath(body, specPath);
   const embeddedPlanIds = [...body.matchAll(/docs\/pocket\/spec\/([a-z0-9]+(?:-[a-z0-9]+)*)\//g)]
     .map((match) => match[1]);
   const namedTitle = /^\s*Pocket Plan:\s*([a-z0-9]+(?:-[a-z0-9]+)*)\b/.exec(title);

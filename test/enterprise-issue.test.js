@@ -146,6 +146,27 @@ function makeReconciliationTransport({ pages = [[]], issues = {}, repository = {
   return { calls, runner };
 }
 
+function makeNearMatchThenCreateTransport(nearMatch, createdIssue) {
+  const calls = [];
+  const runner = (args) => {
+    calls.push(args.slice());
+    if (args[0] === 'repo' && args[1] === 'view') {
+      return { exit: 0, stdout: JSON.stringify({ nameWithOwner: REPOSITORY, url: REPOSITORY_URL }), stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'list') {
+      return { exit: 0, stdout: JSON.stringify([[nearMatch], []]), stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'create') {
+      return { exit: 0, stdout: `${createdIssue.url}\n`, stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'view' && args[2] === String(createdIssue.number)) {
+      return { exit: 0, stdout: JSON.stringify(createdIssue), stderr: '' };
+    }
+    return { exit: 1, stdout: '', stderr: `Unexpected fake gh command: ${args.join(' ')}` };
+  };
+  return { calls, runner };
+}
+
 function writeIssueMetadata(specDir, issue) {
   const value = enterpriseMeta.readMetaFor(specDir);
   value.github_issue = { ...issue };
@@ -389,6 +410,34 @@ test('CYCLE 3: valid positive metadata is validated before search and reused', (
   assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'list').length, 0,
     'valid metadata should be reconciled before search');
   assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'create').length, 0);
+});
+
+test('CYCLE 3: a spec-path prefix near-match does not establish exact plan identity', () => {
+  const fixture = makeProject();
+  const targetPath = `docs/pocket/spec/${PLAN_ID}/approved-spec.md`;
+  const nearMatch = makeIssue({
+    number: 67,
+    url: `${REPOSITORY_URL}/issues/67`,
+    title: 'Manual plan context',
+    body: `Related artifact: ${targetPath}.backup`,
+  });
+  const createdIssue = makeIssue({
+    number: 68,
+    url: `${REPOSITORY_URL}/issues/68`,
+  });
+  const transport = makeNearMatchThenCreateTransport(nearMatch, createdIssue);
+  const handler = loadIssueHandler();
+  assert.ok(handler && typeof handler.handleSpecApproved === 'function', 'issue handler must be available');
+  const result = handler.handleSpecApproved(fixture.event, {
+    projectRoot: fixture.projectRoot,
+    ghRunner: transport.runner,
+    clock: () => new Date(FIXED_TIME),
+  });
+  assert.equal(result.status, 'succeeded');
+  assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'create').length, 1,
+    'a non-exact path must not suppress creation of the unique exact plan issue');
+  const metadata = JSON.parse(fs.readFileSync(enterpriseMeta.resolveMetaPath(fixture.specDir), 'utf8'));
+  assert.equal(metadata.github_issue.number, 68, 'ownership must point to the issue with exact identity, not a path-prefix near-match');
 });
 
 // T8 Cycle 4: a succeeded event replays from persisted issue proof.
