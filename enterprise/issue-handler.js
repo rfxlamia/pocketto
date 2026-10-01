@@ -72,7 +72,12 @@ function hasPlanIdentity(issue, planId, specPath) {
   const titleMatch = token.test(title);
   const body = typeof issue.body === 'string' ? issue.body : '';
   const pathMatch = body.includes(specPath);
-  return { matches: titleMatch || pathMatch, titleMatch, pathMatch };
+  const embeddedPlanIds = [...body.matchAll(/docs\/pocket\/spec\/([a-z0-9]+(?:-[a-z0-9]+)*)\//g)]
+    .map((match) => match[1]);
+  const namedTitle = /^\s*Pocket Plan:\s*([a-z0-9]+(?:-[a-z0-9]+)*)\b/.exec(title);
+  const conflicting = (titleMatch && embeddedPlanIds.some((id) => id !== planId))
+    || (pathMatch && namedTitle && namedTitle[1] !== planId);
+  return { matches: titleMatch || pathMatch, titleMatch, pathMatch, conflicting: Boolean(conflicting) };
 }
 
 function specContext(event, projectRoot) {
@@ -231,15 +236,26 @@ function writeIssue(event, runner, spec, repo) {
   }
 }
 
-function proveIssue(event, issue, spec, repo, clock) {
+function issueValidation(issue, event, spec, repo, expectedUrl = null) {
   const identity = hasPlanIdentity(issue, event.plan_id, spec.specPath);
-  if (!Number.isInteger(issue.number) || issue.number <= 0
-      || String(issue.state).toUpperCase() !== 'OPEN'
-      || !labelsOf(issue).includes(ISSUE_LABEL)
-      || !issueUrlBelongsTo(issue, repo)
-      || !identity.matches) {
-    return resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'Issue could not be proven open, current-origin, pocket-plan labeled, and tied to the exact plan identity.');
+  const repositoryMatches = !issue.repository || !issue.repository.nameWithOwner
+    || issue.repository.nameWithOwner.toLowerCase() === repo.nameWithOwner.toLowerCase();
+  if (identity.conflicting) return { ok: false, reason: 'title and embedded full-spec path identify different plans' };
+  if (!Number.isInteger(issue.number) || issue.number <= 0) return { ok: false, reason: 'issue number is invalid' };
+  if (String(issue.state).toUpperCase() !== 'OPEN') return { ok: false, reason: 'issue is not open' };
+  if (!labelsOf(issue).includes(ISSUE_LABEL)) return { ok: false, reason: 'issue is missing the pocket-plan label' };
+  if (!issueUrlBelongsTo(issue, repo) || !repositoryMatches) return { ok: false, reason: 'issue belongs to a different repository origin' };
+  if (expectedUrl && expectedUrl !== issue.url) return { ok: false, reason: 'metadata URL does not match the current-origin issue URL' };
+  if (!identity.matches) return { ok: false, reason: 'issue does not contain the exact normalized plan identity' };
+  return { ok: true, identity };
+}
+
+function proveIssue(event, issue, spec, repo, clock) {
+  const validation = issueValidation(issue, event, spec, repo);
+  if (!validation.ok) {
+    return resultError(event, 'ISSUE_MANUAL_RESOLUTION', `Issue could not be safely reconciled: ${validation.reason}; resolve it manually.`);
   }
+  const identity = validation.identity;
   const identityProof = identity.titleMatch && identity.pathMatch
     ? 'title+full-spec-path'
     : identity.titleMatch ? 'title' : 'full-spec-path';
@@ -267,6 +283,54 @@ function mapGhFailure(event, operation, result) {
   };
 }
 
+function lookupMetadataIssue(event, spec, repo, runner) {
+  const recorded = meta.readMetaFor(spec.specDir).github_issue || {};
+  const hasRecordedIdentity = (Number.isInteger(recorded.number) && recorded.number > 0)
+    || (typeof recorded.url === 'string' && recorded.url.length > 0);
+  if (!hasRecordedIdentity) return { hasRecordedIdentity: false };
+  if (!Number.isInteger(recorded.number) || recorded.number <= 0
+      || typeof recorded.url !== 'string' || recorded.url.length === 0) {
+    return { hasRecordedIdentity: true, invalidReason: 'issue metadata is incomplete' };
+  }
+  const viewed = issueView(repo, recorded.number, runner);
+  if (!viewed.ok) return { hasRecordedIdentity: true, error: mapGhFailure(event, 'Metadata issue validation', viewed) };
+  const validation = issueValidation(viewed.data, event, spec, repo, recorded.url);
+  return validation.ok
+    ? { hasRecordedIdentity: true, issue: viewed.data }
+    : { hasRecordedIdentity: true, invalidReason: validation.reason };
+}
+
+function searchExactIssues(event, spec, repo, runner) {
+  const listed = listOpenPlanIssues(repo, runner);
+  if (!listed.ok) return { error: mapGhFailure(event, 'Open pocket-plan issue search', listed) };
+  const issues = flattenIssuePages(listed.data);
+  if (!issues) {
+    return { error: resultError(event, 'ISSUE_SEARCH_MALFORMED', 'Open pocket-plan issue search returned a malformed response.') };
+  }
+  if (issues.length >= 1000) {
+    return { error: resultError(event, 'ISSUE_SEARCH_INCOMPLETE', 'The open issue search reached its pagination limit; resolve ownership manually instead of selecting a partial result.') };
+  }
+  const matches = [];
+  for (const issue of issues) {
+    const identity = hasPlanIdentity(issue, event.plan_id, spec.specPath);
+    if (identity.conflicting) {
+      return { error: resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'An open pocket-plan issue has conflicting title/full-spec identity; resolve it manually.') };
+    }
+    if (!identity.matches) continue;
+    const repositoryMatches = !issue.repository || !issue.repository.nameWithOwner
+      || issue.repository.nameWithOwner.toLowerCase() === repo.nameWithOwner.toLowerCase();
+    if (!labelsOf(issue).includes(ISSUE_LABEL) || String(issue.state).toUpperCase() !== 'OPEN'
+        || !issueUrlBelongsTo(issue, repo) || !repositoryMatches) {
+      return { error: resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'An exact plan issue is closed, foreign, or otherwise conflicting; resolve ownership manually.') };
+    }
+    matches.push(issue);
+  }
+  if (matches.length > 1) {
+    return { error: resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'Multiple open issues match the exact plan identity; choose one manually before retrying.') };
+  }
+  return { matches };
+}
+
 function handleSpecApproved(event, opts = {}) {
   const checked = validateEvent(event);
   if (!checked.ok || event.type !== 'spec-approved') {
@@ -286,31 +350,19 @@ function handleSpecApproved(event, opts = {}) {
   const repo = repoIdentity(repositoryResult.data);
   if (!repo) return resultError(event, 'ISSUE_ORIGIN_UNVERIFIED', 'Current origin repository identity could not be verified; resolve repository ownership manually.');
 
-  const currentMetadata = meta.readMetaFor(spec.specDir);
-  const recorded = currentMetadata.github_issue || {};
-  if (Number.isInteger(recorded.number) && recorded.number > 0 || typeof recorded.url === 'string') {
-    return resultError(event, 'ISSUE_METADATA_REQUIRES_RECONCILIATION', 'Existing issue metadata must be validated before a new issue can be created.');
-  }
+  const metadata = lookupMetadataIssue(event, spec, repo, runner);
+  if (metadata.error) return metadata.error;
+  if (metadata.issue) return proveIssue(event, metadata.issue, spec, repo, clock);
 
-  const listed = listOpenPlanIssues(repo, runner);
-  if (!listed.ok) return mapGhFailure(event, 'Open pocket-plan issue search', listed);
-  const listedIssues = flattenIssuePages(listed.data);
-  if (!listedIssues) {
-    return resultError(event, 'ISSUE_SEARCH_MALFORMED', 'Open pocket-plan issue search returned a malformed response.');
-  }
-  const exactMatches = listedIssues.filter((issue) => hasPlanIdentity(issue, event.plan_id, spec.specPath).matches);
-  if (exactMatches.length > 1) {
-    return resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'Multiple open issues match the exact plan identity; choose one manually before retrying.');
-  }
-  if (exactMatches.length === 1) {
-    const listedMatch = exactMatches[0];
-    if (!Number.isInteger(listedMatch.number) || listedMatch.number <= 0
-        || !issueUrlBelongsTo(listedMatch, repo)) {
-      return resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'Exact plan search returned an issue outside the current origin; resolve ownership manually.');
-    }
-    const viewed = issueView(repo, listedMatch.number, runner);
+  const search = searchExactIssues(event, spec, repo, runner);
+  if (search.error) return search.error;
+  if (search.matches.length === 1) {
+    const viewed = issueView(repo, search.matches[0].number, runner);
     if (!viewed.ok) return mapGhFailure(event, 'Exact issue validation', viewed);
     return proveIssue(event, viewed.data, spec, repo, clock);
+  }
+  if (metadata.hasRecordedIdentity) {
+    return resultError(event, 'ISSUE_MANUAL_RESOLUTION', `Recorded issue metadata is invalid (${metadata.invalidReason || 'identity mismatch'}) and no exact open current-origin issue was found; resolve it manually rather than creating a duplicate.`);
   }
 
   const created = writeIssue(event, runner, spec, repo);

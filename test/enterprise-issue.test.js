@@ -70,6 +70,7 @@ function makeIssue({
 
 function makeZeroMatchTransport(issue = makeIssue()) {
   const calls = [];
+  const createdBodies = [];
   const runner = (args) => {
     calls.push(args.slice());
     if (args[0] === 'repo' && args[1] === 'view') {
@@ -87,6 +88,8 @@ function makeZeroMatchTransport(issue = makeIssue()) {
       return { exit: 0, stdout: JSON.stringify([[unrelated], []]), stderr: '' };
     }
     if (args[0] === 'issue' && args[1] === 'create') {
+      const bodyFileIndex = args.indexOf('--body-file');
+      if (bodyFileIndex >= 0) createdBodies.push(fs.readFileSync(args[bodyFileIndex + 1], 'utf8'));
       return { exit: 0, stdout: `${issue.url}\n`, stderr: '' };
     }
     if (args[0] === 'issue' && args[1] === 'view' && args[2] === String(issue.number)) {
@@ -94,7 +97,7 @@ function makeZeroMatchTransport(issue = makeIssue()) {
     }
     return { exit: 1, stdout: '', stderr: `Unexpected fake gh command: ${args.join(' ')}` };
   };
-  return { calls, runner };
+  return { calls, createdBodies, runner };
 }
 
 function makeSingleMatchTransport(issue) {
@@ -116,6 +119,40 @@ function makeSingleMatchTransport(issue) {
     return { exit: 1, stdout: '', stderr: `Unexpected fake gh command: ${args.join(' ')}` };
   };
   return { calls, runner };
+}
+
+function makeReconciliationTransport({ pages = [[]], issues = {}, repository = { nameWithOwner: REPOSITORY, url: REPOSITORY_URL } } = {}) {
+  const calls = [];
+  const runner = (args) => {
+    calls.push(args.slice());
+    if (args[0] === 'repo' && args[1] === 'view') {
+      return { exit: 0, stdout: JSON.stringify(repository), stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'list') {
+      return { exit: 0, stdout: JSON.stringify(pages), stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'view') {
+      const issue = issues[Number(args[2])];
+      if (issue) return { exit: 0, stdout: JSON.stringify(issue), stderr: '' };
+      return { exit: 1, stdout: '', stderr: 'issue not found in fake current repository' };
+    }
+    if (args[0] === 'issue' && args[1] === 'create') {
+      return { exit: 1, stdout: '', stderr: 'issue creation is forbidden in this test' };
+    }
+    return { exit: 1, stdout: '', stderr: `Unexpected fake gh command: ${args.join(' ')}` };
+  };
+  return { calls, runner };
+}
+
+function writeIssueMetadata(specDir, issue) {
+  const value = enterpriseMeta.readMetaFor(specDir);
+  value.github_issue = { ...issue };
+  enterpriseMeta.writeMetaFor(specDir, value);
+}
+
+function snapshotMetadata(specDir) {
+  const target = enterpriseMeta.resolveMetaPath(specDir);
+  return fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
 }
 
 function loadIssueHandler() {
@@ -164,6 +201,10 @@ test('CYCLE 1: creates one issue for a pending approved spec with no exact open 
   assert.equal(metadata.github_issue.ownership.event_id, EVENT_ID);
   assert.equal(metadata.github_issue.ownership.spec_path, 'docs/pocket/spec/demo-approved-plan/approved-spec.md');
   assert.match(metadata.github_issue.ownership.proof_hash, /^[0-9a-f]{64}$/);
+  assert.match(transport.createdBodies[0], /docs\/pocket\/spec\/demo-approved-plan\/approved-spec\.md/,
+    'the issue body must preserve the full approved-spec path as ownership evidence');
+  assert.ok(transport.createdBodies[0].includes(fixture.specMarkdown),
+    'the issue body must carry the approved full specification');
 });
 
 // T8 Cycle 2: one owned open exact match is reused.
@@ -199,4 +240,151 @@ test('CYCLE 2: reuses one open current-origin exact-plan issue without creating 
   assert.equal(metadata.github_issue.url, existing.url);
   assert.equal(metadata.github_issue.ownership.plan_id, PLAN_ID);
   assert.equal(metadata.github_issue.ownership.event_id, EVENT_ID);
+});
+
+// T8 Cycle 3: metadata-first validation and fail-closed ambiguity classification.
+// Given positive issue metadata pointing to the wrong origin, a closed issue,
+// or a wrong-plan issue, When metadata-first validation runs, Then the handler
+// rejects it and safely falls back to exact open `pocket-plan` search/manual
+// resolution; given multiple exact matches, a foreign-owned match, or a
+// manually conflicting open match, Then it returns terminal/manual resolution
+// with no issue or metadata mutation and never reopens or silently selects a
+// target.
+// Exercise through the handler's metadata-first and complete search/reconcile
+// boundary. Fake paginated `gh issue list/view/create` responses; no live GitHub.
+test('CYCLE 3: invalid positive metadata falls back to exact current-origin search or manual resolution', () => {
+  const handler = loadIssueHandler();
+  assert.ok(handler && typeof handler.handleSpecApproved === 'function', 'issue handler must be available');
+
+  // Wrong-origin metadata is rejected; exactly one current-origin match is reused.
+  {
+    const fixture = makeProject();
+    const wrongOrigin = makeIssue({ number: 99, url: 'https://github.com/other/repo/issues/99' });
+    writeIssueMetadata(fixture.specDir, wrongOrigin);
+    const exact = makeIssue({ number: 52, url: `${REPOSITORY_URL}/issues/52` });
+    const transport = makeReconciliationTransport({ pages: [[exact], []], issues: { 99: wrongOrigin, 52: exact } });
+    const result = handler.handleSpecApproved(fixture.event, {
+      projectRoot: fixture.projectRoot,
+      ghRunner: transport.runner,
+      clock: () => new Date(FIXED_TIME),
+    });
+    assert.equal(result.status, 'succeeded', 'a unique exact current-origin fallback is safe to reuse');
+    assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'create').length, 0);
+    assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'list').length, 1,
+      'invalid metadata must fall back to exact current-origin search');
+    const metadata = JSON.parse(fs.readFileSync(enterpriseMeta.resolveMetaPath(fixture.specDir), 'utf8'));
+    assert.equal(metadata.github_issue.number, 52);
+    assert.equal(metadata.github_issue.ownership.repository, REPOSITORY);
+  }
+
+  // Closed metadata is inspected, then exact search finds no safe open target.
+  {
+    const fixture = makeProject();
+    const closed = makeIssue({ number: 60, url: `${REPOSITORY_URL}/issues/60`, state: 'CLOSED' });
+    writeIssueMetadata(fixture.specDir, closed);
+    const before = snapshotMetadata(fixture.specDir);
+    const transport = makeReconciliationTransport({ pages: [[]], issues: { 60: closed } });
+    const result = handler.handleSpecApproved(fixture.event, {
+      projectRoot: fixture.projectRoot,
+      ghRunner: transport.runner,
+      clock: () => new Date(FIXED_TIME),
+    });
+    assert.equal(result.status, 'terminal');
+    assert.match(result.error.code, /MANUAL|OWNERSHIP|CONFLICT/);
+    assert.equal(transport.calls.some((args) => args[0] === 'issue' && args[1] === 'list'), true,
+      'closed metadata must fall back to exact open search');
+    assert.equal(transport.calls.some((args) => args[0] === 'issue' && args[1] === 'create'), false);
+    assert.equal(snapshotMetadata(fixture.specDir), before, 'closed issue metadata must remain unchanged');
+  }
+
+  // Wrong-plan metadata is not adopted; an empty exact search stops manually.
+  {
+    const fixture = makeProject();
+    const wrongPlan = makeIssue({
+      number: 61,
+      url: `${REPOSITORY_URL}/issues/61`,
+      title: 'Pocket Plan: another-approved-plan',
+      body: 'docs/pocket/spec/another-approved-plan/approved-spec.md',
+    });
+    writeIssueMetadata(fixture.specDir, wrongPlan);
+    const before = snapshotMetadata(fixture.specDir);
+    const transport = makeReconciliationTransport({ pages: [[]], issues: { 61: wrongPlan } });
+    const result = handler.handleSpecApproved(fixture.event, {
+      projectRoot: fixture.projectRoot,
+      ghRunner: transport.runner,
+      clock: () => new Date(FIXED_TIME),
+    });
+    assert.equal(result.status, 'terminal');
+    assert.equal(transport.calls.some((args) => args[0] === 'issue' && args[1] === 'list'), true);
+    assert.equal(transport.calls.some((args) => args[0] === 'issue' && args[1] === 'create'), false);
+    assert.equal(snapshotMetadata(fixture.specDir), before, 'wrong-plan metadata must remain unchanged');
+  }
+});
+
+test('CYCLE 3: multiple, foreign, or conflicting open matches stop without issue or metadata mutation', () => {
+  const handler = loadIssueHandler();
+  assert.ok(handler && typeof handler.handleSpecApproved === 'function', 'issue handler must be available');
+  const cases = [
+    {
+      name: 'multiple exact matches',
+      pages: [[
+        makeIssue({ number: 62, url: `${REPOSITORY_URL}/issues/62` }),
+        makeIssue({ number: 63, url: `${REPOSITORY_URL}/issues/63` }),
+      ], []],
+      issues: {},
+    },
+    {
+      name: 'foreign-owned exact match',
+      pages: [[makeIssue({ number: 64, url: 'https://github.com/other/repo/issues/64' })], []],
+      issues: {},
+    },
+    {
+      name: 'manually conflicting exact title and full-spec path',
+      pages: [[makeIssue({
+        number: 65,
+        url: `${REPOSITORY_URL}/issues/65`,
+        body: 'Approved specification: docs/pocket/spec/some-other-plan/approved-spec.md',
+      })], []],
+      issues: { 65: makeIssue({
+        number: 65,
+        url: `${REPOSITORY_URL}/issues/65`,
+        body: 'Approved specification: docs/pocket/spec/some-other-plan/approved-spec.md',
+      }) },
+    },
+  ];
+
+  for (const scenario of cases) {
+    const fixture = makeProject();
+    const before = snapshotMetadata(fixture.specDir);
+    const transport = makeReconciliationTransport(scenario);
+    const result = handler.handleSpecApproved(fixture.event, {
+      projectRoot: fixture.projectRoot,
+      ghRunner: transport.runner,
+      clock: () => new Date(FIXED_TIME),
+    });
+    assert.equal(result.status, 'terminal', `${scenario.name} requires manual resolution`);
+    assert.match(result.error.code, /MANUAL|OWNERSHIP|CONFLICT/);
+    assert.equal(transport.calls.some((args) => args[0] === 'issue' && args[1] === 'create'), false,
+      `${scenario.name}: no issue may be created`);
+    assert.equal(snapshotMetadata(fixture.specDir), before, `${scenario.name}: metadata must not mutate`);
+  }
+});
+
+test('CYCLE 3: valid positive metadata is validated before search and reused', () => {
+  const handler = loadIssueHandler();
+  assert.ok(handler && typeof handler.handleSpecApproved === 'function', 'issue handler must be available');
+  const fixture = makeProject();
+  const existing = makeIssue({ number: 66, url: `${REPOSITORY_URL}/issues/66` });
+  writeIssueMetadata(fixture.specDir, existing);
+  const transport = makeReconciliationTransport({ pages: [[]], issues: { 66: existing } });
+  const result = handler.handleSpecApproved(fixture.event, {
+    projectRoot: fixture.projectRoot,
+    ghRunner: transport.runner,
+    clock: () => new Date(FIXED_TIME),
+  });
+  assert.equal(result.status, 'succeeded');
+  assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'view').length, 1);
+  assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'list').length, 0,
+    'valid metadata should be reconciled before search');
+  assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'create').length, 0);
 });
