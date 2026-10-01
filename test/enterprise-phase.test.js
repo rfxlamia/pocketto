@@ -68,6 +68,47 @@ test('RED cycle 1: phase-complete upserts one marker and canonical fingerprints'
     'PR comments must be fetched through the paginated API');
 });
 
+// RED cycle 2
+// Test file: `test/enterprise-phase.test.js`
+// Level: integration
+// Test intent: Given a valid phase-complete event and PR but no owned issue for the plan, When the handler runs, Then it returns `ISSUE_REQUIRED`, writes no PR comment or metadata proof, and performs no issue creation or other remote mutation.
+// Exercise through: the full phase handler using fake issue/PR responses.
+// Test doubles: fake `gh issue`/`gh pr` transport; no real network.
+// Expected RED: no phase handler enforces the normative existing-issue requirement.
+// Exact command: `node --test test/enterprise-phase.test.js`
+
+test('RED cycle 2: missing owned issue blocks phase reporting without mutation', (t) => {
+  const fixture = createFixture(t);
+  const meta = enterpriseMeta.readMetaFor(fixture.specDir);
+  delete meta.github_issue;
+  enterpriseMeta.writeMetaFor(fixture.specDir, meta);
+  fixture.remote.issue = null;
+  fixture.remote.issueSearch = [];
+  const metaPath = path.join(fixture.specDir, '.pocket-meta.json');
+  const beforeMeta = fs.readFileSync(metaPath, 'utf8');
+  const handler = loadPhaseHandler();
+  assert.ok(handler && typeof handler.handlePhaseComplete === 'function');
+
+  const response = handler.handlePhaseComplete(fixture.event, {
+    projectRoot: fixture.root,
+    ghRunner: fakeGh(fixture.remote),
+    now: () => new Date(FIXED_CLOCK),
+  });
+
+  assert.equal(response.error && response.error.code, 'ISSUE_REQUIRED', JSON.stringify(response));
+  assert.equal(allComments(fixture.remote).length, 0, 'missing issue must not write a PR comment');
+  assert.equal(fixture.remote.threads.length, 0, 'missing issue must not write review threads');
+  assert.equal(fixture.remote.calls.filter(isRemoteMutation).length, 0, 'missing issue must perform no remote mutation');
+  assert.equal(fs.readFileSync(metaPath, 'utf8'), beforeMeta, 'missing issue must not write metadata proof');
+});
+
+function isRemoteMutation(args) {
+  if (args[0] !== 'api') return false;
+  const methodIndex = args.indexOf('--method');
+  if (methodIndex >= 0) return args[methodIndex + 1] !== 'GET';
+  return args.some((arg) => arg === 'body=' || arg.startsWith('body='));
+}
+
 function loadPhaseHandler() {
   try {
     return require('../enterprise/phase-handler');

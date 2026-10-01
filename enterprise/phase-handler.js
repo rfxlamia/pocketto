@@ -34,6 +34,7 @@ function handlePhaseComplete(event, options = {}) {
     const repo = resolveRepository(options);
     const phase = readPhaseEvidence(event, context);
     const meta = enterpriseMeta.readMetaFor(context.specDir);
+    const issue = resolveOwnedIssue(event, context, repo, options);
     const prIdentity = enterpriseMeta.getPrIdentity(context.specDir, phase.key);
     if (!Number.isInteger(prIdentity.number) || prIdentity.number <= 0) {
       throw requiredPr('No phase PR is recorded in metadata; the adapter never creates PRs.');
@@ -59,6 +60,7 @@ function handlePhaseComplete(event, options = {}) {
     });
 
     const latestMeta = enterpriseMeta.readMetaFor(context.specDir);
+    latestMeta.github_issue = { ...(latestMeta.github_issue || {}), number: issue.number, url: issue.url };
     const entry = phaseEntry(latestMeta, phase.key);
     entry.review = { ...(entry.review || {}), fingerprints };
     try {
@@ -130,6 +132,61 @@ function resolveRepository(options) {
     throw new PhaseHandlerError('ORIGIN_UNPROVEN', 'The current origin repository could not be proven.');
   }
   return { owner, name, nameWithOwner: `${owner}/${name}`, url: data.url || null };
+}
+
+function resolveOwnedIssue(event, context, repo, options) {
+  const stored = enterpriseMeta.getIssueIdentity(context.specDir);
+  let invalidStored = false;
+  if (Number.isInteger(stored.number) && stored.number > 0) {
+    if (stored.url && !sameRepository(stored.url, repo)) {
+      invalidStored = true;
+    } else {
+      try {
+        const issue = runJson(['issue', 'view', String(stored.number), '--repo', repo.nameWithOwner,
+          '--json', 'number,url,state,title,body'], options);
+        if (isOwnedOpenIssue(issue, event.plan_id, repo)) return issue;
+        invalidStored = true;
+      } catch (_) {
+        invalidStored = true;
+      }
+    }
+  }
+
+  const matches = runJson(['issue', 'list', '--repo', repo.nameWithOwner, '--state', 'open', '--label', 'pocket-plan',
+    '--search', event.plan_id, '--json', 'number,url,state,title,body'], options);
+  if (!Array.isArray(matches)) {
+    throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'Issue search response must be an array.', { status: 'retryable', retryable: true });
+  }
+  const exact = matches.filter((candidate) => hasExactPlanIdentity(candidate, event.plan_id));
+  const owned = exact.filter((candidate) => isOwnedOpenIssue(candidate, event.plan_id, repo));
+  if (exact.length === 1 && owned.length === 1) return owned[0];
+  if (exact.length > 1 || (exact.length === 1 && owned.length === 0)) {
+    throw new PhaseHandlerError('ISSUE_OWNERSHIP_UNPROVEN', 'Issue search found an ambiguous, foreign, closed, or mismatched plan issue.');
+  }
+  if (invalidStored) {
+    throw new PhaseHandlerError('ISSUE_OWNERSHIP_UNPROVEN', 'Recorded issue metadata is invalid and no exact owned open issue could be proven.');
+  }
+  throw new PhaseHandlerError('ISSUE_REQUIRED', 'Phase reporting requires an existing owned open issue; no issue was created.', {
+    status: 'retryable',
+    retryable: true,
+  });
+}
+
+function isOwnedOpenIssue(issue, planId, repo) {
+  return issue
+    && Number.isInteger(issue.number)
+    && issue.number > 0
+    && sameRepository(issue.url, repo)
+    && String(issue.state).toUpperCase() === 'OPEN'
+    && hasExactPlanIdentity(issue, planId);
+}
+
+function hasExactPlanIdentity(issue, planId) {
+  if (!issue || typeof planId !== 'string') return false;
+  const titleTokens = String(issue.title || '').toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/g) || [];
+  if (titleTokens.includes(planId)) return true;
+  const body = typeof issue.body === 'string' ? issue.body.replace(/\\/g, '/') : '';
+  return new RegExp(`(?:^|/)docs/pocket/spec/${planId}(?:/|$)`, 'i').test(body);
 }
 
 function readPhaseEvidence(event, context) {
