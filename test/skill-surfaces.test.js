@@ -9,6 +9,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const BUILDER = path.join(ROOT, 'scripts', 'build-surfaces.js');
+const { expandIncludes, loadManifest } = require('../cli/lib/surface-manifest');
 const CORE_ROLES = ['pi/core', 'claude/core'];
 const CORE_SKILLS = [
   'pocket-grinding',
@@ -245,21 +246,46 @@ function stagedPaths(root) {
 }
 
 function assertArchiveMatchesSource(archivePath) {
-  const skillDir = path.dirname(archivePath);
-  const expected = walkFiles(skillDir)
-    .map((file) => posix(path.relative(skillDir, file)))
-    .filter((rel) => !rel.endsWith('.skill'))
-    .filter((rel) => !rel.split('/').some((part) => ['.DS_Store', 'Thumbs.db', '__MACOSX'].includes(part)))
-    .sort();
+  const archiveRel = posix(path.relative(ROOT, archivePath));
+  const skillDirRel = path.posix.dirname(archiveRel);
+  const manifest = loadManifest(path.join(ROOT, 'surfaces.json'), { sourceDir: ROOT });
+  const owners = [];
+
+  for (const [roleName, role] of Object.entries(manifest.roles)) {
+    const expanded = expandIncludes(role.includes, ROOT);
+    if (!expanded.includes(archiveRel)) continue;
+    const members = expanded
+      .filter((rel) => rel.startsWith(`${skillDirRel}/`) && rel !== archiveRel)
+      .filter((rel) => {
+        const local = rel.slice(skillDirRel.length + 1);
+        if (local.endsWith('.skill')) return false;
+        return local.split('/').every((part) =>
+          !['.DS_Store', 'Thumbs.db', '__MACOSX', '__pycache__'].includes(part) &&
+          (!part.startsWith('.') || part === '.skillkit-mode'),
+        );
+      })
+      .map((rel) => rel.slice(skillDirRel.length + 1))
+      .sort();
+    owners.push({ roleName, kind: role.kind, members });
+  }
+
+  assert.ok(owners.length > 0, `${archiveRel}: no surface role owns this archive`);
+  for (const owner of owners.slice(1)) {
+    assert.equal(owner.kind, owners[0].kind, `${archiveRel}: conflicting archive role kinds`);
+    assert.deepEqual(owner.members, owners[0].members, `${archiveRel}: host roles disagree on archive sources`);
+  }
+
+  const expected = owners[0].members;
+  const skillDir = path.join(ROOT, skillDirRel);
   const actual = execFileSync('unzip', ['-Z1', archivePath], { encoding: 'utf8' })
     .split(/\r?\n/)
     .filter(Boolean)
     .sort();
-  assert.deepEqual(actual, expected, `${archivePath}: archive entries must match source files`);
+  assert.deepEqual(actual, expected, `${archiveRel}: archive members must match its role-owned source set`);
   for (const rel of expected) {
     const archived = execFileSync('unzip', ['-p', archivePath, rel]);
     const source = fs.readFileSync(path.join(skillDir, rel));
-    assert.ok(archived.equals(source), `${archivePath}: stale archived content for ${rel}`);
+    assert.ok(archived.equals(source), `${archiveRel}: stale role-owned content for ${rel}`);
   }
 }
 
