@@ -323,6 +323,13 @@ function mapGhFailure(event, operation, result) {
   };
 }
 
+function issueViewNotFound(result) {
+  const diagnostics = [result && result.raw && result.raw.stderr,
+    result && result.classification && result.classification.error && result.classification.error.message]
+    .filter(Boolean).join(' ');
+  return /(?:issue|pull request).{0,80}(?:not found|could not resolve)|(?:not found|could not resolve).{0,80}(?:issue|pull request)/i.test(diagnostics);
+}
+
 function lookupMetadataIssue(event, spec, repo, runner) {
   const recorded = meta.readMetaFor(spec.specDir).github_issue || {};
   const hasRecordedIdentity = (Number.isInteger(recorded.number) && recorded.number > 0)
@@ -333,7 +340,12 @@ function lookupMetadataIssue(event, spec, repo, runner) {
     return { hasRecordedIdentity: true, invalidReason: 'issue metadata is incomplete' };
   }
   const viewed = issueView(repo, recorded.number, runner);
-  if (!viewed.ok) return { hasRecordedIdentity: true, error: mapGhFailure(event, 'Metadata issue validation', viewed) };
+  if (!viewed.ok) {
+    if (issueViewNotFound(viewed)) {
+      return { hasRecordedIdentity: true, invalidReason: 'recorded issue was not found in the current origin' };
+    }
+    return { hasRecordedIdentity: true, error: mapGhFailure(event, 'Metadata issue validation', viewed) };
+  }
   const validation = issueValidation(viewed.data, event, spec, repo, recorded.url);
   return validation.ok
     ? { hasRecordedIdentity: true, issue: viewed.data }

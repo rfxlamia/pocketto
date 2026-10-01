@@ -300,6 +300,24 @@ test('CYCLE 3: invalid positive metadata falls back to exact current-origin sear
     assert.equal(metadata.github_issue.ownership.repository, REPOSITORY);
   }
 
+  // A missing metadata target is stale, not permission to skip exact search.
+  {
+    const fixture = makeProject();
+    const missing = makeIssue({ number: 69, url: `${REPOSITORY_URL}/issues/69` });
+    writeIssueMetadata(fixture.specDir, missing);
+    const exact = makeIssue({ number: 70, url: `${REPOSITORY_URL}/issues/70` });
+    const transport = makeReconciliationTransport({ pages: [[exact], []], issues: { 70: exact } });
+    const result = handler.handleSpecApproved(fixture.event, {
+      projectRoot: fixture.projectRoot,
+      ghRunner: transport.runner,
+      clock: () => new Date(FIXED_TIME),
+    });
+    assert.equal(result.status, 'succeeded', 'a stale issue number must fall back to a unique exact current-origin match');
+    assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'list').length, 1);
+    assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'create').length, 0);
+    assert.equal(JSON.parse(fs.readFileSync(enterpriseMeta.resolveMetaPath(fixture.specDir), 'utf8')).github_issue.number, 70);
+  }
+
   // Closed metadata is inspected, then exact search finds no safe open target.
   {
     const fixture = makeProject();
