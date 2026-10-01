@@ -97,10 +97,131 @@ test('RED cycle 2: missing owned issue blocks phase reporting without mutation',
 
   assert.equal(response.error && response.error.code, 'ISSUE_REQUIRED', JSON.stringify(response));
   assert.equal(allComments(fixture.remote).length, 0, 'missing issue must not write a PR comment');
-  assert.equal(fixture.remote.threads.length, 0, 'missing issue must not write review threads');
+  assert.equal(allThreads(fixture.remote).length, 0, 'missing issue must not write review threads');
   assert.equal(fixture.remote.calls.filter(isRemoteMutation).length, 0, 'missing issue must perform no remote mutation');
   assert.equal(fs.readFileSync(metaPath, 'utf8'), beforeMeta, 'missing issue must not write metadata proof');
 });
+
+// RED cycle 3
+// Test file: `test/enterprise-phase.test.js`
+// Level: integration
+// Test intent: Given positive PR metadata pointing to the wrong origin, closed state, wrong branch, or wrong phase, When metadata-first validation runs, Then the handler rejects it and safely falls back to exact branch/phase search/manual resolution; given missing metadata and zero branch matches, multiple matches, foreign/closed/wrong-branch/wrong-phase PR, or a missing required PR, Then it returns `PR_REQUIRED` or terminal manual resolution, creates no PR, writes no comments/metadata, and preserves the event for retry/manual action.
+// Exercise through: the full phase handler using fake repository/PR responses.
+// Test doubles: fake `gh pr list/view` and comment APIs; no real network.
+// Expected RED: no adapter handler enforces metadata validation, safe fallback, or the no-auto-create-PR rule.
+// Exact command: `node --test test/enterprise-phase.test.js`
+
+test('RED cycle 3: metadata validation falls back safely and ambiguous PRs stay untouched', async (t) => {
+  const invalidMetadataCases = [
+    ['wrong origin', (pr) => { pr.url = 'https://github.com/foreign/repo/pull/51'; }],
+    ['closed state', (pr) => { pr.state = 'CLOSED'; }],
+    ['wrong branch', (pr) => { pr.headRefName = 'feature/another-plan'; }],
+    ['wrong phase', (pr) => addPhaseMarker(pr, 2, 11)],
+  ];
+  for (const [name, invalidate] of invalidMetadataCases) {
+    await t.test(`invalid metadata with ${name} falls back to the exact open PR`, (t) => {
+      const fixture = createFixture(t);
+      const invalid = makePr(51);
+      invalidate(invalid);
+      if (name !== 'wrong phase') addPhaseMarker(invalid, 1, 10);
+      const valid = makePr(52);
+      addPhaseMarker(valid, 1, 20);
+      fixture.remote.prs = [invalid, valid];
+      enterpriseMeta.setPrIdentity(fixture.specDir, 'phase-1', { number: invalid.number, url: invalid.url });
+      const invalidCommentBefore = JSON.stringify(allComments(fixture.remote, invalid.number));
+      const handler = loadPhaseHandler();
+      assert.ok(handler && typeof handler.handlePhaseComplete === 'function');
+
+      const response = handler.handlePhaseComplete(fixture.event, {
+        projectRoot: fixture.root,
+        ghRunner: fakeGh(fixture.remote),
+        now: () => new Date(FIXED_CLOCK),
+      });
+
+      assert.equal(response.status, 'succeeded', JSON.stringify(response));
+      assert.deepEqual(enterpriseMeta.getPrIdentity(fixture.specDir, 'phase-1'), {
+        number: valid.number,
+        url: valid.url,
+      });
+      assert.equal(JSON.stringify(allComments(fixture.remote, invalid.number)), invalidCommentBefore,
+        'invalid metadata PR must never be mutated');
+      assert.equal(allComments(fixture.remote, valid.number).filter((comment) => comment.body.startsWith(identity.markerFor('1'))).length, 1);
+      assert.equal(allThreads(fixture.remote, invalid.number).length, 0, 'inline mutations must avoid the invalid PR');
+      assert.equal(allThreads(fixture.remote, valid.number).length, 1, 'inline mutations must target the exact branch/phase PR');
+    });
+  }
+
+  await t.test('missing metadata finds one exact branch/phase PR', (t) => {
+    const fixture = createFixture(t);
+    addPhaseMarker(fixture.remote.prs[0], 1, 30);
+    const meta = enterpriseMeta.readMetaFor(fixture.specDir);
+    delete meta.phases['phase-1'].github_pr;
+    enterpriseMeta.writeMetaFor(fixture.specDir, meta);
+    const handler = loadPhaseHandler();
+
+    const response = handler.handlePhaseComplete(fixture.event, {
+      projectRoot: fixture.root,
+      ghRunner: fakeGh(fixture.remote),
+      now: () => new Date(FIXED_CLOCK),
+    });
+
+    assert.equal(response.status, 'succeeded', JSON.stringify(response));
+    assert.deepEqual(enterpriseMeta.getPrIdentity(fixture.specDir, 'phase-1'), {
+      number: PR_NUMBER,
+      url: `https://github.com/${OWNER}/${REPOSITORY}/pull/${PR_NUMBER}`,
+    });
+    assert.ok(!fixture.remote.calls.some((args) => args[0] === 'pr' && args[1] === 'create'));
+  });
+
+  const searchCases = [
+    ['zero branch matches', []],
+    ['multiple matches', [makePr(61), makePr(62)]],
+    ['foreign PR', [makePr(63)]],
+    ['closed PR', [makePr(64)]],
+    ['wrong-branch PR', [makePr(65)]],
+    ['wrong-phase PR', [makePr(66)]],
+  ];
+  for (const [name, prs] of searchCases) {
+    await t.test(`missing metadata with ${name} does not mutate`, (t) => {
+      const fixture = createFixture(t);
+      fixture.remote.prs = prs;
+      for (const pr of prs) addPhaseMarker(pr, 1, pr.number);
+      if (name === 'foreign PR') prs[0].url = 'https://github.com/foreign/repo/pull/63';
+      if (name === 'closed PR') prs[0].state = 'CLOSED';
+      if (name === 'wrong-branch PR') prs[0].headRefName = 'feature/another-plan';
+      if (name === 'wrong-phase PR') {
+        prs[0].commentPages[1] = [];
+        addPhaseMarker(prs[0], 2, 66);
+      }
+      if (name === 'multiple matches') addPhaseMarker(prs[1], 1, 67);
+      const meta = enterpriseMeta.readMetaFor(fixture.specDir);
+      delete meta.phases['phase-1'].github_pr;
+      enterpriseMeta.writeMetaFor(fixture.specDir, meta);
+      const metaPath = path.join(fixture.specDir, '.pocket-meta.json');
+      const beforeMeta = fs.readFileSync(metaPath, 'utf8');
+      const beforeEvent = JSON.stringify(fixture.event);
+      const beforeComments = JSON.stringify(prs.map((pr) => allComments(fixture.remote, pr.number)));
+      const handler = loadPhaseHandler();
+
+      const response = handler.handlePhaseComplete(fixture.event, {
+        projectRoot: fixture.root,
+        ghRunner: fakeGh(fixture.remote),
+        now: () => new Date(FIXED_CLOCK),
+      });
+
+      assert.ok(response.error && (response.error.code === 'PR_REQUIRED' || response.status === 'terminal'), JSON.stringify(response));
+      assert.equal(fixture.remote.calls.filter(isRemoteMutation).length, 0);
+      assert.ok(!fixture.remote.calls.some((args) => args[0] === 'pr' && args[1] === 'create'), 'the adapter must never create a PR');
+      assert.equal(fs.readFileSync(metaPath, 'utf8'), beforeMeta, 'failed lookup must not write metadata proof');
+      assert.equal(JSON.stringify(fixture.event), beforeEvent, 'failed lookup must preserve the event for retry/manual action');
+      assert.equal(JSON.stringify(prs.map((pr) => allComments(fixture.remote, pr.number))), beforeComments);
+    });
+  }
+});
+
+function addPhaseMarker(pr, phase, id) {
+  pr.commentPages[1].push({ id, body: `${identity.markerFor(String(phase))}\n\nPrior summary` });
+}
 
 function isRemoteMutation(args) {
   if (args[0] !== 'api') return false;
@@ -207,21 +328,8 @@ function createFixture(t) {
         title: `[pocket-plan] ${planId}`,
         body: `Plan identity: docs/pocket/spec/${planId}/core.md`,
       },
-      prs: [{
-        number: PR_NUMBER,
-        url: `https://github.com/${OWNER}/${REPOSITORY}/pull/${PR_NUMBER}`,
-        state: 'OPEN',
-        headRefName: BRANCH,
-        baseRefName: 'main',
-        headRefOid: 'abc123def456',
-        title: `Phase 1: ${planId}`,
-        body: `Implements ${planId}`,
-      }],
+      prs: [makePr(PR_NUMBER, planId)],
       issueSearch: [],
-      commentPages: [[], []],
-      comments: [],
-      threadPages: [[], []],
-      threads: [],
       calls: [],
       nextCommentId: 1,
       nextThreadId: 1,
@@ -259,9 +367,9 @@ function fakeGh(remote) {
     if (args[0] === 'issue' && args[1] === 'list') return json(remote.issueSearch);
     if (args[0] === 'pr' && args[1] === 'view') {
       const pr = remote.prs.find((candidate) => candidate.number === Number(args[2]));
-      return pr ? json(pr) : failure('pull request not found');
+      return pr ? json(publicPr(pr)) : failure('pull request not found');
     }
-    if (args[0] === 'pr' && args[1] === 'list') return json(remote.prs);
+    if (args[0] === 'pr' && args[1] === 'list') return json(remote.prs.map(publicPr));
     if (args[0] === 'api' && args[1] === 'graphql') {
       const query = fieldFor('query') || '';
       if (query.includes('resolveReviewThread')) {
@@ -271,7 +379,7 @@ function fakeGh(remote) {
         thread.isResolved = true;
         return json({ data: { resolveReviewThread: { thread: { isResolved: true } } } });
       }
-      if (query.includes('reviewThreads')) return json(threadPage(remote, fieldFor('after')));
+      if (query.includes('reviewThreads')) return json(threadPage(remote, fieldFor('after'), Number(fieldFor('number'))));
       return failure('unexpected GraphQL operation');
     }
     if (args[0] === 'api' && typeof args[1] === 'string') {
@@ -280,10 +388,10 @@ function fakeGh(remote) {
       const issueComments = endpoint.match(/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/);
       const issueComment = endpoint.match(/repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)$/);
       const pullComments = endpoint.match(/repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/comments$/);
-      if (issueComments && method === 'GET') return json(allComments(remote));
+      if (issueComments && method === 'GET') return json(allComments(remote, Number(issueComments[1])));
       if (issueComments && method === 'POST') {
         const comment = { id: remote.nextCommentId++, body: fieldFor('body') || '' };
-        remote.comments.push(comment);
+        prState(remote, Number(issueComments[1])).comments.push(comment);
         return json(comment);
       }
       if (issueComment && method === 'PATCH') {
@@ -308,7 +416,7 @@ function fakeGh(remote) {
             side: fieldFor('side'),
           }] },
         };
-        remote.threads.push(thread);
+        prState(remote, Number(pullComments[1])).threads.push(thread);
         return json({ id: remote.nextThreadId, body });
       }
     }
@@ -316,31 +424,64 @@ function fakeGh(remote) {
   };
 }
 
-function allComments(remote) {
-  return [...remote.commentPages.flat(), ...remote.comments].sort((left, right) => left.id - right.id);
+function makePr(number, planId = 'demo-plan') {
+  return {
+    number,
+    url: `https://github.com/${OWNER}/${REPOSITORY}/pull/${number}`,
+    state: 'OPEN',
+    headRefName: BRANCH,
+    baseRefName: 'main',
+    headRefOid: 'abc123def456',
+    title: `Phase 1: ${planId}`,
+    body: `Implements ${planId}`,
+    commentPages: [[], []],
+    comments: [],
+    threadPages: [[], []],
+    threads: [],
+  };
+}
+
+function publicPr(pr) {
+  const { commentPages, comments, threadPages, threads, ...fields } = pr;
+  return fields;
+}
+
+function prState(remote, prNumber = PR_NUMBER) {
+  return remote.prs.find((pr) => pr.number === prNumber) || {
+    commentPages: [[], []], comments: [], threadPages: [[], []], threads: [],
+  };
+}
+
+function allComments(remote, prNumber = PR_NUMBER) {
+  const state = prState(remote, prNumber);
+  return [...state.commentPages.flat(), ...state.comments].sort((left, right) => left.id - right.id);
 }
 
 function findComment(remote, id) {
-  return allComments(remote).find((comment) => comment.id === id) || null;
+  return remote.prs.flatMap((pr) => allComments(remote, pr.number)).find((comment) => comment.id === id) || null;
 }
 
 function removeComment(remote, id) {
-  for (const page of remote.commentPages) {
-    const index = page.findIndex((comment) => comment.id === id);
-    if (index >= 0) page.splice(index, 1);
+  for (const pr of remote.prs) {
+    for (const page of pr.commentPages) {
+      const index = page.findIndex((comment) => comment.id === id);
+      if (index >= 0) page.splice(index, 1);
+    }
+    const index = pr.comments.findIndex((comment) => comment.id === id);
+    if (index >= 0) pr.comments.splice(index, 1);
   }
-  const index = remote.comments.findIndex((comment) => comment.id === id);
-  if (index >= 0) remote.comments.splice(index, 1);
 }
 
-function allThreads(remote) {
-  return [...remote.threadPages.flat(), ...remote.threads];
+function allThreads(remote, prNumber = PR_NUMBER) {
+  const state = prState(remote, prNumber);
+  return [...state.threadPages.flat(), ...state.threads];
 }
 
-function threadPage(remote, after) {
+function threadPage(remote, after, prNumber) {
   const pageIndex = after && after !== 'null' ? Number(String(after).replace(/^cursor-/, '')) : 0;
-  const pages = remote.threadPages.map((page) => page.slice());
-  pages[pages.length - 1].push(...remote.threads);
+  const state = prState(remote, prNumber);
+  const pages = state.threadPages.map((page) => page.slice());
+  pages[pages.length - 1].push(...state.threads);
   const nodes = pages[pageIndex] || [];
   const hasNextPage = pageIndex + 1 < pages.length;
   return {

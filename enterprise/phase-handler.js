@@ -35,14 +35,11 @@ function handlePhaseComplete(event, options = {}) {
     const phase = readPhaseEvidence(event, context);
     const meta = enterpriseMeta.readMetaFor(context.specDir);
     const issue = resolveOwnedIssue(event, context, repo, options);
-    const prIdentity = enterpriseMeta.getPrIdentity(context.specDir, phase.key);
-    if (!Number.isInteger(prIdentity.number) || prIdentity.number <= 0) {
-      throw requiredPr('No phase PR is recorded in metadata; the adapter never creates PRs.');
-    }
-    const pr = loadMetadataPr(prIdentity, phase, context, repo, options);
+    const selectedPr = resolvePhasePr(context, phase, repo, options);
+    const pr = selectedPr.pr;
     const marker = identity.markerFor(phase.number);
     const commentEndpoint = `repos/${repo.nameWithOwner}/issues/${pr.number}/comments`;
-    const comments = listComments(commentEndpoint, options);
+    const comments = selectedPr.comments;
     upsertSummary(commentEndpoint, comments, marker, summaryBody({
       phase: phase.number,
       verdicts: phase.verdicts,
@@ -62,6 +59,7 @@ function handlePhaseComplete(event, options = {}) {
     const latestMeta = enterpriseMeta.readMetaFor(context.specDir);
     latestMeta.github_issue = { ...(latestMeta.github_issue || {}), number: issue.number, url: issue.url };
     const entry = phaseEntry(latestMeta, phase.key);
+    entry.github_pr = { ...(entry.github_pr || {}), number: pr.number, url: pr.url };
     entry.review = { ...(entry.review || {}), fingerprints };
     try {
       enterpriseMeta.writeMetaFor(context.specDir, latestMeta);
@@ -304,25 +302,78 @@ function resolveInside(root, relative) {
   return target;
 }
 
-function loadMetadataPr(prIdentity, phase, context, repo, options) {
-  if (!sameRepository(prIdentity.url, repo)) {
-    throw new PhaseHandlerError('PR_OWNERSHIP_UNPROVEN', 'Recorded phase PR URL does not belong to the current origin repository.');
+function resolvePhasePr(context, phase, repo, options) {
+  const stored = enterpriseMeta.getPrIdentity(context.specDir, phase.key);
+  const metadataMatch = resolveMetadataPr(stored, context, phase, repo, options);
+  return metadataMatch || searchPhasePr(context, phase, repo, options);
+}
+
+function resolveMetadataPr(stored, context, phase, repo, options) {
+  if (!Number.isInteger(stored.number) || stored.number <= 0
+      || (stored.url && !sameRepository(stored.url, repo))) return null;
+  try {
+    const pr = loadPrView(stored.number, repo, options);
+    const comments = listComments(`repos/${repo.nameWithOwner}/issues/${pr.number}/comments`, options);
+    return validOpenPr(pr, context.branch, repo) && hasPhaseIdentity(comments, phase.number, true)
+      ? { pr, comments }
+      : null;
+  } catch (_) {
+    // Invalid or stale metadata is only a hint; exact branch/phase search follows.
+    return null;
   }
-  const data = runJson(['pr', 'view', String(prIdentity.number), '--repo', repo.nameWithOwner,
+}
+
+function searchPhasePr(context, phase, repo, options) {
+  const candidates = runJson(['pr', 'list', '--repo', repo.nameWithOwner, '--head', context.branch, '--state', 'open',
     '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid'], options);
-  if (data.number !== prIdentity.number || !sameRepository(data.url, repo)) {
-    throw new PhaseHandlerError('PR_OWNERSHIP_UNPROVEN', 'The recorded PR could not be verified in the current origin repository.');
+  if (!Array.isArray(candidates)) {
+    throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'PR search response must be an array.', { status: 'retryable', retryable: true });
   }
-  if (String(data.state).toUpperCase() !== 'OPEN') {
-    throw new PhaseHandlerError('PR_REQUIRED', 'The recorded phase PR is not open.');
+  const matches = candidates.map((candidate) => searchCandidate(candidate, context, phase, repo, options)).filter(Boolean);
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1 || candidates.length > 0) {
+    throw new PhaseHandlerError('PR_MANUAL_RESOLUTION', 'PR search found ambiguous, foreign, closed, or mismatched phase candidates.');
   }
-  if (data.headRefName !== context.branch) {
-    throw new PhaseHandlerError('PR_OWNERSHIP_UNPROVEN', 'The recorded phase PR does not use the captured plan branch.');
+  throw requiredPr('No open PR matches the exact plan branch and phase marker; the adapter never creates PRs.');
+}
+
+function searchCandidate(candidate, context, phase, repo, options) {
+  if (!Number.isInteger(candidate.number) || candidate.number <= 0) return null;
+  let pr;
+  try {
+    pr = loadPrView(candidate.number, repo, options);
+  } catch (_) {
+    return null;
   }
-  if (!Number.isInteger(phase.number) || phase.number < 1) {
-    throw new PhaseHandlerError('PHASE_IDENTITY_UNPROVEN', 'The phase marker identity is invalid.');
+  if (!validOpenPr(pr, context.branch, repo)) return null;
+  const comments = listComments(`repos/${repo.nameWithOwner}/issues/${pr.number}/comments`, options);
+  return hasPhaseIdentity(comments, phase.number, false) ? { pr, comments } : null;
+}
+
+function loadPrView(number, repo, options) {
+  const pr = runJson(['pr', 'view', String(number), '--repo', repo.nameWithOwner,
+    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid'], options);
+  if (pr.number !== number || !sameRepository(pr.url, repo)) {
+    throw new PhaseHandlerError('PR_OWNERSHIP_UNPROVEN', 'The PR does not belong to the current origin repository.');
   }
-  return data;
+  return pr;
+}
+
+function validOpenPr(pr, branch, repo) {
+  return pr
+    && sameRepository(pr.url, repo)
+    && String(pr.state).toUpperCase() === 'OPEN'
+    && pr.headRefName === branch;
+}
+
+function hasPhaseIdentity(comments, phaseNumber, metadataFirst) {
+  const markers = comments.map((comment) => {
+    if (typeof comment.body !== 'string') return null;
+    const match = /^<!-- pocket-phase-(\d+)-summary -->$/.exec(comment.body.split(/\r?\n/, 1)[0]);
+    return match ? Number(match[1]) : null;
+  }).filter((number) => number !== null);
+  if (markers.includes(phaseNumber)) return true;
+  return metadataFirst && markers.length === 0;
 }
 
 function sameRepository(url, repo) {
