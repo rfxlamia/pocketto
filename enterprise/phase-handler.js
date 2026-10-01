@@ -51,7 +51,7 @@ function handlePhaseComplete(event, options = {}) {
       repo,
       pr,
       threads,
-      prior: canonicalFingerprints(meta, phase.key),
+      prior: readPriorFingerprints(meta, phase.key),
       findings: phase.findings,
       options,
     });
@@ -463,10 +463,12 @@ function listReviewThreads(repo, prNumber, options) {
   return threads;
 }
 
-function canonicalFingerprints(meta, phaseKey) {
+function readPriorFingerprints(meta, phaseKey) {
   const entry = meta.phases && meta.phases[phaseKey];
   const records = entry && entry.review && entry.review.fingerprints;
-  return Array.isArray(records) ? records.filter(validFingerprintRecord) : [];
+  if (Array.isArray(records)) return records.filter(validFingerprintRecord);
+  const legacyRecords = entry && entry.fingerprints;
+  return Array.isArray(legacyRecords) ? legacyRecords.filter(validFingerprintRecord) : [];
 }
 
 function validFingerprintRecord(record) {
