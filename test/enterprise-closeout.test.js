@@ -90,7 +90,7 @@ function makeEvent(planDir) {
   };
 }
 
-function makeFakeGh(initialComments = []) {
+function makeFakeGh(initialComments = [], issueRecord = ISSUE) {
   const calls = [];
   const comments = initialComments.map((comment) => ({ ...comment }));
   let nextCommentId = 900;
@@ -101,7 +101,7 @@ function makeFakeGh(initialComments = []) {
       return { exit: 0, stdout: JSON.stringify({ owner: { login: 'acme' }, name: 'pocketto' }), stderr: '' };
     }
     if (args[0] === 'api' && joined.includes(`/issues/${ISSUE_NUMBER}`) && !joined.includes('/comments')) {
-      return { exit: 0, stdout: JSON.stringify(ISSUE), stderr: '' };
+      return { exit: 0, stdout: JSON.stringify(issueRecord), stderr: '' };
     }
     if (args[0] === 'api' && joined.includes('/comments') && args.includes('--paginate')) {
       return { exit: 0, stdout: JSON.stringify([comments.slice(0, 1), comments.slice(1)]), stderr: '' };
@@ -246,4 +246,80 @@ test('CYCLE 2: paginated marker replay returns proof after a local ledger timeou
   const persisted = enterpriseMeta.readMetaFor(fixture.specDir).github_issue.tasklist;
   assert.equal(persisted.event_id, event.event_id);
   assert.equal(persisted.proof_hash, replay.proof_hash);
+});
+
+// T10 RED cycle 3
+// Test file: test/enterprise-closeout.test.js
+// Level: integration
+// Test intent: Given the issue is absent, foreign, closed, or ownership is ambiguous, When `plan-closed` runs, Then it returns `ISSUE_REQUIRED` or terminal manual resolution, writes no tasklist/closeout remote mutation, and leaves local state safe.
+// Exercise through: closure handler issue lookup boundary.
+// Test doubles: fake paginated issue comments/metadata; no live GitHub.
+// Expected RED: no closure issue prerequisite or no-mutation failure path exists.
+// Exact command: `node --test test/enterprise-closeout.test.js`
+
+test('CYCLE 3: missing, foreign, closed, or ambiguous issue ownership fails without mutation', async () => {
+  const cases = [
+    {
+      name: 'missing issue metadata',
+      prepare: (fixture) => {
+        const metadata = enterpriseMeta.readMetaFor(fixture.specDir);
+        metadata.github_issue = {};
+        enterpriseMeta.writeMetaFor(fixture.specDir, metadata);
+      },
+      issue: ISSUE,
+      expectedCode: 'ISSUE_REQUIRED',
+    },
+    {
+      name: 'foreign metadata URL',
+      prepare: (fixture) => {
+        const metadata = enterpriseMeta.readMetaFor(fixture.specDir);
+        metadata.github_issue.url = 'https://github.com/foreign/repo/issues/73';
+        enterpriseMeta.writeMetaFor(fixture.specDir, metadata);
+      },
+      issue: ISSUE,
+      expectedCode: 'ISSUE_OWNERSHIP_AMBIGUOUS',
+    },
+    {
+      name: 'closed issue',
+      prepare: () => {},
+      issue: { ...ISSUE, state: 'closed' },
+      expectedCode: 'ISSUE_CLOSED',
+    },
+    {
+      name: 'issue response points to a foreign repository',
+      prepare: () => {},
+      issue: {
+        number: ISSUE_NUMBER,
+        state: 'open',
+        title: `pocket-plan: ${PLAN_ID}`,
+        body: `docs/pocket/spec/${PLAN_ID}/core.md`,
+        html_url: 'https://github.com/foreign/repo/issues/73',
+      },
+      expectedCode: 'ISSUE_OWNERSHIP_AMBIGUOUS',
+    },
+  ];
+
+  for (const scenario of cases) {
+    const fixture = makeFixture();
+    scenario.prepare(fixture);
+    const event = makeEvent(fixture.planDir);
+    const metadataPath = path.join(fixture.specDir, '.pocket-meta.json');
+    const beforeMetadata = fs.readFileSync(metadataPath, 'utf8');
+    const gh = makeFakeGh([], scenario.issue);
+    const result = await handlePlanClosed(event, {
+      specDir: fixture.specDir,
+      planDir: fixture.planDir,
+      ghRunner: gh.runner,
+    });
+
+    assert.equal(result.status, 'terminal', `${scenario.name} must require safe manual resolution`);
+    assert.equal(result.error.code, scenario.expectedCode, `${scenario.name} must return a stable prerequisite code`);
+    assert.equal(gh.comments.length, 0, `${scenario.name}: no remote marker may be written`);
+    assert.equal(gh.calls.filter(({ args }) => ['POST', 'PATCH', 'DELETE'].some((method) => args.includes(method))).length, 0,
+      `${scenario.name}: no GitHub mutation may run`);
+    assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), false,
+      `${scenario.name}: no local closeout may be written`);
+    assert.equal(fs.readFileSync(metadataPath, 'utf8'), beforeMetadata,
+      `${scenario.name}: ownership failure must leave local metadata unchanged`);
+  }
 });

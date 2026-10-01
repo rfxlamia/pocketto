@@ -91,7 +91,7 @@ function repoName(repoData) {
     : null;
 }
 
-function metadataUrlMatches(url, expectedRepo, issueNumber) {
+function issueUrlMatchesRepository(url, expectedRepo, issueNumber) {
   if (typeof url !== 'string' || !url.length) return true;
   try {
     const parsed = new URL(url);
@@ -111,8 +111,13 @@ function issueOwnershipError(issue, expectedRepo, planId) {
   if (typeof actualRepo === 'string' && actualRepo.toLowerCase() !== expectedRepo.toLowerCase()) {
     return 'ISSUE_OWNERSHIP_AMBIGUOUS';
   }
+  const issueUrl = issue && (issue.html_url || issue.url);
+  if (issueUrl && !issueUrlMatchesRepository(issueUrl, expectedRepo, issue.number)) {
+    return 'ISSUE_OWNERSHIP_AMBIGUOUS';
+  }
   if (!issueMatchesPlan(issue, planId)) return 'ISSUE_OWNERSHIP_AMBIGUOUS';
-  if (typeof issue.state === 'string' && issue.state.toLowerCase() !== 'open') return 'ISSUE_CLOSED';
+  if (typeof issue.state !== 'string') return 'ISSUE_OWNERSHIP_AMBIGUOUS';
+  if (issue.state.toLowerCase() !== 'open') return 'ISSUE_CLOSED';
   return null;
 }
 
@@ -163,7 +168,7 @@ function selectIssue(event, metadata, repository, opts) {
         'No linked issue is recorded for this plan. Link an owned open issue before closure.', false),
     };
   }
-  if (!metadataUrlMatches(identity.url, repository, issueNumber)) {
+  if (!issueUrlMatchesRepository(identity.url, repository, issueNumber)) {
     return {
       ok: false,
       result: adapterResult(event.event_id, 'terminal', 'ISSUE_OWNERSHIP_AMBIGUOUS',
