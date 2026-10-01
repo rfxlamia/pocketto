@@ -84,14 +84,6 @@ Directory input therefore advances only the current REVIEW phase. For a normal
 multi-phase plan (Phase 1 `REVIEW`, Phase 2 `WAITING`), `/pocketto:pocket-closing <plan_dir>`
 targets Phase 1, yields `PHASE_ADVANCED`, and leaves Phase 2 untouched.
 
-Also derive `spec_dir` (used by the enterprise reads in E2 and E5), mirroring create-pr:
-
-```text
-spec_dir = docs/pocket/spec/<slug>/ where <slug> matches the plan directory basename
-```
-
-`.pocket-meta.json` lives under `<spec_dir>` (every writer — create-pr, pocket-grinding — writes it there), so the enterprise reads below resolve it from `spec_dir`, not `plan_dir`. `log.json`, `reviews/`, and `closeout.md` stay under `<plan_dir>`.
-
 ### Step 2: Read log.json
 
 ```text
@@ -154,35 +146,6 @@ The **current** per-task verdict decides the gate — an old `REVIEW_FAIL` super
 
 Non-blocking observations (`stage_2` Minor issues, strengths, out-of-scope notes on PASSing tasks) do NOT block. Collect them — they go into the closeout summary as "carried forward."
 
-## Enterprise Mode (opt-in): Approval Gate (E0)
-
-Runs **after** the verdict gate passes and **before** any `log.json` mutation (Advance State / Close). This is the formal sign-off gate: with it on, a plan cannot close until a human approved the PR.
-
-1. Detect mode:
-   ```bash
-   npx -y pocketto-pi mode --json --contract 2
-   ```
-   If `ok: false`, or `data.enterprise` is not `true`, or `data.require_approval` is not `true` → **skip this gate entirely** (proceed to Advance State). Non-enterprise runs and enterprise runs without `require_approval` are byte-identical to today.
-2. Discover the target phase's PR — `phase_key = phase-${target.order}` from `log.json`, then
-   ```bash
-   npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
-   ```
-   falling back to `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number --jq '.[0].number // empty'`.
-   If no PR is found → **STOP** with state `APPROVAL_PENDING`: `require_approval` is explicitly configured, so a missing PR is a gate failure, not a skip (fail-closed). Tell the user to run `/pocketto:create-pr <plan_dir> <phase_file>` first.
-3. Check the review decision:
-   ```bash
-   gh pr view <pr_number> --json reviewDecision
-   ```
-   - `reviewDecision == "APPROVED"` → gate passes; proceed to Advance State.
-   - Anything else (`REVIEW_REQUIRED`, `CHANGES_REQUESTED`, empty) → **STOP** with state `APPROVAL_PENDING` and no `log.json` change:
-     ```text
-     APPROVAL_PENDING — PR #<N> is not APPROVED (<reviewDecision>).
-     Ask a supervisor to review and approve the PR, then re-run:
-     /pocketto:pocket-closing <plan_dir>
-     ```
-
-The gate reads GitHub; it never writes. Re-running pocket-closing after approval proceeds normally.
-
 ## Advance State
 
 Advance the **target** phase `REVIEW → DONE` at the phase level only (`<phase_file>` = `target.file` from `log.json`):
@@ -212,89 +175,7 @@ npx -y pocketto-pi log close <plan_dir> --json --contract 2
 
 `PHASE_ADVANCED` is the normal mid-pipeline state for phased plans: you advanced one phase, the plan continues. Point the user back to pocket-development for the next phase.
 
-## Enterprise Mode (opt-in): Closeout
-
-This section runs **only** when enterprise mode is active **and** the plan reached `CLOSED` (all verdicts clean, `log close` succeeded). Non-enterprise runs skip it entirely — the skill behaves exactly as today.
-
-### Step E1: Detect enterprise mode
-
-```bash
-npx -y pocketto-pi mode --json --contract 2
-```
-
-Parse the envelope. If `ok: false` or `data.enterprise` is not `true` → **skip this entire section** (proceed directly to Closeout Summary). Fail-closed: no GitHub calls in non-enterprise mode, ever.
-
-### Step E2: Read linked issue from `.pocket-meta.json`
-
-```bash
-npx -y pocketto-pi meta get <spec_dir> github_issue.number --json --contract 2
-```
-
-If `data.value` is `null` or missing → emit warning: `"Enterprise closeout skipped: no linked issue in .pocket-meta.json."` → proceed to Closeout Summary (no GitHub call).
-
-### Step E3: Build closeout body via CLI
-
-Write the closeout input to a temp JSON file:
-
-```json
-{ "slug": "<plan-slug>", "issue": <issue-number>, "phases": <phase-count> }
-```
-
-Then:
-
-```bash
-npx -y pocketto-pi format closeout --input <tmp.json> --json --contract 2
-```
-
-Parse `data.bodyFile` from the envelope.
-
-### Step E4: Post closeout comment
-
-```bash
-gh issue comment <issue-number> --body-file <bodyFile>
-```
-
-**[CRITICAL] Do NOT call `gh issue close`.** The issue closes when the supervisor **merges** the final PR (`closes #<issue>` in the PR body). Merge is the human gate — Pocket never closes the issue directly.
-
-### Step E4b: Refresh the task checklist comment
-
-Bring the issue's task-checklist comment (written by pocket-development at PHASE_COMPLETE) up to final state so the issue shows every phase DONE:
-
-```bash
-npx -y pocketto-pi format tasklist <plan_dir> --json --contract 2
-```
-
-Parse `data.bodyFile` and `data.marker` (`<!-- pocket-tasklist -->`), then upsert exactly one marker-tagged comment on issue `<issue-number>` — list comments via `gh api repos/<owner>/<repo>/issues/<issue-number>/comments --paginate`, filter to bodies starting with the marker, create if none / PATCH the earliest if found (delete later duplicates). If this step fails (e.g. `gh` hiccup), emit a one-line warning and continue — the closeout itself already succeeded.
-
-### Step E5: Discover linking PR number
-
-Canonical identity from the target `log.json` phase: `phase_file = target.file`, `phase_key = phase-${target.order}`. The PR number is written by create-pr at the phase-nested path, so read it there:
-
-```bash
-npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
-```
-
-If `data.value` is non-null → use it as the PR number. Otherwise, fall back to branch discovery:
-
-```bash
-branch=$(git rev-parse --abbrev-ref HEAD)
-gh pr list --head "$branch" --json number --jq '.[0].number // empty'
-```
-
-If no PR number is found by either method → emit warning: `"Enterprise closeout: could not determine linking PR number — skipping merge-state check."` → skip to Closeout Summary (the closeout comment was still posted).
-
-### Step E6: Check linking PR merge state
-
-```bash
-gh pr view <pr-number> --json state,merged
-```
-
-If `merged` is `false` → the closeout comment has been posted, but emit this warning:
-
-```text
-⚠️  The linking PR (#<pr-number>) is not yet merged.
-    The issue will close when the supervisor merges this PR.
-```
+`log close` atomically records the neutral `plan-closed` lifecycle event with the final plan state and artifact references. This local closeout does not wait for a lifecycle consumer.
 
 ## Closeout Summary
 
@@ -320,7 +201,6 @@ Closeout: <plan_dir>/closeout.md
 | `CLOSED` | All phases DONE, header `DONE` + `date_completed`, closeout.md written |
 | `PHASE_ADVANCED` | Reviewed phase advanced to DONE; other phases remain — plan continues |
 | `CLOSE_BLOCKED` | Preflight failed, a verdict is missing, or a task is REVIEW_FAIL/REVIEW_BLOCKED |
-| `APPROVAL_PENDING` | Enterprise `require_approval: true` and the phase PR is missing or not APPROVED — no `log.json` change; approve the PR and re-run |
 | `ALREADY_CLOSED` | Header already `DONE` — idempotent no-op |
 
 ## Iron Laws
