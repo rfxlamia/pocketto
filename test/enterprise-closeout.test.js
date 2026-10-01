@@ -16,9 +16,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 
-const { handlePlanClosed } = require('../enterprise/closure-handler');
+const { handlePlanClosed, selectTasklistComments, hasCanonicalTasklistProof } = require('../enterprise/closure-handler');
 const enterpriseMeta = require('../enterprise/meta');
-const { TASKLIST_MARKER, tasklistBody } = require('../cli/lib/bodies');
+const { TASKLIST_MARKER, tasklistBody, closeoutBody } = require('../cli/lib/bodies');
 
 const PLAN_ID = 'demo-plan';
 const ISSUE_NUMBER = 73;
@@ -157,6 +157,20 @@ test('CYCLE 1: plan-closed persists canonical tasklist proof and reconciles loca
   assert.equal(successMeta.github_issue.tasklist.final_state.status, 'DONE');
   assert.deepEqual(successMeta.github_issue.tasklist.artifact_refs, successEvent.artifact_refs);
   assert.ok(!successGh.calls.some(({ args }) => args.includes('merge') || (args[0] === 'issue' && args[1] === 'close')));
+
+  fs.unlinkSync(path.join(success.planDir, 'closeout.md'));
+  const closeoutWriteFailure = await handlePlanClosed(successEvent, {
+    specDir: success.specDir,
+    planDir: success.planDir,
+    ghRunner: successGh.runner,
+    writeFile: () => { throw new Error('simulated closeout filesystem timeout'); },
+  });
+  assert.equal(closeoutWriteFailure.status, 'reconciling');
+  assert.equal(closeoutWriteFailure.error.code, 'CLOSEOUT_LOCAL_WRITE_FAILED');
+  assert.equal(closeoutWriteFailure.proof_ref, result.proof_ref);
+  assert.equal(closeoutWriteFailure.proof_hash, result.proof_hash,
+    'local closeout failure must preserve the already-committed canonical proof');
+  assert.equal(successGh.comments.length, 1, 'local retry must not duplicate the remote marker');
 
   const retry = makeFixture();
   const retryEvent = makeEvent(retry.planDir);
@@ -322,4 +336,53 @@ test('CYCLE 3: missing, foreign, closed, or ambiguous issue ownership fails with
     assert.equal(fs.readFileSync(metadataPath, 'utf8'), beforeMetadata,
       `${scenario.name}: ownership failure must leave local metadata unchanged`);
   }
+});
+
+// T10 RED cycle 4
+// Test file: test/enterprise-closeout.test.js
+// Level: unit
+// Test intent: Given two closeout bodies with the same plan but different informational wording, When closure proof is evaluated, Then only the tasklist marker and metadata determine idempotency; the unmarked closeout comment cannot cause a duplicate-proof decision.
+// Exercise through: closure proof helper and marker selector.
+// Test doubles: none; use pure body/marker inputs.
+// Expected RED: no helper distinguishes canonical tasklist proof from informational closeout content.
+// Exact command: `node --test test/enterprise-closeout.test.js`
+
+test('CYCLE 4: only a selected tasklist marker plus matching metadata proves closure', () => {
+  const event = { event_id: `${PLAN_ID}:plan-closed:r9` };
+  const metadata = {
+    github_issue: {
+      tasklist: {
+        event_id: event.event_id,
+        marker: TASKLIST_MARKER,
+        comment_id: 99,
+        proof_ref: 'meta:github_issue|marker:issue-tasklist',
+        proof_hash: 'c'.repeat(64),
+      },
+    },
+  };
+  const closeoutA = `${closeoutBody({ slug: PLAN_ID, issue: ISSUE_NUMBER, phases: 1 })}\nNote: informational wording A`;
+  const closeoutB = `${closeoutBody({ slug: PLAN_ID, issue: ISSUE_NUMBER, phases: 1 })}\nNote: informational wording B`;
+  const unmarkedA = selectTasklistComments([
+    { id: 1, body: closeoutA },
+    { id: 2, body: closeoutB },
+  ]);
+  const unmarkedB = selectTasklistComments([
+    { id: 1, body: closeoutB },
+    { id: 2, body: closeoutA },
+  ]);
+
+  assert.deepEqual(unmarkedA, []);
+  assert.deepEqual(unmarkedB, []);
+  assert.equal(hasCanonicalTasklistProof({ event, marker: null, metadata }), false,
+    'informational closeout text cannot establish canonical proof');
+  assert.equal(hasCanonicalTasklistProof({ event, marker: TASKLIST_MARKER, metadata }), true,
+    'the tasklist marker and matching metadata establish the proof');
+  const selected = selectTasklistComments([
+    { id: 1, body: closeoutA },
+    { id: 99, body: `${TASKLIST_MARKER}\nfinal tasklist` },
+    { id: 2, body: closeoutB },
+  ]);
+  assert.deepEqual(selected.map((comment) => comment.id), [99]);
+  assert.equal(hasCanonicalTasklistProof({ event, marker: TASKLIST_MARKER, metadata }), true,
+    'changing unmarked closeout wording cannot alter marker identity');
 });

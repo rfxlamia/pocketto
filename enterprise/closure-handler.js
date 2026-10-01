@@ -217,16 +217,22 @@ function updateComment(eventId, endpoint, method, body, opts) {
     : { ok: false, result: fromTransport(eventId, response, 'TASKLIST_UPSERT_FAILED') };
 }
 
+function hasCanonicalTasklistProof({ event, marker, metadata } = {}) {
+  if (marker !== TASKLIST_MARKER || !event || typeof event.event_id !== 'string') return false;
+  const tasklist = metadata && metadata.github_issue && metadata.github_issue.tasklist;
+  if (!tasklist || tasklist.event_id !== event.event_id || tasklist.marker !== TASKLIST_MARKER) return false;
+  if (tasklist.proof_ref !== PROOF_REF || !Number.isInteger(tasklist.comment_id)) return false;
+  return typeof tasklist.proof_hash === 'string' && /^[0-9a-f]{64}$/.test(tasklist.proof_hash);
+}
+
 function evaluateClosureProof({ event, comments, metadata } = {}) {
   const markers = selectTasklistComments(comments);
   const tasklist = metadata && metadata.github_issue && metadata.github_issue.tasklist;
-  const metadataMatches = Boolean(event && tasklist
-    && tasklist.event_id === event.event_id
-    && tasklist.marker === TASKLIST_MARKER
-    && tasklist.proof_ref === PROOF_REF
-    && Number.isInteger(tasklist.comment_id)
-    && typeof tasklist.proof_hash === 'string'
-    && /^[0-9a-f]{64}$/.test(tasklist.proof_hash));
+  const metadataMatches = hasCanonicalTasklistProof({
+    event,
+    marker: markers.length ? TASKLIST_MARKER : null,
+    metadata,
+  });
   const markerMatches = metadataMatches && markers.some((comment) => comment.id === tasklist.comment_id);
   return {
     proven: markers.length > 0 && markerMatches,
@@ -360,8 +366,11 @@ function handlePlanClosed(event, opts = {}) {
     try {
       writeCloseoutFile(opts.planDir, closeout, opts);
     } catch (error) {
-      return adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',
-        `Canonical tasklist proof is present but local closeout.md could not be written: ${error && error.message ? error.message : String(error)}. Replay will reconcile the local artifact.`, true);
+      return withTasklistProof(
+        adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',
+          `Canonical tasklist proof is present but local closeout.md could not be written: ${error && error.message ? error.message : String(error)}. Replay will reconcile the local artifact.`, true),
+        existingProof.proof_hash
+      );
     }
     return {
       event_id: eventId,
@@ -426,5 +435,6 @@ module.exports = {
   selectTasklistComments,
   flattenPages,
   issueMatchesPlan,
+  hasCanonicalTasklistProof,
   evaluateClosureProof,
 };
