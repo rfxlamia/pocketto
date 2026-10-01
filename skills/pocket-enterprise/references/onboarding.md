@@ -41,7 +41,13 @@ Existing user files are not overwritten. Create the `pocket-plan` label only whe
 
 ## Register and verify the lifecycle adapter
 
-Install the event executable supplied by the compatible Enterprise distribution. Its argv must accept a lifecycle event-file path followed by `--json --contract 3`, and emit the bounded response defined in `lifecycle-contract.md`.
+The Enterprise distribution bundles `enterprise/dispatch.js`, which composes the `spec-approved`, `phase-complete`, and `plan-closed` handlers behind the Core adapter protocol. Install registers it by default with the exact fixed argv `[process.execPath, <absolute enterprise/dispatch.js>, <absolute project-root>]`; Core appends the event-file path and `--json --contract 3`.
+
+```bash
+node enterprise/cli.js install <project-root> --json
+```
+
+For a compatible custom runner, `--argv` remains an explicit override. The supplied argv entries are the complete fixed prefix; Core still appends the event file and the exact protocol flags:
 
 ```bash
 node enterprise/cli.js install <project-root> --argv <event-executable> [--argv <fixed-arg> ...] --json

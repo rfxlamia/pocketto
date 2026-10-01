@@ -84,6 +84,7 @@
       "host": "pi",
       "kind": "enterprise",
       "includes": [
+        "enterprise/dispatch.js",
         "enterprise/phase-handler.js",
         "enterprise/phase-handler-context.js",
         "enterprise/phase-handler-errors.js",
@@ -208,6 +209,7 @@
       "host": "claude",
       "kind": "enterprise",
       "includes": [
+        "enterprise/dispatch.js",
         "enterprise/phase-handler.js",
         "enterprise/phase-handler-context.js",
         "enterprise/phase-handler-errors.js",

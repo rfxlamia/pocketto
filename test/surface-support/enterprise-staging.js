@@ -49,7 +49,7 @@ function assertEnterpriseRuntimeShipsOnlyForEnterpriseRoles() {
         },
         packed: ENTERPRISE_RUNTIME_FILES,
       },
-      'all six T7 runtime modules must ship in both Enterprise roles and the package, never in Core',
+      'all Enterprise runtime modules must ship in both Enterprise roles and the package, never in Core',
     );
   } finally {
     fs.rmSync(parent, { recursive: true, force: true });

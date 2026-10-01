@@ -5,11 +5,16 @@
 // Keeps all adapter policy in Enterprise-only files; Core sees only the
 // opaque registration record. Makes zero GitHub calls on every path.
 
+const path = require('node:path');
 const registration = require('./registration');
 
 function usage() {
-  return 'Usage: enterprise/cli.js install <project-root> --argv <executable> [--argv <arg> ...] [--json]\n'
+  return 'Usage: enterprise/cli.js install <project-root> [--argv <executable> [--argv <arg> ...]] [--json]\n'
     + '       enterprise/cli.js preflight <project-root> [--json]';
+}
+
+function defaultRunnerArgv(projectRoot) {
+  return [process.execPath, path.resolve(__dirname, 'dispatch.js'), path.resolve(projectRoot)];
 }
 
 function parseArgvArgs(argv) {
@@ -47,14 +52,10 @@ function main(argv) {
       process.exitCode = 1;
       return;
     }
-    if (parsed.values.length === 0) {
-      const message = 'install requires at least one --argv executable entry.';
-      if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-install', data: null, error: { code: 'ENTERPRISE_INSTALL_FAILED', message } }));
-      else console.error(message);
-      process.exitCode = 1;
-      return;
-    }
-    const res = registration.installRegistration(positional, { argv: parsed.values });
+    const argv = parsed.values.length > 0
+      ? parsed.values
+      : defaultRunnerArgv(positional);
+    const res = registration.installRegistration(positional, { argv });
     if (!res.ok) {
       if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-install', data: null, error: { code: res.code, message: res.message } }));
       else console.error(`${res.code}: ${res.message}`);
@@ -105,4 +106,4 @@ if (require.main === module) {
   main(process.argv.slice(2));
 }
 
-module.exports = { main };
+module.exports = { main, defaultRunnerArgv };

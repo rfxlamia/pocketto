@@ -60,6 +60,7 @@ test('CYCLE 1: install atomically writes registration with schema 1, adapter con
   const regPath = path.join(root, '.pocket', 'lifecycle-adapter.json');
   assert.equal(fs.existsSync(regPath), true, 'registration file must exist');
   const record = JSON.parse(fs.readFileSync(regPath, 'utf8'));
+  assert.deepEqual(record.argv, [dummy], 'an explicit custom --argv override must be registered verbatim');
   assert.deepEqual(Object.keys(record).sort(), ['adapter_contract', 'argv', 'events', 'schema', 'timeout_ms']);
   assert.equal(record.schema, 1, 'registration schema must be 1');
   assert.equal(record.adapter_contract, 1, 'adapter contract must be 1');

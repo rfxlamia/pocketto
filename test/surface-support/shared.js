@@ -23,6 +23,7 @@ const LIFECYCLE_CORE_MODULES = [
 
 const ENTERPRISE_RUNTIME_FILES = [
   'enterprise/cli.js',
+  'enterprise/dispatch.js',
   'enterprise/adapter.js',
   'enterprise/registration.js',
   'enterprise/github.js',
