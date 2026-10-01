@@ -231,6 +231,27 @@ function writeIssue(event, runner, spec, repo) {
   }
 }
 
+function proveIssue(event, issue, spec, repo, clock) {
+  const identity = hasPlanIdentity(issue, event.plan_id, spec.specPath);
+  if (!Number.isInteger(issue.number) || issue.number <= 0
+      || String(issue.state).toUpperCase() !== 'OPEN'
+      || !labelsOf(issue).includes(ISSUE_LABEL)
+      || !issueUrlBelongsTo(issue, repo)
+      || !identity.matches) {
+    return resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'Issue could not be proven open, current-origin, pocket-plan labeled, and tied to the exact plan identity.');
+  }
+  const identityProof = identity.titleMatch && identity.pathMatch
+    ? 'title+full-spec-path'
+    : identity.titleMatch ? 'title' : 'full-spec-path';
+  const proofHash = saveIssueProof(spec.specDir, event, issue, repo, spec.specPath, identityProof, clock);
+  return {
+    event_id: event.event_id,
+    status: 'succeeded',
+    proof_ref: meta.issueProofRef(),
+    proof_hash: proofHash,
+  };
+}
+
 function mapGhFailure(event, operation, result) {
   const classification = result && result.classification;
   const error = classification && classification.error;
@@ -278,30 +299,24 @@ function handleSpecApproved(event, opts = {}) {
     return resultError(event, 'ISSUE_SEARCH_MALFORMED', 'Open pocket-plan issue search returned a malformed response.');
   }
   const exactMatches = listedIssues.filter((issue) => hasPlanIdentity(issue, event.plan_id, spec.specPath).matches);
-  if (exactMatches.length !== 0) {
-    return resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'An exact plan issue exists; identity reconciliation is required before creation.');
+  if (exactMatches.length > 1) {
+    return resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'Multiple open issues match the exact plan identity; choose one manually before retrying.');
+  }
+  if (exactMatches.length === 1) {
+    const listedMatch = exactMatches[0];
+    if (!Number.isInteger(listedMatch.number) || listedMatch.number <= 0
+        || !issueUrlBelongsTo(listedMatch, repo)) {
+      return resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'Exact plan search returned an issue outside the current origin; resolve ownership manually.');
+    }
+    const viewed = issueView(repo, listedMatch.number, runner);
+    if (!viewed.ok) return mapGhFailure(event, 'Exact issue validation', viewed);
+    return proveIssue(event, viewed.data, spec, repo, clock);
   }
 
   const created = writeIssue(event, runner, spec, repo);
   if (created.error) return mapGhFailure(event, 'Issue creation or validation', created.error);
   if (created.manual) return resultError(event, 'ISSUE_MANUAL_RESOLUTION', `${created.manual}; verify the target manually before retrying.`);
-  const issue = created.issue;
-  const identity = hasPlanIdentity(issue, event.plan_id, spec.specPath);
-  if (!Number.isInteger(issue.number) || issue.number <= 0
-      || issue.state !== 'OPEN'
-      || !labelsOf(issue).includes(ISSUE_LABEL)
-      || !issueUrlBelongsTo(issue, repo)
-      || !identity.matches) {
-    return resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'Created issue could not be proven open, current-origin, pocket-plan labeled, and tied to the exact plan identity.');
-  }
-  const proofHash = saveIssueProof(spec.specDir, event, issue, repo, spec.specPath,
-    identity.titleMatch && identity.pathMatch ? 'title+full-spec-path' : identity.titleMatch ? 'title' : 'full-spec-path', clock);
-  return {
-    event_id: event.event_id,
-    status: 'succeeded',
-    proof_ref: meta.issueProofRef(),
-    proof_hash: proofHash,
-  };
+  return proveIssue(event, created.issue, spec, repo, clock);
 }
 
 module.exports = { handleSpecApproved };

@@ -97,6 +97,27 @@ function makeZeroMatchTransport(issue = makeIssue()) {
   return { calls, runner };
 }
 
+function makeSingleMatchTransport(issue) {
+  const calls = [];
+  const runner = (args) => {
+    calls.push(args.slice());
+    if (args[0] === 'repo' && args[1] === 'view') {
+      return { exit: 0, stdout: JSON.stringify({ nameWithOwner: REPOSITORY, url: REPOSITORY_URL }), stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'list') {
+      return { exit: 0, stdout: JSON.stringify([[issue], []]), stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'view' && args[2] === String(issue.number)) {
+      return { exit: 0, stdout: JSON.stringify(issue), stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'create') {
+      return { exit: 1, stdout: '', stderr: 'duplicate issue creation is forbidden in this test' };
+    }
+    return { exit: 1, stdout: '', stderr: `Unexpected fake gh command: ${args.join(' ')}` };
+  };
+  return { calls, runner };
+}
+
 function loadIssueHandler() {
   try {
     return require('../enterprise/issue-handler');
@@ -143,4 +164,39 @@ test('CYCLE 1: creates one issue for a pending approved spec with no exact open 
   assert.equal(metadata.github_issue.ownership.event_id, EVENT_ID);
   assert.equal(metadata.github_issue.ownership.spec_path, 'docs/pocket/spec/demo-approved-plan/approved-spec.md');
   assert.match(metadata.github_issue.ownership.proof_hash, /^[0-9a-f]{64}$/);
+});
+
+// T8 Cycle 2: one owned open exact match is reused.
+// Given one open `pocket-plan` issue in the current origin repository with
+// exact normalized plan identity, When `spec-approved` runs, Then it reuses
+// that issue, records proof, and performs no duplicate create.
+// Exercise through the handler's metadata/search reconciliation boundary.
+// Fake paginated `gh issue list/view` responses; real metadata files.
+test('CYCLE 2: reuses one open current-origin exact-plan issue without creating a duplicate', () => {
+  const fixture = makeProject();
+  const existing = makeIssue({
+    number: 52,
+    url: `${REPOSITORY_URL}/issues/52`,
+  });
+  const transport = makeSingleMatchTransport(existing);
+  const handler = loadIssueHandler();
+  assert.ok(handler && typeof handler.handleSpecApproved === 'function', 'issue handler must be available');
+
+  const result = handler.handleSpecApproved(fixture.event, {
+    projectRoot: fixture.projectRoot,
+    ghRunner: transport.runner,
+    clock: () => new Date(FIXED_TIME),
+  });
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.proof_ref, enterpriseMeta.issueProofRef());
+  assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'create').length, 0,
+    'an existing exact issue must not be duplicated');
+  assert.equal(transport.calls.filter((args) => args[0] === 'issue' && args[1] === 'view').length, 1,
+    'the search candidate must be fetched and validated in the current origin');
+  const metadata = JSON.parse(fs.readFileSync(enterpriseMeta.resolveMetaPath(fixture.specDir), 'utf8'));
+  assert.equal(metadata.github_issue.number, 52);
+  assert.equal(metadata.github_issue.url, existing.url);
+  assert.equal(metadata.github_issue.ownership.plan_id, PLAN_ID);
+  assert.equal(metadata.github_issue.ownership.event_id, EVENT_ID);
 });
