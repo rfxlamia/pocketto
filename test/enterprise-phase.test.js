@@ -455,6 +455,94 @@ test('corrective RED: legacy untagged thread proof survives finding keep and res
   }, 'legacy thread proof must survive migration and resolve once after its finding disappears');
 });
 
+// T9 cycle-2 corrective RED
+// Test file: `test/enterprise-phase.test.js`
+// Level: integration.
+// Test intent: Given a legacy `phases.<phase>.fingerprints` entry with an untagged remote thread ID and the matching finding is removed, When GitHub thread resolution fails transiently, Then the handler must not report success, must retain the legacy/thread ID in durable canonical proof for retry, must not repost the finding, and must not mutate/delete the legacy field; when the same event is replayed and resolution succeeds, Then it resolves that same thread ID exactly once, completes without duplicate post, and updates canonical proof safely while the legacy field remains unchanged.
+// Exercise through: `enterprise/phase-handler.js` with fake paginated review-thread/issue-comment transport and real metadata serialization.
+// Test doubles: fake GitHub transport only; no network; do not mock reconciliation, proof serialization, or identity computation.
+// Expected RED: the current handler swallows the resolve error, returns success, drops the only untagged thread ID from canonical metadata, and replay cannot resolve the thread.
+// Exact command: `node --test test/enterprise-phase.test.js`
+
+test('T9 corrective RED: failed legacy thread resolution preserves proof through same-event replay', (t) => {
+  const fixture = createFixture(t);
+  const fingerprint = identity.fingerprint({
+    file: 'src/worker.js',
+    ruleId: 'stage-1:spec-compliance',
+    message: 'Missing error handling for invalid input',
+    occurrence: 0,
+  });
+  const legacy = [{ fingerprint, thread: 'PRRT_LEGACY_RETRY' }];
+  const legacyJson = JSON.stringify(legacy);
+  const meta = enterpriseMeta.readMetaFor(fixture.specDir);
+  delete meta.phases['phase-1'].review;
+  meta.phases['phase-1'].fingerprints = legacy;
+  enterpriseMeta.writeMetaFor(fixture.specDir, meta);
+
+  fixture.remote.prs[0].threadPages[1].push({
+    id: 'PRRT_LEGACY_RETRY',
+    isResolved: false,
+    comments: { nodes: [{ body: 'Removed finding without a pocket-fp tag', path: 'src/worker.js', line: 18 }] },
+  });
+  fs.writeFileSync(path.join(fixture.planDir, 'reviews', 'T1-review.json'), JSON.stringify({
+    task_id: 'T1',
+    overall: 'REVIEW_PASS',
+    stage_1: { issues: [] },
+    stage_2: { issues: [] },
+  }, null, 2) + '\n');
+  fixture.remote.resolveFailuresRemaining = 1;
+
+  const handler = loadPhaseHandler();
+  assert.ok(handler && typeof handler.handlePhaseComplete === 'function');
+  const options = {
+    projectRoot: fixture.root,
+    ghRunner: fakeGh(fixture.remote),
+    now: () => new Date(FIXED_CLOCK),
+  };
+  const metaPath = path.join(fixture.specDir, '.pocket-meta.json');
+  const firstResponse = handler.handlePhaseComplete(fixture.event, options);
+  const afterFailure = enterpriseMeta.readMetaFor(fixture.specDir).phases['phase-1'];
+  const inlinePosts = () => fixture.remote.calls.filter((args) => args[0] === 'api'
+    && String(args[1]).includes('/pulls/')
+    && String(args[1]).endsWith('/comments')
+    && args.some((arg) => String(arg).includes('pocket-fp:'))).length;
+
+  assert.deepEqual({
+    retryStatus: ['retryable', 'reconciling'].includes(firstResponse.status),
+    canonicalProof: afterFailure.review && afterFailure.review.fingerprints,
+  }, {
+    retryStatus: true,
+    canonicalProof: legacy,
+  }, 'an unconfirmed resolution failure must retry without dropping the legacy thread ID');
+  assert.deepEqual(afterFailure.fingerprints, legacy, 'the legacy fingerprint field must remain unchanged');
+  assert.equal(fs.readFileSync(metaPath, 'utf8').includes('PRRT_LEGACY_RETRY'), true,
+    'serialized metadata must durably retain the only thread ID');
+  assert.equal(inlinePosts(), 0, 'failed resolution must not repost the removed finding');
+  assert.ok(fixture.remote.calls.some((args) => args[0] === 'api'
+    && args[1] === 'graphql' && args.includes('after=cursor-1')),
+  'the legacy thread must be discovered through paginated review-thread transport');
+  assert.ok(fixture.remote.calls.some((args) => args[0] === 'api'
+    && String(args[1]).endsWith(`/issues/${PR_NUMBER}/comments`)
+    && args.includes('--paginate')),
+  'phase comments must use the paginated issue-comment transport');
+
+  const replayResponse = handler.handlePhaseComplete(fixture.event, options);
+  const afterReplay = enterpriseMeta.readMetaFor(fixture.specDir).phases['phase-1'];
+  const resolutionCalls = fixture.remote.calls.filter((args) => args[0] === 'api'
+    && args[1] === 'graphql'
+    && args.some((arg) => String(arg).includes('resolveReviewThread'))
+    && args.includes('threadId=PRRT_LEGACY_RETRY'));
+
+  assert.equal(replayResponse.status, 'succeeded', JSON.stringify(replayResponse));
+  assert.equal(resolutionCalls.length, 2, 'replay must retry the same legacy thread ID once after the failed attempt');
+  assert.equal(fixture.remote.successfulResolutions, 1, 'the thread must be successfully resolved exactly once');
+  assert.equal(allThreads(fixture.remote).find((thread) => thread.id === 'PRRT_LEGACY_RETRY').isResolved, true);
+  assert.equal(inlinePosts(), 0, 'replay must not create a duplicate inline finding');
+  assert.deepEqual(afterReplay.review.fingerprints, [], 'canonical proof may drop the ID only after resolution is confirmed');
+  assert.deepEqual(afterReplay.fingerprints, legacy, 'successful replay must not mutate the legacy field');
+  assert.equal(JSON.stringify(afterReplay.fingerprints), legacyJson);
+});
+
 function addPhaseMarker(pr, phase, id) {
   pr.commentPages[1].push({ id, body: `${identity.markerFor(String(phase))}\n\nPrior summary` });
 }
@@ -569,6 +657,8 @@ function createFixture(t) {
       calls: [],
       nextCommentId: 1,
       nextThreadId: 1,
+      resolveFailuresRemaining: 0,
+      successfulResolutions: 0,
     },
   };
 }
@@ -610,10 +700,15 @@ function fakeGh(remote) {
       const query = fieldFor('query') || '';
       if (query.includes('resolveReviewThread')) {
         const threadId = fieldFor('threadId');
+        if (remote.resolveFailuresRemaining > 0) {
+          remote.resolveFailuresRemaining -= 1;
+          return failure('temporarily unavailable');
+        }
         const thread = allThreads(remote).find((candidate) => candidate.id === threadId);
         if (!thread) return failure('review thread not found');
         thread.isResolved = true;
-        return json({ data: { resolveReviewThread: { thread: { isResolved: true } } } });
+        remote.successfulResolutions += 1;
+        return json({ data: { resolveReviewThread: { thread: { id: thread.id, isResolved: true } } } });
       }
       if (query.includes('reviewThreads')) return json(threadPage(remote, fieldFor('after'), Number(fieldFor('number'))));
       return failure('unexpected GraphQL operation');

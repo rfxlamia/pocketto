@@ -54,6 +54,7 @@ function handlePhaseComplete(event, options = {}) {
       prior: readPriorFingerprints(meta, phase.key),
       findings: phase.findings,
       options,
+      onResolveFailure: (records) => persistPhaseProof(context, issue, phase, pr, marker, records),
     });
 
     const proofHash = persistPhaseProof(context, issue, phase, pr, marker, fingerprints);
@@ -486,7 +487,7 @@ function validFingerprintRecord(record) {
   return record && typeof record.fingerprint === 'string' && /^[0-9a-f]{16}$/.test(record.fingerprint);
 }
 
-function reconcileFindings({ repo, pr, threads, prior, findings, options }) {
+function reconcileFindings({ repo, pr, threads, prior, findings, options, onResolveFailure }) {
   const threadMap = new Map();
   const remoteByFingerprint = new Map();
   for (const thread of threads) {
@@ -504,7 +505,14 @@ function reconcileFindings({ repo, pr, threads, prior, findings, options }) {
   for (const [fingerprint, matches] of remoteByFingerprint) {
     const sorted = matches.slice().sort((left, right) => String(left.id).localeCompare(String(right.id)));
     threadMap.set(fingerprint, sorted[0]);
-    for (const duplicate of sorted.slice(1)) resolveThread(duplicate, repo, options);
+    for (const duplicate of sorted.slice(1)) {
+      try {
+        resolveThread(duplicate, repo, pr, options);
+      } catch (error) {
+        onResolveFailure(prior);
+        throw error;
+      }
+    }
   }
 
   const byFingerprint = new Map();
@@ -519,8 +527,13 @@ function reconcileFindings({ repo, pr, threads, prior, findings, options }) {
   const reconciliation = setDiff([...byFingerprint.values()], findings);
   for (const record of reconciliation.resolve) {
     const thread = threadMap.get(record.fingerprint);
-    if (thread && !thread.isResolved) resolveThread(thread, repo, options);
-    else if (record.thread && !thread) resolveThreadId(record.thread, repo, options);
+    try {
+      if (thread && !thread.isResolved) resolveThread(thread, repo, pr, options);
+      else if (record.thread && !thread) resolveThreadId(record.thread, repo, pr, options);
+    } catch (error) {
+      onResolveFailure([...byFingerprint.values()]);
+      throw error;
+    }
   }
   for (const record of reconciliation.post) postFinding(repo, pr, record, options);
 
@@ -557,17 +570,36 @@ function reconcileFindings({ repo, pr, threads, prior, findings, options }) {
   return saved.sort((left, right) => left.fingerprint.localeCompare(right.fingerprint));
 }
 
-function resolveThread(thread, repo, options) {
+function resolveThread(thread, repo, pr, options) {
   if (thread.isResolved) return;
-  resolveThreadId(thread.id, repo, options);
+  resolveThreadId(thread.id, repo, pr, options);
 }
 
-function resolveThreadId(threadId, repo, options) {
-  const query = 'mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{isResolved}}}';
+function resolveThreadId(threadId, repo, pr, options) {
+  const query = 'mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{id isResolved}}}';
+  let response;
   try {
-    runJson(['api', 'graphql', '-f', `query=${query}`, '-F', `threadId=${threadId}`], options);
+    response = runJson(['api', 'graphql', '-f', `query=${query}`, '-F', `threadId=${threadId}`], options);
+  } catch (error) {
+    if (confirmsThreadResolvedOrMissing(threadId, repo, pr, options)) return;
+    throw error;
+  }
+  const resolved = response && response.data && response.data.resolveReviewThread
+    && response.data.resolveReviewThread.thread;
+  if (resolved && resolved.id === threadId && resolved.isResolved === true) return;
+  if (confirmsThreadResolvedOrMissing(threadId, repo, pr, options)) return;
+  throw new PhaseHandlerError('PHASE_THREAD_RECONCILING', `GitHub did not confirm resolution of review thread ${threadId}.`, {
+    status: 'reconciling',
+    retryable: true,
+  });
+}
+
+function confirmsThreadResolvedOrMissing(threadId, repo, pr, options) {
+  try {
+    const thread = listReviewThreads(repo, pr.number, options).find((candidate) => candidate.id === threadId);
+    return !thread || thread.isResolved === true;
   } catch (_) {
-    // GitHub rejects an already-resolved or missing thread; resolution is idempotent.
+    return false;
   }
 }
 
