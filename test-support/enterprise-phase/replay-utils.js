@@ -1,7 +1,7 @@
 'use strict';
 
-const { FIXED_CLOCK } = require('./enterprise-phase-fixture');
-const { fakeGh } = require('./enterprise-phase-remote');
+const { FIXED_CLOCK } = require('./fixture');
+const { fakeGh } = require('./remote');
 
 function handlerOptions(fixture) {
   return {

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const enterpriseMeta = require('../../enterprise/meta');
-const { makePr } = require('./enterprise-phase-remote');
+const { makePr } = require('./remote');
 
 const FIXED_CLOCK = '2026-09-19T12:00:00.000Z';
 const ISSUE_NUMBER = 31;

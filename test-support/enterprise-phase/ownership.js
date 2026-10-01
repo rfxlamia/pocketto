@@ -4,11 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const enterpriseMeta = require('../enterprise/meta');
-const identity = require('../cli/lib/identity');
-const { FIXED_CLOCK, OWNER, PR_NUMBER, REPOSITORY, createFixture } = require('./helpers/enterprise-phase-fixture');
-const { allComments, allThreads, fakeGh, makePr } = require('./helpers/enterprise-phase-remote');
-const { addPhaseMarker, isRemoteMutation, loadPhaseHandler } = require('./helpers/enterprise-phase-test-utils');
+const enterpriseMeta = require('../../enterprise/meta');
+const identity = require('../../cli/lib/identity');
+const { FIXED_CLOCK, OWNER, PR_NUMBER, REPOSITORY, createFixture } = require('./fixture');
+const { allComments, allThreads, fakeGh, makePr } = require('./remote');
+const { addPhaseMarker, isRemoteMutation, loadPhaseHandler } = require('./test-utils');
 
 // RED cycle 3
 // Test file: `test/enterprise-phase.test.js`

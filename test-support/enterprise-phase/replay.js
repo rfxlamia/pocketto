@@ -2,13 +2,13 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const enterpriseMeta = require('../enterprise/meta');
-const identity = require('../cli/lib/identity');
-const { summaryBody } = require('../cli/lib/bodies');
-const { FIXED_CLOCK, PR_NUMBER, createFixture } = require('./helpers/enterprise-phase-fixture');
-const { allComments, allThreads, fakeGh } = require('./helpers/enterprise-phase-remote');
-const { loadPhaseHandler } = require('./helpers/enterprise-phase-test-utils');
-const { handlerOptions, inlinePostCount, staleResolveCount } = require('./helpers/enterprise-phase-replay-utils');
+const enterpriseMeta = require('../../enterprise/meta');
+const identity = require('../../cli/lib/identity');
+const { summaryBody } = require('../../cli/lib/bodies');
+const { FIXED_CLOCK, PR_NUMBER, createFixture } = require('./fixture');
+const { allComments, allThreads, fakeGh } = require('./remote');
+const { loadPhaseHandler } = require('./test-utils');
+const { handlerOptions, inlinePostCount, staleResolveCount } = require('./replay-utils');
 
 // RED cycle 5
 // Test file: `test/enterprise-phase.test.js`

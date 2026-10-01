@@ -4,12 +4,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const enterpriseMeta = require('../enterprise/meta');
-const identity = require('../cli/lib/identity');
-const { FIXED_CLOCK, PR_NUMBER, createFixture } = require('./helpers/enterprise-phase-fixture');
-const { allThreads, fakeGh } = require('./helpers/enterprise-phase-remote');
-const { loadPhaseHandler } = require('./helpers/enterprise-phase-test-utils');
-const { handlerOptions, inlinePostCount, staleResolveCount } = require('./helpers/enterprise-phase-replay-utils');
+const enterpriseMeta = require('../../enterprise/meta');
+const identity = require('../../cli/lib/identity');
+const { FIXED_CLOCK, PR_NUMBER, createFixture } = require('./fixture');
+const { allThreads, fakeGh } = require('./remote');
+const { loadPhaseHandler } = require('./test-utils');
+const { handlerOptions, inlinePostCount, staleResolveCount } = require('./replay-utils');
 
 // T9 cycle-2 corrective RED
 // Test file: `test/enterprise-phase.test.js`

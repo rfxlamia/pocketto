@@ -4,12 +4,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const enterpriseMeta = require('../enterprise/meta');
-const identity = require('../cli/lib/identity');
-const { summaryBody } = require('../cli/lib/bodies');
-const { FIXED_CLOCK, createFixture } = require('./helpers/enterprise-phase-fixture');
-const { allComments, allThreads, fakeGh } = require('./helpers/enterprise-phase-remote');
-const { isRemoteMutation, loadPhaseHandler } = require('./helpers/enterprise-phase-test-utils');
+const enterpriseMeta = require('../../enterprise/meta');
+const identity = require('../../cli/lib/identity');
+const { summaryBody } = require('../../cli/lib/bodies');
+const { FIXED_CLOCK, createFixture } = require('./fixture');
+const { allComments, allThreads, fakeGh } = require('./remote');
+const { isRemoteMutation, loadPhaseHandler } = require('./test-utils');
 
 // Keep the five behavioral RED cycles verbatim and in source order.
 //
@@ -95,4 +95,3 @@ test('RED cycle 2: missing owned issue blocks phase reporting without mutation',
   assert.equal(fixture.remote.calls.filter(isRemoteMutation).length, 0, 'missing issue must perform no remote mutation');
   assert.equal(fs.readFileSync(metaPath, 'utf8'), beforeMeta, 'missing issue must not write metadata proof');
 });
-

@@ -1,8 +1,8 @@
 'use strict';
 
-require('./enterprise-phase-reporting.test');
-require('./enterprise-phase-ownership.test');
-require('./enterprise-phase-legacy.test');
-require('./enterprise-phase-replay.test');
-require('./enterprise-phase-legacy-recovery.test');
-require('./enterprise-phase-retry.test');
+require('../test-support/enterprise-phase/reporting');
+require('../test-support/enterprise-phase/ownership');
+require('../test-support/enterprise-phase/legacy');
+require('../test-support/enterprise-phase/replay');
+require('../test-support/enterprise-phase/legacy-recovery');
+require('../test-support/enterprise-phase/retry');
