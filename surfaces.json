@@ -63,14 +63,12 @@
         "cli/lib/meta.js",
         "cli/lib/reconcile.js",
         "cli/lib/version.js",
-        "assets/**",
-        "llms.txt",
-        "README.md",
         "LICENSE"
       ],
       "requires": [],
       "forbidden_paths": [
         "skills/create-pr/",
+        "skills/pocket-enterprise/",
         "skills/pocket-development/references/enterprise-reporting.md",
         "cli/commands/mode.js",
         "cli/lib/mode.js",
@@ -78,7 +76,8 @@
         "cli/lib/bodies.js"
       ],
       "forbidden_content": [
-        "ENTERPRISE_ONLY_SURFACE"
+        "ENTERPRISE_ONLY_SURFACE",
+        "Pocket Enterprise"
       ]
     },
     "pi/enterprise": {
@@ -87,6 +86,7 @@
       "includes": [
         "skills/create-pr/**",
         "skills/pocket-development/references/enterprise-reporting.md",
+        "skills/pocket-enterprise/**",
         "cli/commands/mode.js",
         "cli/lib/mode.js",
         "cli/commands/format.js",
@@ -171,14 +171,12 @@
         "cli/lib/meta.js",
         "cli/lib/reconcile.js",
         "cli/lib/version.js",
-        "assets/**",
-        "llms.txt",
-        "README.md",
         "LICENSE"
       ],
       "requires": [],
       "forbidden_paths": [
         "skills/create-pr/",
+        "skills/pocket-enterprise/",
         "skills/pocket-development/references/enterprise-reporting.md",
         "cli/commands/mode.js",
         "cli/lib/mode.js",
@@ -186,7 +184,8 @@
         "cli/lib/bodies.js"
       ],
       "forbidden_content": [
-        "ENTERPRISE_ONLY_SURFACE"
+        "ENTERPRISE_ONLY_SURFACE",
+        "Pocket Enterprise"
       ]
     },
     "claude/enterprise": {
@@ -195,6 +194,7 @@
       "includes": [
         "skills/create-pr/**",
         "skills/pocket-development/references/enterprise-reporting.md",
+        "skills/pocket-enterprise/**",
         "cli/commands/mode.js",
         "cli/lib/mode.js",
         "cli/commands/format.js",
@@ -249,7 +249,10 @@
     "cli/lib/mode.js": "enterprise",
     "cli/lib/bodies.js": "enterprise",
     "cli/lib/reconcile.js": "shared",
-    "cli/lib/version.js": "core"
+    "cli/lib/version.js": "core",
+    "skills/create-pr/**": "enterprise",
+    "skills/pocket-development/references/enterprise-reporting.md": "enterprise",
+    "skills/pocket-enterprise/**": "enterprise"
   },
   "cli_boundary": {
     "loader": "cli/index.js",

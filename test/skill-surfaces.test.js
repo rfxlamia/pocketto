@@ -66,19 +66,16 @@ function resolveCitation(citation, fromFile) {
   return filePart;
 }
 
-function scanCoreRole(roleDir, roleName) {
-  const skillRoot = path.join(roleDir, 'skills');
-  const files = walkFiles(skillRoot).sort();
-  const markdown = files.filter((file) => file.endsWith('.md'));
-  const paths = files.map((file) => posix(path.relative(roleDir, file)));
-  const pathViolations = paths.filter((rel) =>
-    FORBIDDEN_PATHS.some((forbidden) => rel === forbidden || rel.startsWith(forbidden)),
-  );
+function scanMarkdown(roleDir, roleName, include = () => true) {
+  const markdown = walkFiles(roleDir)
+    .filter((file) => file.endsWith('.md'))
+    .map((file) => ({ file, rel: posix(path.relative(roleDir, file)) }))
+    .filter(({ rel }) => include(rel))
+    .sort((left, right) => left.rel.localeCompare(right.rel));
   const contentViolations = [];
   const citationViolations = [];
 
-  for (const file of markdown) {
-    const rel = posix(path.relative(roleDir, file));
+  for (const { file, rel } of markdown) {
     const text = fs.readFileSync(file, 'utf8');
     for (const forbidden of FORBIDDEN_CONTENT) {
       const match = text.match(forbidden);
@@ -92,7 +89,25 @@ function scanCoreRole(roleDir, roleName) {
     }
   }
 
-  return { paths, markdown, pathViolations, contentViolations, citationViolations };
+  return {
+    markdown: markdown.map(({ file }) => file),
+    contentViolations,
+    citationViolations,
+  };
+}
+
+function scanCoreRole(roleDir, roleName) {
+  const skillRoot = path.join(roleDir, 'skills');
+  const files = walkFiles(skillRoot).sort();
+  const paths = files.map((file) => posix(path.relative(roleDir, file)));
+  const pathViolations = paths.filter((rel) =>
+    FORBIDDEN_PATHS.some((forbidden) => rel === forbidden || rel.startsWith(forbidden)),
+  );
+  return {
+    paths,
+    pathViolations,
+    ...scanMarkdown(roleDir, roleName, (rel) => rel.startsWith('skills/')),
+  };
 }
 
 function executeGrindingHandoffFixture(skillText, runner, fixture) {
@@ -188,6 +203,127 @@ test('Core role staging excludes Enterprise instructions and runs the neutral gr
       ['cli:lifecycle transition /tmp/approved-spec spec-approved', 'skill:pocket-planning'],
       'the approved-spec handoff must emit spec-approved before planning and make no remote call',
     );
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+const ENTERPRISE_SKILL_DELTA = [
+  'skills/create-pr/SKILL.md',
+  'skills/create-pr/create-pr.skill',
+  'skills/pocket-development/references/enterprise-reporting.md',
+  'skills/pocket-enterprise/SKILL.md',
+  'skills/pocket-enterprise/pocket-enterprise.skill',
+  'skills/pocket-enterprise/references/issue-reconciliation.md',
+  'skills/pocket-enterprise/references/lifecycle-contract.md',
+  'skills/pocket-enterprise/references/onboarding.md',
+  'skills/pocket-enterprise/references/phase-reconciliation.md',
+];
+const TASK_ARCHIVES = [
+  'skills/pocket-development/pocket-development.skill',
+  'skills/pocket-closing/pocket-closing.skill',
+  'skills/pocket-grinding/pocket-grinding.skill',
+  'skills/pocket-init/pocket-init.skill',
+  'skills/pocket-help/pocket-help.skill',
+  'skills/create-pr/create-pr.skill',
+  'skills/pocket-enterprise/pocket-enterprise.skill',
+];
+const V3_SNAPSHOT_SHA256 = {
+  'skills/pocket-grinding/SKILL.md': 'f6b509bb429500e1229bc411c78cde8d92e39f3907c71d9635a81c54ba9fd481',
+  'skills/pocket-init/SKILL.md': 'bbee2ba8865a88709d473d4d90e7bc8f98576990cf9acf139ddd647013cbb496',
+  'skills/pocket-help/SKILL.md': '8571fdac961901166c5728603bad19bc457e40680d25f09bc35697e120d1bc07',
+  'skills/pocket-help/references/end-to-end-flow.md': '0206ee599eb9ebd9ce5e392d0d267f44e3556f7d89b7751a477830b1c9ffd7ce',
+  'skills/pocket-help/references/skill-map.md': '38a97a1abc851429e9a74c1cdd33427567652f1b46ca754b590d80b619c8ccad',
+  'skills/pocket-development/SKILL.md': 'b79a6fa416afe37deca50160c9eb1691e64480b649ba535570265f87a009538e',
+  'skills/pocket-development/references/enterprise-reporting.md': '947dbbc3e7ef7c6909edb9693a8c49a423f25d504376fcd069116782c5d5bbb1',
+  'skills/pocket-closing/SKILL.md': '82461db8b9d20384471c435eca5515e9c653a55d0cb79405fef7ef99afa266b6',
+  'skills/create-pr/SKILL.md': '8344a61191f585bd54428882d72030dd4a0731deac3e9bce821d2b0f9c627bc1',
+};
+
+function stagedPaths(root) {
+  return walkFiles(root).map((file) => posix(path.relative(root, file))).sort();
+}
+
+function assertArchiveMatchesSource(archivePath) {
+  const skillDir = path.dirname(archivePath);
+  const expected = walkFiles(skillDir)
+    .map((file) => posix(path.relative(skillDir, file)))
+    .filter((rel) => !rel.endsWith('.skill'))
+    .filter((rel) => !rel.split('/').some((part) => ['.DS_Store', 'Thumbs.db', '__MACOSX'].includes(part)))
+    .sort();
+  const actual = execFileSync('unzip', ['-Z1', archivePath], { encoding: 'utf8' })
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .sort();
+  assert.deepEqual(actual, expected, `${archivePath}: archive entries must match source files`);
+  for (const rel of expected) {
+    const archived = execFileSync('unzip', ['-p', archivePath, rel]);
+    const source = fs.readFileSync(path.join(skillDir, rel));
+    assert.ok(archived.equals(source), `${archivePath}: stale archived content for ${rel}`);
+  }
+}
+
+function scanWholeCoreMarkdown(roleDir, roleName) {
+  const result = scanMarkdown(roleDir, roleName);
+  return [...result.contentViolations, ...result.citationViolations];
+}
+
+test('Enterprise roles add only their adapter delta and preserve the immutable v3 source snapshot', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 't6-enterprise-surfaces-'));
+  try {
+    const roleFiles = new Map();
+    for (const [coreRole, enterpriseRole] of [
+      ['pi/core', 'pi/enterprise'],
+      ['claude/core', 'claude/enterprise'],
+    ]) {
+      const coreOut = path.join(temp, coreRole.replace('/', '-'));
+      const enterpriseOut = path.join(temp, enterpriseRole.replace('/', '-'));
+      stageRole(coreRole, coreOut);
+      stageRole(enterpriseRole, enterpriseOut);
+      roleFiles.set(enterpriseRole, {
+        core: stagedPaths(coreOut),
+        enterprise: stagedPaths(enterpriseOut),
+        coreOut,
+      });
+    }
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'surfaces.json'), 'utf8'));
+    for (const [role, staged] of roleFiles) {
+      const coreRole = role.replace('/enterprise', '/core');
+      assert.deepEqual(manifest.roles[role].requires, [coreRole], `${role}: the matching Core role must be required`);
+      assert.ok(manifest.roles[role].includes.includes('skills/pocket-enterprise/**'), `${role}: adapter source must be manifest-owned`);
+      for (const forbidden of FORBIDDEN_PATHS) {
+        assert.ok(manifest.roles[coreRole].forbidden_paths.includes(forbidden), `${coreRole}: ${forbidden} must be explicitly forbidden`);
+      }
+      const expectedDelta = [...ENTERPRISE_SKILL_DELTA].sort();
+      const actualDelta = staged.enterprise.filter((file) => file.startsWith('skills/')).sort();
+      assert.deepEqual(actualDelta, expectedDelta, `${role}: Enterprise skill files must be an explicit additive delta`);
+
+      const copiedCoreSkills = actualDelta.filter((file) => staged.core.includes(file));
+      assert.deepEqual(copiedCoreSkills, [], `${role}: Enterprise must not copy any Core skill source`);
+      const forbiddenCorePaths = staged.core.filter((file) =>
+        FORBIDDEN_PATHS.some((forbidden) => file === forbidden || file.startsWith(forbidden)),
+      );
+      assert.deepEqual(forbiddenCorePaths, [], `${coreRole}: Enterprise-owned paths must be absent`);
+      assert.deepEqual(
+        scanWholeCoreMarkdown(staged.coreOut, coreRole),
+        [],
+        `${role}: Core Markdown must contain no Enterprise-only path/content and all citations must stay in Core`,
+      );
+    }
+
+    const { createHash } = require('node:crypto');
+    for (const [rel, expectedHash] of Object.entries(V3_SNAPSHOT_SHA256)) {
+      const snapshot = execFileSync('git', ['show', `v3.1.3:${rel}`]);
+      const actualHash = createHash('sha256').update(snapshot).digest('hex');
+      assert.equal(actualHash, expectedHash, `v3.1.3 source snapshot changed for ${rel}`);
+    }
+
+    for (const rel of TASK_ARCHIVES) {
+      const archive = path.join(ROOT, rel);
+      assert.ok(fs.existsSync(archive), `required role archive is missing: ${rel}`);
+      assertArchiveMatchesSource(archive);
+    }
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
