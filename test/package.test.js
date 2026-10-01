@@ -4,19 +4,17 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
-const {
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-} = require("node:fs");
-const { tmpdir } = require("node:os");
+const { readFileSync } = require("node:fs");
 const path = require("node:path");
+const {
+	CITATION_RE,
+	assertArchiveMatchesSource,
+	resolveCitation,
+	walkFiles,
+} = require("../test-support/surface-test-utils");
+const { packedPaths, withPackedPackage } = require("../test-support/package/fixture");
 
 const ROOT = path.join(__dirname, "..");
-const { expandIncludes, loadManifest } = require("../cli/lib/surface-manifest");
 
 const MOVED_REVIEW_FILES = [
 	"skills/pocket-development/references/spec-compliance-review.md",
@@ -30,7 +28,6 @@ const DELETED_SKILL_PREFIXES = [
 ];
 
 const DEPRECATED_SKILL_NAMES = ["pocket-review", "pocket-correction"];
-const IGNORED_SKILL_SOURCE_NAMES = new Set([".DS_Store", "Thumbs.db"]);
 const PIPELINE_DIAGRAM_LABELS = [
 	"pitching",
 	"grinding",
@@ -50,224 +47,67 @@ const STANDALONE_DIAGRAM_LABELS = [
 ];
 const ALL_DIAGRAM_LABELS = [...PIPELINE_DIAGRAM_LABELS, ...STANDALONE_DIAGRAM_LABELS];
 
-// Path citations agents are told to load. Line suffixes (`:96-111`) are
-// stripped before lookup. `<skills_root>/…` is the parent of a skill dir.
-const CITATION_RE =
-	/(?:<skills_root>\/|(?:skills|references|cli)\/)[A-Za-z0-9._/-]+\.(?:md|js)(?::\d+(?:-\d+)?)?/g;
 
-function posix(rel) {
-	return rel.split(path.sep).join("/");
-}
 
-function walkFiles(dir) {
-	const out = [];
-	for (const name of readdirSync(dir)) {
-		const full = path.join(dir, name);
-		if (statSync(full).isDirectory()) {
-			out.push(...walkFiles(full));
-		} else {
-			out.push(full);
-		}
-	}
-	return out;
-}
+function assertPackedPackageLayout(extracted) {
+	const files = packedPaths(extracted);
 
-function roleOwnedSkillSourcePaths(archive, manifest) {
-	const archiveRel = posix(path.relative(ROOT, archive));
-	const skillDir = path.posix.dirname(archiveRel);
-	const owners = [];
-
-	for (const [roleName, role] of Object.entries(manifest.roles)) {
-		const expanded = expandIncludes(role.includes, ROOT);
-		if (!expanded.includes(archiveRel)) continue;
-		const members = expanded
-			.filter((rel) => rel.startsWith(`${skillDir}/`) && rel !== archiveRel)
-			.filter((rel) => {
-				const local = rel.slice(skillDir.length + 1);
-				if (local.endsWith(".skill")) return false;
-				return local.split("/").every((part) =>
-					!IGNORED_SKILL_SOURCE_NAMES.has(part) &&
-					part !== "__MACOSX" &&
-					part !== "__pycache__" &&
-					(!part.startsWith(".") || part === ".skillkit-mode"),
-				);
-			})
-			.map((rel) => rel.slice(skillDir.length + 1))
-			.sort();
-		owners.push({ roleName, kind: role.kind, members });
+	for (const rel of MOVED_REVIEW_FILES) {
+		assert.ok(files.has(rel), `missing packed file: ${rel}`);
 	}
 
-	assert.ok(owners.length > 0, `${archive}: no role manifest owns this archive`);
-	const canonical = owners[0];
-	for (const owner of owners.slice(1)) {
-		assert.equal(owner.kind, canonical.kind, `${archive}: archive is owned by multiple role kinds`);
-		assert.deepEqual(owner.members, canonical.members, `${archive}: role hosts declare different archive source sets`);
-	}
-	return canonical.members;
-}
+	const leaked = [...files].filter((rel) =>
+		DELETED_SKILL_PREFIXES.some((prefix) => rel.startsWith(prefix)),
+	);
+	assert.deepEqual(leaked, [], "deprecated skill paths must not be packed");
 
-function skillArchivePaths(archive) {
-	let output;
-	try {
-		output = execFileSync("unzip", ["-Z1", archive], { encoding: "utf8" });
-	} catch (error) {
-		if (error.code === "ENOENT") {
-			assert.fail("unzip executable is required to validate .skill archives");
-		}
-		throw error;
-	}
-
-	const entries = output.split(/\r?\n/).filter(Boolean);
-	const seen = new Set();
-	for (const entry of entries) {
-		assert.equal(path.posix.isAbsolute(entry), false, `${archive}: absolute ZIP entry ${entry}`);
-		assert.equal(entry.includes("\\"), false, `${archive}: backslash in ZIP entry ${entry}`);
-		assert.equal(
-			entry.split("/").includes(".."),
-			false,
-			`${archive}: parent traversal in ZIP entry ${entry}`,
-		);
-		assert.equal(seen.has(entry), false, `${archive}: duplicate ZIP entry ${entry}`);
-		seen.add(entry);
-	}
-	return entries.sort();
-}
-
-function packAndExtract() {
-	const dir = mkdtempSync(path.join(tmpdir(), "pocketto-pack-"));
-	execFileSync("npm", ["pack", "--pack-destination", dir], {
-		cwd: ROOT,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	const tgz = readdirSync(dir).filter((f) => f.endsWith(".tgz"));
-	assert.equal(tgz.length, 1, `expected one tarball, got ${tgz.join(", ")}`);
-	execFileSync("tar", ["-xzf", tgz[0], "-C", dir], { cwd: dir });
-	return { dir, extracted: path.join(dir, "package") };
-}
-
-function packedPaths(extracted) {
-	const files = new Set();
-	for (const full of walkFiles(extracted)) {
-		files.add(posix(path.relative(extracted, full)));
-	}
-	return files;
-}
-
-function resolveCitation(citation, fromFile) {
-	const filePart = citation.replace(/:\d+(?:-\d+)?$/, "");
-	if (filePart.startsWith("<skills_root>/")) {
-		return `skills/${filePart.slice("<skills_root>/".length)}`;
-	}
-	if (filePart.startsWith("references/")) {
-		const parts = fromFile.split("/");
-		return `${parts[0]}/${parts[1]}/${filePart}`;
-	}
-	return filePart;
-}
-
-function inspectRoleArchive(archive, archiveRel, selectedPaths, { forbiddenPaths = [], forbiddenContent = [] } = {}) {
-	const issues = [];
-	for (const entry of skillArchivePaths(archive)) {
-		const sourceRel = path.posix.join(path.posix.dirname(archiveRel), entry);
-		for (const forbidden of forbiddenPaths) {
-			if (sourceRel === forbidden || sourceRel.startsWith(forbidden)) {
-				issues.push(`${archiveRel}: forbidden path ${sourceRel}`);
+	const missing = [];
+	const deprecatedMentions = [];
+	for (const rel of [...files].sort()) {
+		if (!rel.endsWith(".md")) continue;
+		const text = readFileSync(path.join(extracted, rel), "utf8");
+		for (const name of DEPRECATED_SKILL_NAMES) {
+			if (text.includes(name)) {
+				deprecatedMentions.push(`${rel} mentions ${name}`);
 			}
 		}
-		if (!entry.endsWith(".md")) continue;
-
-		const text = execFileSync("unzip", ["-p", archive, entry], { encoding: "utf8" });
-		for (const forbidden of forbiddenContent) {
-			if (forbidden.test(text)) issues.push(`${archiveRel}:${entry}: forbidden content ${forbidden}`);
-		}
-		for (const citation of text.match(CITATION_RE) || []) {
-			const resolved = resolveCitation(citation, sourceRel);
-			if (!selectedPaths.has(resolved)) {
-				issues.push(`${archiveRel}:${entry}: unresolved role citation ${citation}`);
+		if (!rel.startsWith("skills/")) continue;
+		const citations = text.match(CITATION_RE) || [];
+		for (const citation of citations) {
+			const resolved = resolveCitation(citation, rel);
+			if (!files.has(resolved)) {
+				missing.push(`${rel} → ${citation} (${resolved})`);
 			}
 		}
 	}
-	return issues;
+	assert.deepEqual(missing, [], "active skill citations must resolve in the pack");
+	assert.deepEqual(
+		deprecatedMentions,
+		[],
+		"published Markdown must not mention deprecated skills",
+	);
+
+	const phasePass = readFileSync(
+		path.join(extracted, "skills/pocket-development/references/phase-level-pass.md"),
+		"utf8",
+	);
+	assert.doesNotMatch(
+		phasePass,
+		/pocket-correction enforces today/,
+		"phase-level-pass.md must not claim a deleted skill still enforces a rule",
+	);
 }
 
-test("packed package keeps moved review files and drops deprecated skills", () => {
-	const { dir, extracted } = packAndExtract();
-	try {
-		const files = packedPaths(extracted);
-
-		for (const rel of MOVED_REVIEW_FILES) {
-			assert.ok(files.has(rel), `missing packed file: ${rel}`);
-		}
-
-		const leaked = [...files].filter((rel) =>
-			DELETED_SKILL_PREFIXES.some((prefix) => rel.startsWith(prefix)),
-		);
-		assert.deepEqual(leaked, [], "deprecated skill paths must not be packed");
-
-		const missing = [];
-		const deprecatedMentions = [];
-		for (const rel of [...files].sort()) {
-			if (!rel.endsWith(".md")) continue;
-			const text = readFileSync(path.join(extracted, rel), "utf8");
-			for (const name of DEPRECATED_SKILL_NAMES) {
-				if (text.includes(name)) {
-					deprecatedMentions.push(`${rel} mentions ${name}`);
-				}
-			}
-			if (!rel.startsWith("skills/")) continue;
-			const citations = text.match(CITATION_RE) || [];
-			for (const citation of citations) {
-				const resolved = resolveCitation(citation, rel);
-				if (!files.has(resolved)) {
-					missing.push(`${rel} → ${citation} (${resolved})`);
-				}
-			}
-		}
-		assert.deepEqual(missing, [], "active skill citations must resolve in the pack");
-		assert.deepEqual(
-			deprecatedMentions,
-			[],
-			"published Markdown must not mention deprecated skills",
-		);
-
-		const phasePass = readFileSync(
-			path.join(extracted, "skills/pocket-development/references/phase-level-pass.md"),
-			"utf8",
-		);
-		assert.doesNotMatch(
-			phasePass,
-			/pocket-correction enforces today/,
-			"phase-level-pass.md must not claim a deleted skill still enforces a rule",
-		);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+test("packed package keeps moved review files and drops deprecated skills", () =>
+	withPackedPackage(ROOT, assertPackedPackageLayout),
+);
 
 test("bundled .skill archive members match their role-owned source sets", () => {
 	const archives = walkFiles(path.join(ROOT, "skills"))
 		.filter((full) => full.endsWith(".skill"))
 		.sort();
 	assert.ok(archives.length > 0, "expected at least one bundled .skill archive");
-	const manifest = loadManifest(path.join(ROOT, "surfaces.json"), { sourceDir: ROOT });
-
-	for (const archive of archives) {
-		const expected = roleOwnedSkillSourcePaths(archive, manifest);
-		const actual = skillArchivePaths(archive);
-		assert.deepEqual(actual, expected, `${archive}: ZIP members differ from its role-owned source set`);
-
-		const skillDir = path.dirname(archive);
-		for (const rel of expected) {
-			const archived = execFileSync("unzip", ["-p", archive, rel]);
-			const source = readFileSync(path.join(skillDir, rel));
-			assert.equal(
-				archived.equals(source),
-				true,
-				`${archive}: stale role-owned content for ${rel}`,
-			);
-		}
-	}
+	for (const archive of archives) assertArchiveMatchesSource(archive, ROOT);
 });
 
 test("pipeline diagram inventory stays aligned across published assets", () => {
@@ -371,111 +211,4 @@ test("empty-diff skip stub is attributed to the main agent", () => {
 	);
 });
 
-test("packed role archives keep Core forbidden-content out and Enterprise additive", () => {
-	const { dir, extracted } = packAndExtract();
-	const stagedRoot = mkdtempSync(path.join(tmpdir(), "pocketto-role-pack-"));
-	const coreArchives = [
-		"skills/pocket-development/pocket-development.skill",
-		"skills/pocket-closing/pocket-closing.skill",
-		"skills/pocket-grinding/pocket-grinding.skill",
-		"skills/pocket-init/pocket-init.skill",
-		"skills/pocket-help/pocket-help.skill",
-	];
-	const forbiddenPaths = [
-		"skills/create-pr/",
-		"skills/pocket-enterprise/",
-		"skills/pocket-development/references/enterprise-reporting.md",
-	];
-	const forbiddenContent = [
-		/\bgh\s+(?:issue|pr|api|auth|repo|label)\b/i,
-		/\bGitHub\s+(?:issue|issues|pull request|pull requests|PRs?)\b/i,
-		/Pocket Enterprise|enterprise mode|Enterprise is opt-in/i,
-		/\b(?:GITHUB|GH)_(?:TOKEN|KEY|SECRET)\b|github_pat_|ghp_[A-Za-z0-9]/,
-		/\.pocket-meta\.json|\.github\//,
-		/git\s+remote\s+get-url|create-pr|enterprise-reporting\.md/,
-	];
-	try {
-		const packed = packedPaths(extracted);
-		for (const rel of [
-			...coreArchives,
-			"skills/create-pr/create-pr.skill",
-			"skills/pocket-enterprise/pocket-enterprise.skill",
-		]) {
-			assert.ok(packed.has(rel), `npm pack must include role archive ${rel}`);
-		}
-
-		const staged = new Map();
-		for (const [coreRole, enterpriseRole] of [
-			["pi/core", "pi/enterprise"],
-			["claude/core", "claude/enterprise"],
-		]) {
-			const roles = {};
-			for (const role of [coreRole, enterpriseRole]) {
-				const output = path.join(stagedRoot, role.replace("/", "-"));
-				execFileSync("node", [
-					path.join(ROOT, "scripts/build-surfaces.js"),
-					"--role", role,
-					"--output", output,
-				], { cwd: ROOT, encoding: "utf8" });
-				roles[role] = {
-					root: output,
-					files: walkFiles(output).map((file) => posix(path.relative(output, file))).sort(),
-				};
-			}
-			staged.set(coreRole, roles);
-		}
-
-		for (const [coreRole, roles] of staged) {
-			const enterpriseRole = coreRole.replace("/core", "/enterprise");
-			const duplicateSkills = roles[enterpriseRole].files
-				.filter((rel) => rel.startsWith("skills/"))
-				.filter((rel) => roles[coreRole].files.includes(rel));
-			assert.deepEqual(duplicateSkills, [], `${coreRole}: Enterprise delta must not copy Core skills`);
-
-			const reportingPath = "skills/pocket-development/references/enterprise-reporting.md";
-			assert.ok(roles[enterpriseRole].files.includes(reportingPath), `${coreRole}: reporting reference must be available in Enterprise`);
-			assert.ok(!roles[coreRole].files.includes(reportingPath), `${coreRole}: reporting reference must not be staged in Core`);
-			const corePathLeaks = roles[coreRole].files.filter((rel) =>
-				forbiddenPaths.some((forbidden) => rel === forbidden || rel.startsWith(forbidden)),
-			);
-			assert.deepEqual(corePathLeaks, [], `${coreRole}: Enterprise-owned paths must be absent from Core`);
-
-			const selectedPaths = new Set([...roles[coreRole].files, ...roles[enterpriseRole].files]);
-			for (const role of [coreRole, enterpriseRole]) {
-				for (const rel of roles[role].files.filter((file) => file.endsWith(".md"))) {
-					const text = readFileSync(path.join(roles[role].root, rel), "utf8");
-					if (role === coreRole) {
-						for (const forbidden of forbiddenContent) {
-							assert.doesNotMatch(text, forbidden, `${role}:${rel} contains forbidden Enterprise content`);
-						}
-					}
-					for (const citation of text.match(CITATION_RE) || []) {
-						const resolved = resolveCitation(citation, rel);
-						assert.ok(selectedPaths.has(resolved), `${role}:${rel} citation is outside its selected role: ${citation}`);
-					}
-				}
-			}
-
-			const archiveLeaks = [
-				...coreArchives.flatMap((archiveRel) => inspectRoleArchive(
-					path.join(extracted, archiveRel),
-					archiveRel,
-					selectedPaths,
-					{ forbiddenPaths, forbiddenContent },
-				)),
-				...[
-					"skills/create-pr/create-pr.skill",
-					"skills/pocket-enterprise/pocket-enterprise.skill",
-				].flatMap((archiveRel) => inspectRoleArchive(
-					path.join(extracted, archiveRel),
-					archiveRel,
-					selectedPaths,
-				)),
-			];
-			assert.deepEqual(archiveLeaks, [], `${coreRole}: bundled role archives must contain only their role-owned paths/content`);
-		}
-	} finally {
-		rmSync(stagedRoot, { recursive: true, force: true });
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+require("../test-support/package/role-archives");
