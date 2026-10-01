@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {
   FIXED_CLOCK, execFileSync, mkdtempSync, parseJson, path, readFileSync, rmSync, runCli,
-  seedLifecycleEvent, sha256Hex, tmpdir, writeFileSync,
+  seedLifecycleEvent, sha256Hex, tmpdir, writeFileSync, writeExecutable, registerAdapter,
 } = require('./common');
 
 function writePlanSources(planDir) {
@@ -120,12 +120,25 @@ function forceProjectionWriterFailure(planDir, phaseFile) {
 
 function createRepairFixture(root) {
   const planDir = path.join(root, 'plan-90');
+  const pocketDir = path.join(planDir, '.pocket');
+  const adapterCallsPath = path.join(root, 'adapter-calls.jsonl');
   fs.mkdirSync(planDir, { recursive: true });
+  fs.mkdirSync(pocketDir, { recursive: true });
+  writeFileSync(adapterCallsPath, '');
+  const adapterPath = writeExecutable(path.join(root, 'fake-adapter'), `#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const eventPath = process.argv.find((arg) => arg.endsWith('.json') && fs.existsSync(arg));
+const event = eventPath ? JSON.parse(fs.readFileSync(eventPath, 'utf8')) : {};
+fs.appendFileSync(process.env.ADAPTER_CALLS, JSON.stringify({ event_id: event.event_id }) + '\\n');
+process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded' }) + '\\n');
+`);
+  registerAdapter(pocketDir, adapterPath, { events: ['spec-approved', 'phase-complete'] });
   const sources = writePlanSources(planDir);
   const progress = initializeProgressedProjection(planDir, gitRunner(planDir));
   const lifecyclePath = seedRepairEvents(planDir, sources);
   forceProjectionWriterFailure(planDir, progress.phaseFile);
-  return { planDir, lifecyclePath, ...progress };
+  return { planDir, lifecyclePath, adapterCallsPath, ...progress };
 }
 
 function assertProjectionRepaired(fixture) {
@@ -144,7 +157,7 @@ function assertProjectionRepaired(fixture) {
 
   const repaired = runCli(
     ['lifecycle', 'repair', planDir, '--json', '--contract', '3'],
-    { cwd: planDir, env: { POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK } },
+    { cwd: planDir, env: { POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK, ADAPTER_CALLS: fixture.adapterCallsPath } },
   );
   const envelope = parseJson(repaired.stdout.trim(), 'lifecycle repair response');
   assert.equal(envelope.ok, true, `public lifecycle repair should succeed: ${JSON.stringify(envelope)}${repaired.stderr}`);
@@ -161,7 +174,58 @@ function assertProjectionRepaired(fixture) {
   assert.equal(after.plan.revision, before.plan.revision, 'repair must not change lifecycle revision');
   assert.equal(after.events.length, before.events.length, 'repair must not append an event');
   assert.deepEqual(after.events, before.events, 'repair must not dispatch or mutate lifecycle events');
+  assert.equal(readFileSync(fixture.adapterCallsPath, 'utf8'), '', 'repair must not invoke the local adapter recorder');
 }
+
+// Historical T4 repair intent (verbatim; superseded by the amended contract cases below):
+// Test file: `test/lifecycle-dispatch.test.js`
+// Level: integration
+// Test intent: Given committed lifecycle state and event revision 4 with a damaged or missing `log.json`, When `lifecycle repair <spec_dir> --json --contract 3` runs, Then `log.json` is rebuilt, revision and journal length remain unchanged, and no adapter dispatch or new event occurs.
+// Exercise through: public `lifecycle repair` and real temporary projection files.
+// Test doubles: injected projection writer failure only.
+// Expected RED: no repair command or projection rebuild exists.
+// Exact command: `node --test test/lifecycle-dispatch.test.js`
+// Current contract-alignment case: missing `log.json` without a verified backup returns LIFECYCLE_REPAIR_STATE_UNRECOVERABLE, preserves all state, and is expected to PASS against unchanged production code.
+
+test('lifecycle repair fails closed when log projection is missing without a trusted backup', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-repair-missing-'));
+  const originalClock = process.env.POCKETTO_LIFECYCLE_NOW;
+  try {
+    const fixture = createRepairFixture(root);
+    const lifecycleBefore = readFileSync(fixture.lifecyclePath, 'utf8');
+    const lifecycleDocBefore = parseJson(lifecycleBefore, 'lifecycle state before missing-projection repair');
+    assert.equal(lifecycleDocBefore.plan.revision, 4);
+    assert.equal(lifecycleDocBefore.events.length, 4);
+    assert.equal(lifecycleDocBefore.events[3].delivery.status, 'pending');
+
+    rmSync(fixture.logPath);
+    assert.equal(fs.existsSync(fixture.logPath), false, 'fixture must remove the real log.json projection');
+
+    const repaired = runCli(
+      ['lifecycle', 'repair', fixture.planDir, '--json', '--contract', '3'],
+      { cwd: fixture.planDir, env: { POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK, ADAPTER_CALLS: fixture.adapterCallsPath } },
+    );
+    const envelope = parseJson(repaired.stdout.trim(), 'missing-projection lifecycle repair response');
+    assert.equal(envelope.ok, false, `public lifecycle repair must fail closed without a task-state source: ${JSON.stringify(envelope)}${repaired.stderr}`);
+    assert.equal(repaired.code, 1);
+    assert.equal(envelope.command, 'lifecycle');
+    assert.equal(envelope.contract, 3);
+    assert.equal(envelope.error.code, 'LIFECYCLE_REPAIR_STATE_UNRECOVERABLE');
+    assert.match(envelope.error.message, /(restore|backup).*(log\\.json|projection)|(log\\.json|projection).*(restore|backup)/i);
+    assert.equal(fs.existsSync(fixture.logPath), false, 'repair must leave missing log.json absent');
+
+    assert.equal(readFileSync(fixture.lifecyclePath, 'utf8'), lifecycleBefore, 'repair must preserve lifecycle journal bytes');
+    const lifecycleDocAfter = parseJson(readFileSync(fixture.lifecyclePath, 'utf8'), 'lifecycle state after missing-projection repair');
+    assert.equal(lifecycleDocAfter.plan.revision, lifecycleDocBefore.plan.revision, 'repair must preserve lifecycle revision');
+    assert.equal(lifecycleDocAfter.events.length, lifecycleDocBefore.events.length, 'repair must not append a lifecycle event');
+    assert.deepEqual(lifecycleDocAfter.events, lifecycleDocBefore.events, 'repair must preserve event and delivery state without dispatch');
+    assert.equal(readFileSync(fixture.adapterCallsPath, 'utf8'), '', 'repair must not invoke the local adapter recorder');
+  } finally {
+    if (originalClock === undefined) delete process.env.POCKETTO_LIFECYCLE_NOW;
+    else process.env.POCKETTO_LIFECYCLE_NOW = originalClock;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('lifecycle repair updates a stale phase projection without losing task progress or dispatching', () => {
   // Given a valid stale log.json with task progress and committed lifecycle state,
