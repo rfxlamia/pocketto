@@ -84,7 +84,7 @@ function makeFakeGh(initialComments = [], issueRecord = ISSUE) {
     calls.push({ args: args.slice(), timeoutMs: options.timeoutMs });
     const joined = args.join(' ');
     if (args[0] === 'repo' && args[1] === 'view') {
-      return { exit: 0, stdout: JSON.stringify({ owner: { login: 'acme' }, name: 'pocketto' }), stderr: '' };
+      return { exit: 0, stdout: JSON.stringify({ nameWithOwner: REPO, url: `https://github.com/${REPO}` }), stderr: '' };
     }
     if (args[0] === 'api' && joined.includes(`/issues/${ISSUE_NUMBER}`) && !joined.includes('/comments')) {
       return { exit: 0, stdout: JSON.stringify(issueRecord), stderr: '' };

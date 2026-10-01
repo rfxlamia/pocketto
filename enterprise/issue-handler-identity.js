@@ -7,60 +7,7 @@ const path = require('node:path');
 const ISSUE_LABEL = 'pocket-plan';
 const ISSUE_FIELDS = 'number,url,state,title,body,labels,createdAt';
 const PLAN_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-function repoIdentity(data) {
-  if (!data || typeof data.nameWithOwner !== 'string' || !/^[^/]+\/[^/]+$/.test(data.nameWithOwner)
-      || typeof data.url !== 'string') return null;
-  let url;
-  try {
-    url = new URL(data.url);
-  } catch (_) {
-    return null;
-  }
-  const segments = url.pathname.replace(/\/$/, '').split('/').filter(Boolean);
-  const [owner, name] = data.nameWithOwner.split('/');
-  if (segments.length !== 2 || segments[0].toLowerCase() !== owner.toLowerCase()
-      || segments[1].toLowerCase() !== name.toLowerCase()) return null;
-  return { nameWithOwner: data.nameWithOwner, origin: url.origin, path: `/${segments.join('/')}` };
-}
-
-function issueUrlBelongsTo(issue, repo) {
-  if (!issue || typeof issue.url !== 'string' || !Number.isInteger(issue.number) || issue.number <= 0) return false;
-  let url;
-  try {
-    url = new URL(issue.url);
-  } catch (_) {
-    return false;
-  }
-  return url.origin === repo.origin
-    && url.pathname.replace(/\/$/, '') === `${repo.path}/issues/${issue.number}`
-    && !url.search && !url.hash;
-}
-
-function labelsOf(issue) {
-  if (!Array.isArray(issue.labels)) return [];
-  return issue.labels.map((label) => typeof label === 'string' ? label : label && label.name).filter(Boolean);
-}
-
-function containsExactPath(text, expectedPath) {
-  const escapedPath = expectedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const boundary = new RegExp(`(?:^|[^A-Za-z0-9._/-])${escapedPath}(?=$|[^A-Za-z0-9._/-])`);
-  return boundary.test(text);
-}
-
-function hasPlanIdentity(issue, planId, specPath) {
-  const title = typeof issue.title === 'string' ? issue.title : '';
-  const token = new RegExp(`(^|[^a-z0-9-])${planId}($|[^a-z0-9-])`);
-  const titleMatch = token.test(title);
-  const body = typeof issue.body === 'string' ? issue.body : '';
-  const pathMatch = containsExactPath(body, specPath);
-  const embeddedPlanIds = [...body.matchAll(/docs\/pocket\/spec\/([a-z0-9]+(?:-[a-z0-9]+)*)\//g)]
-    .map((match) => match[1]);
-  const namedTitle = /^\s*Pocket Plan:\s*([a-z0-9]+(?:-[a-z0-9]+)*)\b/.exec(title);
-  const conflicting = (titleMatch && embeddedPlanIds.some((id) => id !== planId))
-    || (pathMatch && namedTitle && namedTitle[1] !== planId);
-  return { matches: titleMatch || pathMatch, titleMatch, pathMatch, conflicting: Boolean(conflicting) };
-}
+const { issueUrlBelongsTo } = require('./issue-identity');
 
 function specContext(event, projectRoot) {
   if (!PLAN_ID_PATTERN.test(event.plan_id)) return { error: 'plan_id is not a normalized kebab-slug' };
@@ -128,29 +75,10 @@ function parseCreatedIssueNumber(output, repo) {
   return issueUrlBelongsTo(candidate, repo) ? number : null;
 }
 
-function issueValidation(issue, event, spec, repo, expectedUrl = null) {
-  const identity = hasPlanIdentity(issue, event.plan_id, spec.specPath);
-  const repositoryMatches = !issue.repository || !issue.repository.nameWithOwner
-    || issue.repository.nameWithOwner.toLowerCase() === repo.nameWithOwner.toLowerCase();
-  if (identity.conflicting) return { ok: false, reason: 'title and embedded full-spec path identify different plans' };
-  if (!Number.isInteger(issue.number) || issue.number <= 0) return { ok: false, reason: 'issue number is invalid' };
-  if (String(issue.state).toUpperCase() !== 'OPEN') return { ok: false, reason: 'issue is not open' };
-  if (!labelsOf(issue).includes(ISSUE_LABEL)) return { ok: false, reason: 'issue is missing the pocket-plan label' };
-  if (!issueUrlBelongsTo(issue, repo) || !repositoryMatches) return { ok: false, reason: 'issue belongs to a different repository origin' };
-  if (expectedUrl && expectedUrl !== issue.url) return { ok: false, reason: 'metadata URL does not match the current-origin issue URL' };
-  if (!identity.matches) return { ok: false, reason: 'issue does not contain the exact normalized plan identity' };
-  return { ok: true, identity };
-}
-
 module.exports = {
   ISSUE_FIELDS,
   ISSUE_LABEL,
   flattenIssuePages,
-  hasPlanIdentity,
-  issueUrlBelongsTo,
-  issueValidation,
-  labelsOf,
   parseCreatedIssueNumber,
-  repoIdentity,
   specContext,
 };

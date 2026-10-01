@@ -6,7 +6,8 @@
 // contract before dispatch; this handler
 // checks only the fields needed to operate safely without importing Core.
 
-const { repoIdentity, specContext } = require('./issue-handler-identity');
+const { specContext } = require('./issue-handler-identity');
+const { repoIdentity } = require('./issue-identity');
 const { proveIssue, replayIssueProof, resultError } = require('./issue-handler-proof');
 const {
   issueView,

@@ -5,6 +5,7 @@
 const { createHash } = require('node:crypto');
 const github = require('./github');
 const { redactSecrets } = require('./retry');
+const { validateIssueOwnership, validateIssueReference } = require('./issue-identity');
 
 const PROOF_REF = 'meta:github_issue|marker:issue-tasklist';
 const ISSUE_REQUIRED = 'ISSUE_REQUIRED';
@@ -55,53 +56,6 @@ function ghJson(args, opts) {
   });
 }
 
-function repoName(repoData) {
-  const owner = repoData && repoData.owner;
-  const login = typeof owner === 'string' ? owner : (owner && (owner.login || owner.name));
-  const name = repoData && repoData.name;
-  return typeof login === 'string' && login.length && typeof name === 'string' && name.length
-    ? `${login}/${name}`
-    : null;
-}
-
-function issueUrlMatchesRepository(url, expectedRepo, issueNumber) {
-  if (typeof url !== 'string' || !url.length) return true;
-  try {
-    const parsed = new URL(url);
-    const parts = parsed.pathname.split('/').filter(Boolean);
-    return parsed.hostname.toLowerCase() === 'github.com'
-      && parts.length >= 4
-      && `${parts[0]}/${parts[1]}`.toLowerCase() === expectedRepo.toLowerCase()
-      && parts[2] === 'issues'
-      && Number(parts[3]) === issueNumber;
-  } catch {
-    return false;
-  }
-}
-
-function issueMatchesPlan(issue, planId) {
-  const escaped = planId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const titlePattern = new RegExp(`(^|[^a-z0-9-])${escaped}($|[^a-z0-9-])`, 'i');
-  const specPathPattern = new RegExp(`docs/pocket/spec/${escaped}(?:/|\\b)`, 'i');
-  return titlePattern.test(typeof issue.title === 'string' ? issue.title : '')
-    || specPathPattern.test(typeof issue.body === 'string' ? issue.body : '');
-}
-
-function issueOwnershipError(issue, expectedRepo, planId) {
-  const actualRepo = issue && issue.repository && issue.repository.full_name;
-  if (typeof actualRepo === 'string' && actualRepo.toLowerCase() !== expectedRepo.toLowerCase()) {
-    return 'ISSUE_OWNERSHIP_AMBIGUOUS';
-  }
-  const issueUrl = issue && (issue.html_url || issue.url);
-  if (issueUrl && !issueUrlMatchesRepository(issueUrl, expectedRepo, issue.number)) {
-    return 'ISSUE_OWNERSHIP_AMBIGUOUS';
-  }
-  if (!issueMatchesPlan(issue, planId)) return 'ISSUE_OWNERSHIP_AMBIGUOUS';
-  if (typeof issue.state !== 'string') return 'ISSUE_OWNERSHIP_AMBIGUOUS';
-  if (issue.state.toLowerCase() !== 'open') return 'ISSUE_CLOSED';
-  return null;
-}
-
 function selectIssue(event, metadata, repository, opts) {
   const identity = metadata.github_issue || {};
   const issueNumber = identity.number;
@@ -112,7 +66,7 @@ function selectIssue(event, metadata, repository, opts) {
         'No linked issue is recorded for this plan. Link an owned open issue before closure.', false),
     };
   }
-  if (!issueUrlMatchesRepository(identity.url, repository, issueNumber)) {
+  if (!validateIssueReference(identity, repository, issueNumber).ok) {
     return {
       ok: false,
       result: adapterResult(event.event_id, 'terminal', 'ISSUE_OWNERSHIP_AMBIGUOUS',
@@ -120,7 +74,7 @@ function selectIssue(event, metadata, repository, opts) {
     };
   }
 
-  const fetched = ghJson(['api', `repos/${repository}/issues/${issueNumber}`], opts);
+  const fetched = ghJson(['api', `repos/${repository.nameWithOwner}/issues/${issueNumber}`], opts);
   if (!fetched.ok) {
     if (isNotFound(fetched)) {
       return {
@@ -132,19 +86,17 @@ function selectIssue(event, metadata, repository, opts) {
     return { ok: false, result: fromTransport(event.event_id, fetched, 'ISSUE_LOOKUP_FAILED') };
   }
   const issue = fetched.data;
-  const ownershipError = issueOwnershipError(issue, repository, event.plan_id);
-  if (ownershipError) {
+  const ownership = validateIssueOwnership(issue, {
+    repo: repository,
+    planId: event.plan_id,
+    expectedUrl: identity.url,
+    expectedNumber: issueNumber,
+  });
+  if (!ownership.ok) {
     return {
       ok: false,
-      result: adapterResult(event.event_id, 'terminal', ownershipError,
+      result: adapterResult(event.event_id, 'terminal', ownership.code,
         'The linked issue is closed or its repository/plan ownership cannot be proved; manual resolution is required.', false),
-    };
-  }
-  if (issue.number !== issueNumber) {
-    return {
-      ok: false,
-      result: adapterResult(event.event_id, 'terminal', 'ISSUE_OWNERSHIP_AMBIGUOUS',
-        'The issue lookup did not match the recorded issue identity.', false),
     };
   }
   return { ok: true, issue };
@@ -158,8 +110,5 @@ module.exports = {
   withTasklistProof,
   fromTransport,
   ghJson,
-  repoName,
-  issueUrlMatchesRepository,
-  issueMatchesPlan,
   selectIssue,
 };

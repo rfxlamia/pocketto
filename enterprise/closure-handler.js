@@ -15,11 +15,10 @@ const {
   withTasklistProof,
   fromTransport,
   ghJson,
-  repoName,
-  issueMatchesPlan,
   selectIssue,
   sha256,
 } = require('./closure-prerequisites');
+const { repoIdentity } = require('./issue-identity');
 const { readPlan, proofState } = require('./closure-plan');
 const {
   flattenPages,
@@ -64,10 +63,10 @@ function loadClosureContext(event, opts, eventId, log) {
     };
   }
 
-  const currentRepo = ghJson(['repo', 'view', '--json', 'owner,name'], opts);
+  const currentRepo = ghJson(['repo', 'view', '--json', 'nameWithOwner,url'], opts);
   if (!currentRepo.ok) return { ok: false, result: fromTransport(eventId, currentRepo, 'REPOSITORY_LOOKUP_FAILED') };
-  const repository = repoName(currentRepo.data);
-  if (!repository) {
+  const repositoryIdentity = repoIdentity(currentRepo.data);
+  if (!repositoryIdentity) {
     return {
       ok: false,
       result: adapterResult(eventId, 'terminal', 'REPOSITORY_LOOKUP_FAILED',
@@ -75,9 +74,9 @@ function loadClosureContext(event, opts, eventId, log) {
     };
   }
 
-  const selected = selectIssue(event, metadata, repository, opts);
+  const selected = selectIssue(event, metadata, repositoryIdentity, opts);
   if (!selected.ok) return { ok: false, result: selected.result };
-  return { ok: true, metadata, repository, issue: selected.issue, log };
+  return { ok: true, metadata, repository: repositoryIdentity.nameWithOwner, issue: selected.issue, log };
 }
 
 function prepareClosure(event, opts, eventId) {
@@ -207,7 +206,6 @@ module.exports = {
   handlePlanClosed,
   selectTasklistComments,
   flattenPages,
-  issueMatchesPlan,
   hasCanonicalTasklistProof,
   evaluateClosureProof,
 };

@@ -2,7 +2,8 @@
 
 const crypto = require('node:crypto');
 const meta = require('./meta');
-const { issueValidation } = require('./issue-handler-identity');
+const { ISSUE_LABEL } = require('./issue-handler-identity');
+const { validateIssueOwnership } = require('./issue-identity');
 
 function resultError(event, code, message, retryable = false) {
   return {
@@ -98,7 +99,12 @@ function saveIssueProof(specDir, event, issue, repo, specPath, identity, clock) 
 }
 
 function proveIssue(event, issue, spec, repo, clock) {
-  const validation = issueValidation(issue, event, spec, repo);
+  const validation = validateIssueOwnership(issue, {
+    repo,
+    planId: event.plan_id,
+    specPath: spec.specPath,
+    requiredLabel: ISSUE_LABEL,
+  });
   if (!validation.ok) {
     return resultError(event, 'ISSUE_MANUAL_RESOLUTION', `Issue could not be safely reconciled: ${validation.reason}; resolve it manually.`);
   }

@@ -10,12 +10,9 @@ const {
   ISSUE_FIELDS,
   ISSUE_LABEL,
   flattenIssuePages,
-  hasPlanIdentity,
-  issueUrlBelongsTo,
-  issueValidation,
-  labelsOf,
   parseCreatedIssueNumber,
 } = require('./issue-handler-identity');
+const { validateIssueOwnership } = require('./issue-identity');
 
 function repoView(runner) {
   return github.runGh(['repo', 'view', '--json', 'nameWithOwner,url'], {
@@ -63,7 +60,7 @@ function writeIssue(event, runner, spec, repo) {
     return { issue: viewed.data, created: true };
   } finally {
     if (bodyFile) {
-      try { fs.rmSync(path.dirname(bodyFile), { recursive: true, force: true }); } catch (_) { /* best-effort temp cleanup */ }
+      try { fs.rmSync(path.dirname(bodyFile), { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
     }
   }
 }
@@ -106,7 +103,14 @@ function lookupMetadataIssue(event, spec, repo, runner) {
     }
     return { hasRecordedIdentity: true, error: mapGhFailure(event, 'Metadata issue validation', viewed) };
   }
-  const validation = issueValidation(viewed.data, event, spec, repo, recorded.url);
+  const validation = validateIssueOwnership(viewed.data, {
+    repo,
+    planId: event.plan_id,
+    specPath: spec.specPath,
+    expectedUrl: recorded.url,
+    expectedNumber: recorded.number,
+    requiredLabel: ISSUE_LABEL,
+  });
   return validation.ok
     ? { hasRecordedIdentity: true, issue: viewed.data }
     : { hasRecordedIdentity: true, invalidReason: validation.reason };
@@ -124,15 +128,17 @@ function searchExactIssues(event, spec, repo, runner) {
   }
   const matches = [];
   for (const issue of issues) {
-    const identity = hasPlanIdentity(issue, event.plan_id, spec.specPath);
-    if (identity.conflicting) {
+    const validation = validateIssueOwnership(issue, {
+      repo,
+      planId: event.plan_id,
+      specPath: spec.specPath,
+      requiredLabel: ISSUE_LABEL,
+    });
+    if (validation.identity.conflicting) {
       return { error: resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'An open pocket-plan issue has conflicting title/full-spec identity; resolve it manually.') };
     }
-    if (!identity.matches) continue;
-    const repositoryMatches = !issue.repository || !issue.repository.nameWithOwner
-      || issue.repository.nameWithOwner.toLowerCase() === repo.nameWithOwner.toLowerCase();
-    if (!labelsOf(issue).includes(ISSUE_LABEL) || String(issue.state).toUpperCase() !== 'OPEN'
-        || !issueUrlBelongsTo(issue, repo) || !repositoryMatches) {
+    if (!validation.identity.matches) continue;
+    if (!validation.ok) {
       return { error: resultError(event, 'ISSUE_MANUAL_RESOLUTION', 'An exact plan issue is closed, foreign, or otherwise conflicting; resolve ownership manually.') };
     }
     matches.push(issue);
