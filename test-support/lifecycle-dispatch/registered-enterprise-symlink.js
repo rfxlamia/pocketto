@@ -25,7 +25,7 @@ process.exit(91);
   return { binDir, callsPath };
 }
 
-function createSymlinkFixture(root) {
+function createProjectFixture(root) {
   const projectDir = path.join(root, 'project');
   const specDir = path.join(projectDir, 'docs', 'pocket', 'spec', PLAN_ID);
   const planDir = path.join(projectDir, 'docs', 'pocket', 'plans', PLAN_ID);
@@ -35,10 +35,13 @@ function createSymlinkFixture(root) {
   mkdirSync(planDir, { recursive: true });
   mkdirSync(pocketDir, { recursive: true });
   writeFileSync(path.join(planDir, PHASE_PATH), phaseContent);
+  return { projectDir, specDir, planDir, pocketDir, phaseContent };
+}
 
+function seedProjectLifecycle(project) {
   const seeded = seedLifecycleEvent({
-    specDir,
-    planDir,
+    specDir: project.specDir,
+    planDir: project.planDir,
     planId: PLAN_ID,
     type: 'phase-complete',
     branch: 'feature/symlink-boundary',
@@ -46,11 +49,11 @@ function createSymlinkFixture(root) {
       root: 'plan',
       kind: 'phase-evidence',
       path: PHASE_PATH,
-      sha256: sha256Hex(phaseContent),
+      sha256: sha256Hex(project.phaseContent),
       revision: 1,
     }],
   });
-  const lifecyclePath = require('../../cli/lib/lifecycle-store').lifecyclePathFor(specDir);
+  const lifecyclePath = require('../../cli/lib/lifecycle-store').lifecyclePathFor(project.specDir);
   const lifecycleBefore = parseJson(readFileSync(lifecyclePath, 'utf8'), 'seeded lifecycle state');
   const eventId = seeded.event.event_id;
   assert.equal(lifecycleBefore.plan.revision, 1, 'fixture must start with one committed lifecycle revision');
@@ -58,7 +61,10 @@ function createSymlinkFixture(root) {
   assert.equal(lifecycleBefore.events[0].type, 'phase-complete');
   assert.equal(lifecycleBefore.events[0].event_id, eventId);
   assert.equal(lifecycleBefore.events[0].delivery.status, 'pending');
+  return { seeded, lifecyclePath, lifecycleBefore, eventId };
+}
 
+function createExternalPlanFixture(root, phaseContent, seededEvent) {
   const externalPlanDir = path.join(root, 'external-plan');
   const externalPhasePath = path.join(externalPlanDir, PHASE_PATH);
   const externalLogPath = path.join(externalPlanDir, 'log.json');
@@ -69,32 +75,46 @@ function createSymlinkFixture(root) {
   mkdirSync(externalPlanDir, { recursive: true });
   writeFileSync(externalPhasePath, externalPhaseBytes);
   writeFileSync(externalLogPath, externalLogBytes);
-  assert.equal(sha256Hex(externalPhaseBytes), seeded.event.artifact_refs[0].sha256,
+  assert.equal(sha256Hex(externalPhaseBytes), seededEvent.artifact_refs[0].sha256,
     'external phase sentinel must otherwise match the committed evidence');
-
-  rmSync(planDir, { recursive: true, force: true });
-  symlinkSync(externalPlanDir, planDir, 'dir');
-
-  const registration = {
-    schema: 1,
-    adapter_contract: 1,
-    argv: [process.execPath, ENTERPRISE_DISPATCH, projectDir],
-    events: ['phase-complete'],
-    timeout_ms: 30_000,
-  };
-  writeFileSync(path.join(pocketDir, 'lifecycle-adapter.json'), `${JSON.stringify(registration, null, 2)}\n`);
-
   return {
-    projectDir,
-    specDir,
-    planDir,
+    externalPlanDir,
     externalPhasePath,
     externalLogPath,
     externalPhaseBytes,
     externalLogBytes,
-    lifecyclePath,
-    lifecycleBefore,
-    eventId,
+  };
+}
+
+function registerEnterpriseDispatcher(project) {
+  const registration = {
+    schema: 1,
+    adapter_contract: 1,
+    argv: [process.execPath, ENTERPRISE_DISPATCH, project.projectDir],
+    events: ['phase-complete'],
+    timeout_ms: 30_000,
+  };
+  writeFileSync(path.join(project.pocketDir, 'lifecycle-adapter.json'), `${JSON.stringify(registration, null, 2)}\n`);
+}
+
+function createSymlinkFixture(root) {
+  const project = createProjectFixture(root);
+  const lifecycle = seedProjectLifecycle(project);
+  const external = createExternalPlanFixture(root, project.phaseContent, lifecycle.seeded.event);
+  rmSync(project.planDir, { recursive: true, force: true });
+  symlinkSync(external.externalPlanDir, project.planDir, 'dir');
+  registerEnterpriseDispatcher(project);
+  return {
+    projectDir: project.projectDir,
+    specDir: project.specDir,
+    planDir: project.planDir,
+    externalPhasePath: external.externalPhasePath,
+    externalLogPath: external.externalLogPath,
+    externalPhaseBytes: external.externalPhaseBytes,
+    externalLogBytes: external.externalLogBytes,
+    lifecyclePath: lifecycle.lifecyclePath,
+    lifecycleBefore: lifecycle.lifecycleBefore,
+    eventId: lifecycle.eventId,
   };
 }
 
