@@ -10,6 +10,83 @@ const { FIXED_CLOCK, OWNER, PR_NUMBER, REPOSITORY, createFixture } = require('./
 const { allComments, allThreads, fakeGh, makePr } = require('./remote');
 const { addPhaseMarker, isRemoteMutation, loadPhaseHandler } = require('./test-utils');
 
+test('P2-5: phase-complete rejects conflicting issue identity before mutation', (t) => {
+  const fixture = createFixture(t);
+  fixture.remote.issue.title = `[pocket-plan] ${fixture.event.plan_id}`;
+  fixture.remote.issue.body = 'Full spec: docs/pocket/spec/another-approved-plan/core.md';
+  const beforeComments = JSON.stringify(allComments(fixture.remote));
+  const beforeThreads = JSON.stringify(allThreads(fixture.remote));
+  const beforeMetadata = addMetadataSentinel(fixture);
+  const handler = loadPhaseHandler();
+
+  const response = handler.handlePhaseComplete(fixture.event, handlerOptions(fixture));
+
+  assertIssueOwnershipRejected(response);
+  assertNoIssueOwnershipMutation(fixture, beforeMetadata, beforeComments, beforeThreads);
+});
+
+test('P2-5: phase-complete rejects incomplete or mismatched issue URL proof', async (t) => {
+  const cases = [
+    ['incomplete metadata URL', (fixture) => {
+      const meta = enterpriseMeta.readMetaFor(fixture.specDir);
+      delete meta.github_issue.url;
+      enterpriseMeta.writeMetaFor(fixture.specDir, meta);
+    }],
+    ['candidate URL disagrees with recorded issue number', (fixture) => {
+      fixture.remote.issue.url = `https://github.com/${OWNER}/${REPOSITORY}/issues/${fixture.remote.issue.number + 1}`;
+    }],
+  ];
+
+  for (const [name, invalidate] of cases) {
+    await t.test(name, (t) => {
+      const fixture = createFixture(t);
+      invalidate(fixture);
+      const beforeComments = JSON.stringify(allComments(fixture.remote));
+      const beforeThreads = JSON.stringify(allThreads(fixture.remote));
+      const beforeMetadata = addMetadataSentinel(fixture);
+      const handler = loadPhaseHandler();
+
+      const response = handler.handlePhaseComplete(fixture.event, handlerOptions(fixture));
+
+      assertIssueOwnershipRejected(response);
+      assertNoIssueOwnershipMutation(fixture, beforeMetadata, beforeComments, beforeThreads);
+    });
+  }
+});
+
+function addMetadataSentinel(fixture) {
+  const metaPath = path.join(fixture.specDir, '.pocket-meta.json');
+  const meta = enterpriseMeta.readMetaFor(fixture.specDir);
+  meta.p2_5_sentinel = 'preserve-byte-sequence: pocketto-phase-ownership';
+  enterpriseMeta.writeMetaFor(fixture.specDir, meta);
+  return fs.readFileSync(metaPath, 'utf8');
+}
+
+function assertIssueOwnershipRejected(response) {
+  assert.ok(response.error && /ISSUE|OWNERSHIP|MANUAL/.test(response.error.code),
+    `phase-complete should reject unproven issue identity, got ${JSON.stringify(response)}`);
+}
+
+function assertNoIssueOwnershipMutation(fixture, beforeMetadata, beforeComments, beforeThreads) {
+  assert.equal(fixture.remote.calls.filter(isRemoteMutation).length, 0, 'unproven issue ownership must not mutate GitHub');
+  assert.equal(fixture.remote.calls.some((args) => args[0] === 'issue' && args[1] === 'create'), false,
+    'phase-complete must not create an issue');
+  assert.equal(fixture.remote.calls.some((args) => args[0] === 'pr' && args[1] === 'create'), false,
+    'phase-complete must not create a PR');
+  assert.equal(JSON.stringify(allComments(fixture.remote)), beforeComments, 'PR comments must remain byte-for-byte unchanged');
+  assert.equal(JSON.stringify(allThreads(fixture.remote)), beforeThreads, 'review threads must remain unchanged');
+  assert.equal(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json'), 'utf8'), beforeMetadata,
+    'metadata sentinel bytes must remain unchanged');
+}
+
+function handlerOptions(fixture) {
+  return {
+    projectRoot: fixture.root,
+    ghRunner: fakeGh(fixture.remote),
+    now: () => new Date(FIXED_CLOCK),
+  };
+}
+
 // RED cycle 3
 // Test file: `test/enterprise-phase.test.js`
 // Level: integration
@@ -129,12 +206,4 @@ function assertAmbiguousSearchDoesNotMutate(t, name, prs) {
   assert.equal(fs.readFileSync(metaPath, 'utf8'), beforeMeta, 'failed lookup must not write metadata proof');
   assert.equal(JSON.stringify(fixture.event), beforeEvent, 'failed lookup must preserve the event for retry/manual action');
   assert.equal(JSON.stringify(prs.map((pr) => allComments(fixture.remote, pr.number))), beforeComments);
-}
-
-function handlerOptions(fixture) {
-  return {
-    projectRoot: fixture.root,
-    ghRunner: fakeGh(fixture.remote),
-    now: () => new Date(FIXED_CLOCK),
-  };
 }

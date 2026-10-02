@@ -2,6 +2,8 @@
 
 const { runJson, listComments } = require('./phase-handler-github');
 const enterpriseMeta = require('./meta');
+const { ISSUE_LABEL } = require('./issue-handler-identity');
+const { repoIdentity, validateIssueOwnership, validateIssueReference } = require('./issue-identity');
 const { PhaseHandlerError, safeMessage } = require('./phase-handler-errors');
 
 function resolveRepository(options) {
@@ -11,35 +13,67 @@ function resolveRepository(options) {
   if (typeof owner !== 'string' || owner.length === 0 || typeof name !== 'string' || name.length === 0) {
     throw new PhaseHandlerError('ORIGIN_UNPROVEN', 'The current origin repository could not be proven.');
   }
-  return { owner, name, nameWithOwner: `${owner}/${name}`, url: data.url || null };
+  const nameWithOwner = `${owner}/${name}`;
+  const identity = repoIdentity({ nameWithOwner, url: data.url });
+  if (!identity) {
+    throw new PhaseHandlerError('ORIGIN_UNPROVEN', 'The current origin repository could not be proven.');
+  }
+  return { owner, name, nameWithOwner, url: data.url, identity };
 }
 
 function resolveOwnedIssue(event, context, repo, options) {
   const stored = enterpriseMeta.getIssueIdentity(context.specDir);
-  let invalidStored = false;
-  if (Number.isInteger(stored.number) && stored.number > 0) {
-    if (stored.url && !sameRepository(stored.url, repo)) {
-      invalidStored = true;
-    } else {
-      try {
-        const issue = runJson(['issue', 'view', String(stored.number), '--repo', repo.nameWithOwner,
-          '--json', 'number,url,state,title,body'], options);
-        if (isOwnedOpenIssue(issue, event.plan_id, repo)) return issue;
-        invalidStored = true;
-      } catch (_) {
-        invalidStored = true;
-      }
-    }
-  }
+  const recorded = validateRecordedIssue(stored, event, repo, options);
+  if (recorded.issue) return recorded.issue;
 
-  const matches = runJson(['issue', 'list', '--repo', repo.nameWithOwner, '--state', 'open', '--label', 'pocket-plan',
-    '--search', event.plan_id, '--json', 'number,url,state,title,body'], options);
+  const matches = runJson(['issue', 'list', '--repo', repo.nameWithOwner, '--state', 'open', '--label', ISSUE_LABEL,
+    '--search', event.plan_id, '--json', 'number,url,state,title,body,labels'], options);
   if (!Array.isArray(matches)) {
     throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'Issue search response must be an array.', { status: 'retryable', retryable: true });
   }
-  const exact = matches.filter((candidate) => hasExactPlanIdentity(candidate, event.plan_id));
-  const owned = exact.filter((candidate) => isOwnedOpenIssue(candidate, event.plan_id, repo));
-  if (exact.length === 1 && owned.length === 1) return owned[0];
+  return resolveSearchedIssue(matches, event, repo, recorded.invalid);
+}
+
+function validateRecordedIssue(stored, event, repo, options) {
+  const hasStoredIdentity = (Number.isInteger(stored.number) && stored.number > 0)
+    || (typeof stored.url === 'string' && stored.url.length > 0);
+  if (!hasStoredIdentity) return { issue: null, invalid: false };
+
+  const reference = validateIssueReference(stored, repo.identity,
+    Number.isInteger(stored.number) && stored.number > 0 ? stored.number : null);
+  if (!reference.ok) return { issue: null, invalid: true };
+
+  try {
+    const issue = runJson(['issue', 'view', String(stored.number), '--repo', repo.nameWithOwner,
+      '--json', 'number,url,state,title,body,labels'], options);
+    const ownership = validateIssueOwnership(issue, {
+      repo: repo.identity,
+      planId: event.plan_id,
+      expectedUrl: stored.url,
+      expectedNumber: stored.number,
+      requiredLabel: ISSUE_LABEL,
+    });
+    return ownership.ok ? { issue, invalid: false } : { issue: null, invalid: true };
+  } catch {
+    return { issue: null, invalid: true };
+  }
+}
+
+function resolveSearchedIssue(matches, event, repo, invalidStored) {
+  const evaluated = matches.map((candidate) => ({
+    candidate,
+    ownership: validateIssueOwnership(candidate, {
+      repo: repo.identity,
+      planId: event.plan_id,
+      requiredLabel: ISSUE_LABEL,
+    }),
+  }));
+  if (evaluated.some(({ ownership }) => ownership.identity.conflicting)) {
+    throw new PhaseHandlerError('ISSUE_OWNERSHIP_UNPROVEN', 'Issue search found conflicting title and full-spec-path plan identities.');
+  }
+  const exact = evaluated.filter(({ ownership }) => ownership.identity.matches);
+  const owned = exact.filter(({ ownership }) => ownership.ok);
+  if (exact.length === 1 && owned.length === 1) return owned[0].candidate;
   if (exact.length > 1 || (exact.length === 1 && owned.length === 0)) {
     throw new PhaseHandlerError('ISSUE_OWNERSHIP_UNPROVEN', 'Issue search found an ambiguous, foreign, closed, or mismatched plan issue.');
   }
@@ -50,23 +84,6 @@ function resolveOwnedIssue(event, context, repo, options) {
     status: 'retryable',
     retryable: true,
   });
-}
-
-function isOwnedOpenIssue(issue, planId, repo) {
-  return issue
-    && Number.isInteger(issue.number)
-    && issue.number > 0
-    && sameRepository(issue.url, repo)
-    && String(issue.state).toUpperCase() === 'OPEN'
-    && hasExactPlanIdentity(issue, planId);
-}
-
-function hasExactPlanIdentity(issue, planId) {
-  if (!issue || typeof planId !== 'string') return false;
-  const titleTokens = String(issue.title || '').toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/g) || [];
-  if (titleTokens.includes(planId)) return true;
-  const body = typeof issue.body === 'string' ? issue.body.replace(/\\/g, '/') : '';
-  return new RegExp(`(?:^|/)docs/pocket/spec/${planId}(?:/|$)`, 'i').test(body);
 }
 
 function resolvePhasePr(context, phase, repo, options) {
@@ -84,7 +101,7 @@ function resolveMetadataPr(stored, context, phase, repo, options) {
     return validOpenPr(pr, context.branch, repo) && hasPhaseIdentity(comments, phase.number, true)
       ? { pr, comments }
       : null;
-  } catch (_) {
+  } catch {
     // Invalid or stale metadata is only a hint; exact branch/phase search follows.
     return null;
   }
@@ -109,7 +126,7 @@ function searchCandidate(candidate, context, phase, repo, options) {
   let pr;
   try {
     pr = loadPrView(candidate.number, repo, options);
-  } catch (_) {
+  } catch {
     return null;
   }
   if (!validOpenPr(pr, context.branch, repo)) return null;
@@ -148,7 +165,7 @@ function sameRepository(url, repo) {
   let parsed;
   try {
     parsed = new URL(url);
-  } catch (_) {
+  } catch {
     return false;
   }
   const parts = parsed.pathname.replace(/\.git\/?$/, '').split('/').filter(Boolean);

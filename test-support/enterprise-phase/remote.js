@@ -29,7 +29,12 @@ function routeCommand(context) {
 
 function routeRepository({ args, remote, json }) {
   if (args[0] !== 'repo' || args[1] !== 'view') return null;
-  return json({ owner: { login: remote.owner }, name: remote.repository, nameWithOwner: `${remote.owner}/${remote.repository}` });
+  return json({
+    owner: { login: remote.owner },
+    name: remote.repository,
+    nameWithOwner: `${remote.owner}/${remote.repository}`,
+    url: `https://github.com/${remote.owner}/${remote.repository}`,
+  });
 }
 
 function routeIssue({ args, remote, json, failure }) {

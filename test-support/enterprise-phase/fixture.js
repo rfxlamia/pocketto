@@ -122,6 +122,7 @@ function createRemoteFixture(planId) {
       state: 'OPEN',
       title: `[pocket-plan] ${planId}`,
       body: `Plan identity: docs/pocket/spec/${planId}/core.md`,
+      labels: [{ name: 'pocket-plan' }],
     },
     prs: [makePr(PR_NUMBER, planId)],
     issueSearch: [],
