@@ -29,6 +29,9 @@ const {
   upsertTasklist,
 } = require('./closure-tasklist');
 
+const RECONCILABLE_DELIVERY_STATUSES = new Set(['pending', 'retryable', 'reconciling']);
+const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
+
 function validateEventAndPaths(event, opts, eventId) {
   const validation = validateEvent(event);
   if (!validation.ok || event.type !== 'plan-closed') {
@@ -207,12 +210,15 @@ function reconcileExistingProof(eventId, context, listed, tasklist, closeout, op
 function createProofRecord(event, context, comment, tasklist) {
   return {
     event_id: event.event_id,
+    plan_id: event.plan_id,
     revision: event.revision,
+    issue_number: context.issue.number,
+    issue_url: context.issue.html_url || context.issue.url || context.metadata.github_issue.url,
     marker: TASKLIST_MARKER,
     comment_id: comment.id,
     body_sha256: sha256(tasklist),
     final_state: proofState(context.log),
-    artifact_refs: event.artifact_refs.map((ref) => ({ ...ref })),
+    artifact_refs: canonicalArtifactRefs(event),
     proof_ref: PROOF_REF,
   };
 }
@@ -260,8 +266,71 @@ function persistClosureProof(eventId, event, context, comment, tasklist, closeou
   return { event_id: eventId, status: 'succeeded', proof_ref: PROOF_REF, proof_hash: proofHash };
 }
 
+function canonicalArtifactRefs(event) {
+  return event.artifact_refs.map((ref) => ({
+    root: ref.root,
+    kind: ref.kind,
+    path: ref.path,
+    sha256: ref.sha256,
+    revision: ref.revision,
+  }));
+}
+
+function replayClosureProof(event, opts, eventId) {
+  const delivery = event.delivery || {};
+  let metadata;
+  try {
+    metadata = enterpriseMeta.readMetaFor(opts.specDir);
+  } catch {
+    return adapterResult(eventId, 'terminal', 'CLOSEOUT_PROOF_MISMATCH',
+      'Succeeded event has no readable persisted tasklist proof; resolve metadata manually before replay.', false);
+  }
+  const issue = metadata.github_issue || {};
+  const record = issue.tasklist;
+  if (!record || typeof record !== 'object' || Array.isArray(record)
+      || record.event_id !== event.event_id
+      || record.plan_id !== event.plan_id
+      || record.revision !== event.revision
+      || !Number.isInteger(record.issue_number) || record.issue_number <= 0
+      || record.issue_number !== issue.number
+      || typeof record.issue_url !== 'string' || record.issue_url.length === 0
+      || record.issue_url !== issue.url
+      || record.marker !== TASKLIST_MARKER
+      || !Number.isInteger(record.comment_id) || record.comment_id <= 0
+      || typeof record.body_sha256 !== 'string' || !PROOF_HASH_PATTERN.test(record.body_sha256)
+      || !record.final_state || typeof record.final_state !== 'object' || Array.isArray(record.final_state)
+      || JSON.stringify(record.artifact_refs) !== JSON.stringify(canonicalArtifactRefs(event))
+      || record.proof_ref !== PROOF_REF
+      || delivery.proof_ref !== PROOF_REF
+      || typeof record.proof_hash !== 'string' || !PROOF_HASH_PATTERN.test(record.proof_hash)
+      || typeof delivery.proof_hash !== 'string' || !PROOF_HASH_PATTERN.test(delivery.proof_hash)) {
+    return adapterResult(eventId, 'terminal', 'CLOSEOUT_PROOF_MISMATCH',
+      'Succeeded event has no matching event-bound persisted tasklist proof; resolve metadata manually before replay.', false);
+  }
+
+  const { proof_hash: persistedHash, ...proofRecord } = record;
+  const expectedHash = sha256(JSON.stringify(proofRecord));
+  if (persistedHash !== expectedHash || delivery.proof_hash !== expectedHash) {
+    return adapterResult(eventId, 'terminal', 'CLOSEOUT_PROOF_MISMATCH',
+      'Succeeded event tasklist proof does not match persisted metadata; resolve metadata manually before replay.', false);
+  }
+  return {
+    event_id: eventId,
+    status: 'succeeded',
+    proof_ref: delivery.proof_ref,
+    proof_hash: delivery.proof_hash,
+  };
+}
+
 function handlePlanClosed(event, opts = {}) {
   const eventId = event && typeof event.event_id === 'string' ? event.event_id : 'unknown-event';
+  const invalid = validateEventAndPaths(event, opts, eventId);
+  if (invalid) return invalid;
+  if (event.delivery.status === 'succeeded') return replayClosureProof(event, opts, eventId);
+  if (!RECONCILABLE_DELIVERY_STATUSES.has(event.delivery.status)) {
+    return adapterResult(eventId, 'terminal', 'CLOSEOUT_DELIVERY_INELIGIBLE',
+      'Only pending, retryable, or reconciling closure events may enter remote reconciliation.', false);
+  }
   const context = prepareClosure(event, opts, eventId);
   if (!context.ok) return context.result;
   const tasklist = tasklistBody(context.log);

@@ -36,13 +36,18 @@ function computeProofHash({ event, issue, repository, specPath, identity }) {
 }
 
 function replayIssueProof(event, spec) {
-  if (event.delivery.status !== 'succeeded') return null;
-  const recorded = meta.readMetaFor(spec.specDir).github_issue || {};
+  const delivery = event.delivery;
+  let recorded;
+  try {
+    recorded = meta.readMetaFor(spec.specDir).github_issue || {};
+  } catch {
+    return resultError(event, 'ISSUE_PROOF_MISMATCH', 'Succeeded event has no readable persisted issue ownership proof; resolve metadata manually before replay.');
+  }
   const ownership = recorded.ownership || {};
   const identity = ownership.identity;
   const validIdentity = ['title', 'full-spec-path', 'title+full-spec-path'].includes(identity);
-  if (event.proof_ref !== meta.issueProofRef()
-      || typeof event.proof_hash !== 'string'
+  if (delivery.proof_ref !== meta.issueProofRef()
+      || typeof delivery.proof_hash !== 'string'
       || ownership.event_id !== event.event_id
       || ownership.plan_id !== event.plan_id
       || ownership.spec_path !== spec.specPath
@@ -59,10 +64,15 @@ function replayIssueProof(event, spec) {
     specPath: ownership.spec_path,
     identity,
   });
-  if (expectedHash !== ownership.proof_hash || event.proof_hash !== expectedHash) {
+  if (expectedHash !== ownership.proof_hash || delivery.proof_hash !== expectedHash) {
     return resultError(event, 'ISSUE_PROOF_MISMATCH', 'Succeeded event issue proof does not match persisted metadata; resolve metadata manually before replay.');
   }
-  return resultSucceeded(event, event.proof_hash);
+  return {
+    event_id: event.event_id,
+    status: 'succeeded',
+    proof_ref: delivery.proof_ref,
+    proof_hash: delivery.proof_hash,
+  };
 }
 
 function saveIssueProof(specDir, event, issue, repo, specPath, identity, clock) {

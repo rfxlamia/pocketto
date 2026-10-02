@@ -7,3 +7,4 @@ require('../test-support/enterprise-closeout/cycle-1-ledger-replay');
 require('../test-support/enterprise-closeout/cycle-2-replay');
 require('../test-support/enterprise-closeout/cycle-3-ownership');
 require('../test-support/enterprise-closeout/cycle-4-proof');
+require('../test-support/enterprise-closeout/cycle-5-succeeded-replay');

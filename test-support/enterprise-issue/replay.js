@@ -15,8 +15,76 @@ const {
   runHandler,
 } = require('./fixtures');
 
-// T8 Cycle 4: successful replay returns persisted issue proof with no mutation.
-test('CYCLE 4: succeeded adapter replay returns persisted proof without GitHub or metadata mutation', () => {
+// T8 Cycle 4: successful replay returns Core's persisted delivery proof without mutation.
+test('CYCLE 4: succeeded adapter replay returns nested delivery proof without GitHub or metadata mutation', () => {
+  const { fixture, handler, first, metadataPath } = createSucceededFixture();
+  const succeededEvent = {
+    ...fixture.event,
+    delivery: {
+      status: 'succeeded',
+      attempts: 1,
+      proof_ref: first.proof_ref,
+      proof_hash: first.proof_hash,
+    },
+  };
+  const before = fs.readFileSync(metadataPath, 'utf8');
+  const replayCalls = [];
+  const replay = dispatchReplay(handler, fixture, succeededEvent, replayCalls);
+
+  assert.equal(replay.status, 'succeeded');
+  assert.equal(replay.event_id, EVENT_ID);
+  assert.equal(replay.proof_ref, succeededEvent.delivery.proof_ref);
+  assert.equal(replay.proof_hash, succeededEvent.delivery.proof_hash);
+  assert.deepEqual(replayCalls, [], 'persisted delivery proof must be resolved before any GitHub transport call');
+  assert.equal(fs.readFileSync(metadataPath, 'utf8'), before,
+    'replay must leave metadata bytes unchanged');
+});
+
+test('CYCLE 4: succeeded replay fails closed on missing or mismatched nested proof without fallback', async (t) => {
+  for (const scenario of ['missing', 'mismatched']) {
+    await t.test(`${scenario} delivery proof is terminal and read-only`, () => {
+      const { fixture, handler, first, metadataPath } = createSucceededFixture();
+      const delivery = { status: 'succeeded', attempts: 1 };
+      if (scenario === 'mismatched') {
+        delivery.proof_ref = first.proof_ref;
+        delivery.proof_hash = '0'.repeat(64);
+      }
+      const succeededEvent = {
+        ...fixture.event,
+        proof_ref: first.proof_ref,
+        proof_hash: first.proof_hash,
+        delivery,
+      };
+      const before = fs.readFileSync(metadataPath, 'utf8');
+      const replayCalls = [];
+      const replay = dispatchReplay(handler, fixture, succeededEvent, replayCalls);
+
+      assert.equal(replay.status, 'terminal', JSON.stringify(replay));
+      assert.equal(replay.error.code, 'ISSUE_PROOF_MISMATCH');
+      assert.deepEqual(replayCalls, [], 'bad succeeded proof must not fall through to GitHub reconciliation');
+      assert.equal(fs.readFileSync(metadataPath, 'utf8'), before,
+        'bad succeeded proof must leave metadata bytes unchanged');
+    });
+  }
+});
+
+test('CYCLE 4: ineligible claimed delivery cannot enter issue reconciliation', () => {
+  const { fixture, handler, metadataPath } = createSucceededFixture();
+  const claimedEvent = {
+    ...fixture.event,
+    delivery: { status: 'claimed', attempts: 1 },
+  };
+  const before = fs.readFileSync(metadataPath, 'utf8');
+  const replayCalls = [];
+  const replay = dispatchReplay(handler, fixture, claimedEvent, replayCalls);
+
+  assert.equal(replay.status, 'terminal', JSON.stringify(replay));
+  assert.equal(replay.error.code, 'ISSUE_DELIVERY_INELIGIBLE');
+  assert.deepEqual(replayCalls, [], 'claimed events are not a remote-write path');
+  assert.equal(fs.readFileSync(metadataPath, 'utf8'), before);
+});
+
+function createSucceededFixture() {
   const fixture = makeProject();
   const handler = loadIssueHandler();
   assert.ok(handler && typeof handler.handleSpecApproved === 'function', 'issue handler must be available');
@@ -27,33 +95,25 @@ test('CYCLE 4: succeeded adapter replay returns persisted proof without GitHub o
     argv: [process.execPath, 'unused-adapter.js'],
   });
   assert.equal(registered.ok, true, 'adapter dispatch fixture must be registered');
-  const succeededEvent = {
-    ...fixture.event,
-    proof_ref: first.proof_ref,
-    proof_hash: first.proof_hash,
-    delivery: { status: 'succeeded', attempts: 1 },
+  return {
+    fixture,
+    handler,
+    first,
+    metadataPath: enterpriseMeta.resolveMetaPath(fixture.specDir),
   };
-  const metadataPath = enterpriseMeta.resolveMetaPath(fixture.specDir);
-  const before = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-  const replayCalls = [];
-  const replay = enterpriseAdapter.dispatchEvent(succeededEvent, {
+}
+
+function dispatchReplay(handler, fixture, event, replayCalls) {
+  return enterpriseAdapter.dispatchEvent(event, {
     projectRoot: fixture.projectRoot,
     coreContract: 3,
-    handlers: { 'spec-approved': (event, context) => handler.handleSpecApproved(event, {
+    handlers: { 'spec-approved': (candidate, context) => handler.handleSpecApproved(candidate, {
       ...context,
       clock: () => new Date(FIXED_TIME),
     }) },
     ghRunner: (args) => {
       replayCalls.push(args.slice());
-      return { exit: 1, stdout: '', stderr: 'replay must use persisted issue proof' };
+      return { exit: 1, stdout: '', stderr: 'replay must use validated delivery proof' };
     },
   });
-
-  assert.equal(replay.status, 'succeeded');
-  assert.equal(replay.event_id, EVENT_ID);
-  assert.equal(replay.proof_ref, first.proof_ref);
-  assert.equal(replay.proof_hash, first.proof_hash);
-  assert.deepEqual(replayCalls, [], 'persisted proof must be resolved before any GitHub transport call');
-  assert.deepEqual(JSON.parse(fs.readFileSync(metadataPath, 'utf8')), before,
-    'replay must leave real metadata semantically unchanged');
-});
+}

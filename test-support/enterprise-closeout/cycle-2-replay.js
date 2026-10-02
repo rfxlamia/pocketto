@@ -3,7 +3,7 @@
 // T10 RED cycle 2
 // Test file: test/enterprise-closeout.test.js
 // Level: integration
-// Test intent: Given a tasklist marker was updated before a local ledger timeout, When the same event is drained, Then the handler finds and updates the existing marker without duplication and returns the existing proof.
+// Test intent: Given a tasklist marker was updated before a local ledger timeout, When the same event is replayed with delivery.status `reconciling`, Then the handler repairs the local proof through the existing marker without duplication; this is not succeeded-event replay.
 // Exercise through: closure handler replay with fake paginated issue comments and persisted metadata.
 // Test doubles: fake GitHub transport and ledger writer failure; no live GitHub.
 // Expected RED: no canonical closure marker replay or reconciling path exists.
@@ -39,6 +39,12 @@ test('CYCLE 2: paginated marker replay returns proof after a local ledger timeou
   assert.equal(first.proof_ref, 'meta:github_issue|marker:issue-tasklist');
   assert.match(first.proof_hash, /^[0-9a-f]{64}$/, 'remote success must retain its proof across the local timeout');
   failLedgerWrite = false;
+  event.delivery = {
+    status: 'reconciling',
+    attempts: 2,
+    proof_ref: first.proof_ref,
+    proof_hash: first.proof_hash,
+  };
   const replay = await handlePlanClosed(event, {
     specDir: fixture.specDir,
     planDir: fixture.planDir,

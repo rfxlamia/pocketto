@@ -970,12 +970,12 @@ Steps:
 10. Write failing test for: issue replay returns existing proof without duplicate creation.
    Test file: `test/enterprise-issue.test.js`
    Level: integration
-   Test intent: Given a succeeded event ID and recorded issue proof, When the same event is replayed, Then the handler returns the existing proof, performs no create/update, and leaves `.pocket-meta.json` semantically unchanged.
+   Test intent: Given a Core-succeeded event and event-bound issue ownership proof, When the same event is replayed, Then the handler validates `event.delivery.proof_ref` and `event.delivery.proof_hash` against persisted ownership metadata and returns those exact proof values with zero GitHub calls and byte-identical `.pocket-meta.json`; missing or mismatched nested proof is terminal before GitHub or metadata mutation, with no fallback to top-level event proof fields.
    Exercise through: adapter dispatch to the issue handler with persisted event/metadata fixtures.
    Test doubles: recording fake GitHub transport; real metadata files.
    Expected RED: no durable issue proof or idempotent replay path exists.
 11. Run test — verify FAIL: `node --test test/enterprise-issue.test.js`
-12. Implement proof-first replay and idempotent metadata writes, verify PASS, refactor while green, and commit: `fix(enterprise): make issue reconciliation replay-safe`.
+12. Implement a succeeded-only, read-only replay guard that validates Core's nested `event.delivery.proof_ref/hash`, recomputes the issue proof hash, verifies `ownership.event_id`, and fails closed without top-level fallback; keep pending/retryable/reconciling reconciliation unchanged. Verify PASS and commit: `fix(enterprise): make issue reconciliation replay-safe`.
 
 ## REFERENCES LOADED
 - `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md` — issue reconciliation algorithm, proof requirements, and `ISSUE_REQUIRED` behavior.
@@ -989,7 +989,7 @@ Complexity: standard
 Justification: Issue creation is a single remote mapping but has high ownership risk. Isolating it lets the handler prove exact identity, cardinality, repository, state, and replay behavior without coupling to PR or closure logic.
 
 ## SANDWICH CONTEXT
-[CRITICAL: Never mutate an ambiguous, foreign, closed, or manually conflicting issue; only the current origin repository and exact normalized plan identity are owned targets.]
+[CRITICAL: A succeeded event is read-only: validate proof from Core's nested `event.delivery.proof_ref/hash`, return it unchanged if event-bound and valid, and fail closed before GitHub/local writes if missing or mismatched. Never fall back to top-level proof fields.]
 You are implementing the Enterprise handler for `spec-approved`.
 Spec: `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md`
 Files in scope: `enterprise/issue-handler.js` and `test/enterprise-issue.test.js`; import the read-only shared seams from T7 without modifying them.
@@ -1000,7 +1000,7 @@ Architecture rule: metadata-first lookup, exact identity search, one owned open 
 Given no owned issue and zero exact matches, When `spec-approved` is processed, Then one issue is created and proof is recorded.
 Given one owned open exact match, When processed, Then it is reconciled without a duplicate.
 Given multiple/foreign/closed/conflicting matches, When evaluated, Then the handler stops with no remote mutation; zero exact open matches are handled by the creation path above.
-Given a succeeded event replay, When processed, Then existing proof is returned without mutation.
+Given a succeeded event replay with valid nested delivery proof, When processed, Then the same event-bound proof is returned without GitHub or metadata writes; missing/mismatched nested proof fails closed. Pending/retryable/reconciling events retain the reconciliation path.
 Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
 ## QUALITY BAR
@@ -1034,7 +1034,7 @@ Escalate when: the only proposed fix is to mutate a foreign or ambiguous issue.
 ### Task 9: Reconcile phase-complete PR markers and fingerprints [depends: T7] [test-risk]
 
 ## OBJECTIVE
-Implement the `phase-complete` handler against the existing PR marker and canonical v4 metadata. Validate metadata-first PR identity, branch/phase/repository/open state, upsert exactly one phase summary marker, persist `phases.<phase>.review.fingerprints`, and never auto-create a PR.
+Implement the `phase-complete` handler against the existing PR marker and canonical v4 metadata. Persist an event-bound per-phase proof record binding event ID, plan/phase, PR identity, fingerprints, and a recomputable proof hash. Validate metadata-first PR identity, branch/phase/repository/open state, upsert exactly one phase summary marker, persist `phases.<phase>.review.fingerprints`, and never auto-create a PR.
 
 Steps:
 1. Write failing test for: phase-complete upserts the existing PR marker and canonical fingerprints.
@@ -1080,12 +1080,12 @@ Steps:
 13. Write failing test for: phase marker and finding replay are idempotent.
    Test file: `test/enterprise-phase.test.js`
    Level: integration
-   Test intent: Given an existing marker comment, prior fingerprints, and an event that already succeeded or partially posted remote findings, When the same event is replayed, Then the earliest marker is updated, duplicate marker comments are collapsed, existing finding threads are kept/resolved by fingerprint, and no duplicate inline mutation occurs.
+   Test intent: Given a `succeeded` event with valid nested `event.delivery.proof_ref/hash` and a recomputable event-bound per-phase proof, When the handler replays it, Then it returns the same proof with zero GitHub calls and byte-identical metadata; given missing/mismatched proof, Then it terminal-fails before repository/issue/PR/thread lookups or metadata writes, without top-level proof fallback; given `reconciling` after partial remote success/local-ledger failure, Then the earliest marker and existing finding threads are reconciled without duplicate inline mutations.
    Exercise through: phase handler replay with persisted proof and fake comment/thread state.
    Test doubles: deterministic fake GitHub API with call recording; real identity helper behavior.
-   Expected RED: no durable phase proof or reconciling path exists.
+   Expected RED: `succeeded` currently enters reconciliation, nested delivery proof is ignored, and the current hash is not bound to event ID; reconciling recovery must remain functional.
 14. Run test — verify FAIL: `node --test test/enterprise-phase.test.js`
-15. Implement proof-first reconciliation and `reconciling` recovery for remote-success/local-ledger failure, verify PASS, refactor while green, and commit: `fix(enterprise): make phase reporting idempotent`.
+15. Implement a succeeded-only read-only guard that validates nested Core delivery proof against a recomputable per-phase record bound to event ID, plan/phase, PR, and fingerprints; fail closed on missing/mismatch and keep remote reconciliation only for pending/retryable/reconciling. Verify PASS, refactor while green, and commit: `fix(enterprise): make phase reporting idempotent`.
 
 ## REFERENCES LOADED
 - `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md` — PR markers, fingerprints, `PR_REQUIRED`, and no-auto-create rules.
@@ -1099,7 +1099,7 @@ Complexity: deep
 Justification: Phase reporting combines PR ownership, marker races, review-thread reconciliation, fingerprints, metadata migration, and remote-success/local-ledger recovery. It needs an independent integration boundary and explicit fake transport.
 
 ## SANDWICH CONTEXT
-[CRITICAL: The existing PR phase marker and `phases.<phase>.review.fingerprints` are canonical proof; the adapter never creates a PR and never treats an unmarked closeout body as phase identity.]
+[CRITICAL: A valid `succeeded` event returns its event-bound proof from nested `event.delivery.proof_ref/hash` without GitHub or metadata writes; missing/mismatched proof fails closed. Only pending/retryable/reconciling may reconcile markers and fingerprints; never auto-create a PR.]
 You are implementing deterministic `phase-complete` synchronization.
 Spec: `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md`
 Files in scope: `enterprise/phase-handler.js`, `cli/lib/identity.js`, `cli/lib/bodies.js`, and `cli/commands/format.js` read-only for reuse, plus `test/enterprise-phase.test.js`; import the read-only Enterprise seams from T7 without modifying them.
@@ -1109,7 +1109,7 @@ Architecture rule: use current origin, exact branch/phase identity, marker upser
 ## DELIVERABLE
 Given an owned open PR, When phase-complete is processed, Then the canonical summary marker and v4 fingerprints are upserted exactly once.
 Given a missing/ambiguous/foreign/closed/mismatched PR, When processed, Then `PR_REQUIRED` or manual resolution is returned without remote mutation.
-Given a replay or remote-success/local-ledger failure, When processed, Then existing marker/proof is reconciled before mutation and no duplicate is created.
+Given a valid `succeeded` event proof, When replayed, Then the exact proof is returned read-only; missing/mismatched proof is terminal before remote/local mutation. Given `pending`, `retryable`, or `reconciling` after partial remote success/local-ledger failure, When processed, Then existing markers and finding threads reconcile without duplicates.
 Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
 ## QUALITY BAR
@@ -1118,6 +1118,7 @@ Must-have:
   - Existing `markerFor`/fingerprint semantics are reused, not reimplemented with divergent hashing.
   - Exactly one canonical summary marker remains after races; later duplicates are removed deterministically.
   - Legacy `phases.<phase>.fingerprints` is read-only compatibility input; v4 writes the canonical nested path.
+  - The canonical phase proof binds event ID, plan/phase, PR identity, and fingerprints in a recomputable hash; old unbound succeeded proofs fail closed.
 
 Must-not-have:
   - No automatic PR creation, merge, issue closure, or mutation of foreign/ambiguous PRs.
@@ -1134,7 +1135,7 @@ Red flags:
   - A replay creates a second marker or thread → STOP.
 
 ## STOP CONDITIONS
-Done when: marker, fingerprint, no-PR, ambiguity, replay, and reconciling tests pass with fake transport.
+Done when: marker, fingerprint, no-PR, ambiguity, valid/invalid succeeded replay, and reconciling recovery tests pass with fake transport.
 Uncertain when: an API race cannot be resolved to one canonical marker deterministically.
 Escalate when: the implementation proposes replacing marker proof with a new remote schema.
 
@@ -1143,7 +1144,7 @@ Escalate when: the implementation proposes replacing marker proof with a new rem
 ### Task 10: Reconcile plan-closed tasklist and closeout proof [depends: T7] [parallel: T8] [test-risk]
 
 ## OBJECTIVE
-Implement the `plan-closed` handler using the existing tasklist marker and additive metadata, while writing local `closeout.md` as informational output. Ensure replay updates the existing proof and never merges a PR or calls `gh issue close`.
+Implement the `plan-closed` handler using the existing tasklist marker and additive metadata, while writing local `closeout.md` as informational output. A valid Core `succeeded` event replays its nested, event-bound `event.delivery.proof_ref/hash` read-only; missing or mismatched proof fails closed. Only pending/retryable/reconciling events may repair or reconcile, and the handler never merges a PR or calls `gh issue close`.
 
 Steps:
 1. Write failing test for: plan-closed finalizes tasklist and local closeout without closing or merging remotely.
@@ -1159,12 +1160,12 @@ Steps:
 4. Write failing test for: tasklist replay reuses the canonical marker.
    Test file: `test/enterprise-closeout.test.js`
    Level: integration
-   Test intent: Given a tasklist marker was updated before a local ledger timeout, When the same event is drained, Then the handler finds and updates the existing marker without duplication and returns the existing proof.
+   Test intent: Given a tasklist marker was updated before a local ledger timeout and the replay event has `delivery.status: reconciling`, When the same event is drained, Then the handler finds and updates the existing marker, repairs the local ledger/closeout without duplication, and returns the recovered proof; this is partial-success recovery, not a succeeded-event replay.
    Exercise through: closure handler replay with fake paginated issue comments and persisted metadata.
    Test doubles: fake GitHub transport and ledger writer failure; no live GitHub.
-   Expected RED: no canonical closure marker replay or reconciling path exists.
+   Expected RED: reconciling recovery must preserve the existing tasklist marker after ledger failure; succeeded replay is a separate read-only proof-validation case.
 5. Run test — verify FAIL: `node --test test/enterprise-closeout.test.js`
-6. Implement proof-first replay and reconciling state, verify PASS, refactor while green, and commit: `fix(enterprise): make closure proof replay-safe`.
+6. Preserve reconciling recovery after tasklist success/local-ledger failure; valid succeeded replay is tested separately and must not perform remote or local writes. Verify PASS, refactor while green, and commit: `fix(enterprise): make closure proof replay-safe`.
 
 7. Write failing test for: missing or ambiguous issue stops closure without mutation.
    Test file: `test/enterprise-closeout.test.js`
@@ -1186,6 +1187,16 @@ Steps:
 11. Run test — verify FAIL: `node --test test/enterprise-closeout.test.js`
 12. Add the canonical proof selector and tests, verify PASS, refactor while green, and commit: `test(enterprise): lock closure marker identity`.
 
+13. Write failing test for: succeeded closure replay is read-only and bad proof fails closed.
+    Test file: `test/enterprise-closeout.test.js`
+    Level: integration
+    Test intent: Given an event with `delivery.status: succeeded` and a persisted tasklist proof, When nested delivery proof matches the recomputed event-bound record, Then return that exact proof with zero GitHub calls, no `writeMeta`, no closeout write/rename, and byte-identical metadata/closeout; given missing or mismatched nested proof (even with top-level proof fields populated), Then return terminal before remote/local mutation.
+    Exercise through: `enterprise/closure-handler.js` with real metadata/closeout files and recording fake GitHub/local writers.
+    Test doubles: fake GitHub transport and write counters; no live GitHub.
+    Expected RED: succeeded events currently perform GitHub lookups, may reconcile markers, and may rewrite `closeout.md` despite missing or mismatched event-bound proof.
+14. Run test — verify FAIL: `node --test test/enterprise-closeout.test.js`
+15. Implement an early succeeded-only proof guard before `loadClosureContext`, repository/issue lookup, tasklist listing, or closeout output; validate nested delivery proof, event ID/revision/artifact refs, and recomputed persisted tasklist hash. Verify PASS, refactor while green, and commit: `fix(enterprise): make succeeded closure replay read-only`.
+
 ## REFERENCES LOADED
 - `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md` — closure mapping, tasklist marker, local closeout, and no merge/issue-close rules.
 - `enterprise/adapter.js`, `enterprise/github.js`, `enterprise/meta.js` — shared Enterprise seams from T7.
@@ -1198,7 +1209,7 @@ Complexity: standard
 Justification: Closure has a smaller remote surface than phase reporting but is safety-critical because accidental issue closure or merge would violate the human gate. Isolating the tasklist marker from informational closeout text makes replay identity explicit.
 
 ## SANDWICH CONTEXT
-[CRITICAL: Closure proof is the existing tasklist marker plus metadata; the closeout body is informational, and Pocket must never merge or call `gh issue close`.]
+[CRITICAL: For `succeeded`, validate Core's nested `event.delivery.proof_ref/hash` against the event-bound persisted tasklist record and return read-only; missing/mismatched proof fails closed before GitHub or local output writes. Keep pending/retryable/reconciling repair behavior and never merge or call `gh issue close`.]
 You are implementing deterministic `plan-closed` synchronization.
 Spec: `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md`
 Files in scope: `enterprise/closure-handler.js`, `cli/lib/bodies.js` and `cli/commands/format.js` read-only for reuse, and `test/enterprise-closeout.test.js`; import the read-only Enterprise seams from T7 without modifying them.
@@ -1207,7 +1218,9 @@ Architecture rule: preserve the existing human merge gate and local closeout art
 
 ## DELIVERABLE
 Given a valid plan-closed event and owned issue, When processed, Then tasklist proof, final metadata, and local closeout are written exactly once.
-Given tasklist success followed by ledger timeout, When replayed, Then the existing marker is reused without duplication.
+Given a valid succeeded nested proof, When replayed, Then return the same proof without GitHub, metadata, or closeout writes; missing/mismatched proof fails closed.
+Given tasklist success followed by ledger timeout with `delivery.status: reconciling`, When replayed, Then the existing marker is repaired without duplication.
+Given pending/retryable/reconciling status, When processed, Then permitted reconciliation continues; ineligible statuses never become a write path.
 Given missing/ambiguous issue, When processed, Then the handler stops safely with an actionable status.
 Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
@@ -1215,7 +1228,7 @@ Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 Must-have:
   - Tasklist marker is the only remote idempotency marker for closure.
   - Closeout file is written locally with normalized content and does not become a remote identity key.
-  - Remote result is reconciled before any retry mutation.
+  - Pending/retryable/reconciling remote results are reconciled before retry mutation; succeeded events are read-only and validate nested event-bound proof.
   - Tests assert no merge and no `gh issue close` invocation.
 
 Must-not-have:
@@ -1232,7 +1245,7 @@ Red flags:
   - Informational closeout body used as idempotency key → STOP.
 
 ## STOP CONDITIONS
-Done when: closure marker, local closeout, missing issue, replay, and no-side-effect tests pass.
+Done when: closure marker, local closeout, missing issue, read-only valid/invalid succeeded replay, explicit reconciling recovery, and no-side-effect tests pass.
 Uncertain when: local ledger failure classification would cause duplicate marker mutation.
 Escalate when: a human merge gate is replaced by automation.
 
@@ -1634,9 +1647,9 @@ Escalate when: satisfying the rehearsal requires weakening a normative acceptanc
 | T5 | Build the manifest-driven four-role release surfaces | T2 | standard | All four roles stage explicitly with forbidden paths/content and no Core duplication. |
 | T6 | Split Core and Enterprise skill instructions without duplicating Core | T5 | deep | Core has no Enterprise instructions; Enterprise is additive; archives/citations remain valid. |
 | T7 | Implement Enterprise adapter registration, protocol, and transport seam | T2 | deep | Atomic registration, fail-closed preflight, safe transport, and secret-free bounded error classes pass. |
-| T8 | Reconcile spec-approved issue identity and ownership | T7 | standard | One owned issue is created/reconciled; ambiguity, foreign ownership, and replay are safe. |
-| T9 | Reconcile phase-complete PR markers and fingerprints | T7 | deep | Existing PR proof, marker upsert, fingerprints, no-auto-create, and replay/reconciling behavior pass. |
-| T10 | Reconcile plan-closed tasklist and closeout proof | T7 | standard | Tasklist/metadata/local closeout are idempotent and no merge/issue-close side effect occurs. |
+| T8 | Reconcile spec-approved issue identity and ownership | T7 | standard | One owned issue is created/reconciled; valid nested succeeded proof replays read-only and invalid proof fails closed. |
+| T9 | Reconcile phase-complete PR markers and fingerprints | T7 | deep | Event-bound PR/fingerprint proof; succeeded replay is read-only and reconciling recovery preserves partial-success behavior. |
+| T10 | Reconcile plan-closed tasklist and closeout proof | T7 | standard | Succeeded tasklist proof replay is read-only; reconciling repairs ledger/closeout; no merge/issue-close side effect occurs. |
 | T11 | Implement v3 migration and mixed-major compatibility | T4, T7 | deep | Pristine migration works; progressed v3 pins; all compatibility rows fail/use local-first as specified. |
 | T12 | Verify Core-to-Enterprise lifecycle integration and recovery | T4, T8, T9, T10 | deep | Public end-to-end flow proves ordering, claims, replay, stale artifacts, and exactly-once-by-proof effects. |
 | T13 | Update user-facing documentation and release guidance | T6, T11, T12 | lightweight | Documentation executable checks match roles, versions, commands, compatibility, and rollback. |
