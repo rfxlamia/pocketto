@@ -27,11 +27,18 @@ function specContext(event, projectRoot) {
   if (relative === '' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     return { error: 'approved spec artifact escapes the current plan directory' };
   }
+  let realProjectRoot;
   let realSpecDir;
   let realArtifact;
   let markdown;
   try {
+    realProjectRoot = fs.realpathSync(projectRoot);
     realSpecDir = fs.realpathSync(specDir);
+    const projectRelative = path.relative(realProjectRoot, realSpecDir);
+    if (projectRelative === '' || projectRelative === '..'
+        || projectRelative.startsWith(`..${path.sep}`) || path.isAbsolute(projectRelative)) {
+      return { error: 'approved spec directory escapes the registered project root' };
+    }
     realArtifact = fs.realpathSync(artifactPath);
     if (!fs.statSync(realArtifact).isFile()) return { error: 'approved spec artifact is not a file' };
     markdown = fs.readFileSync(realArtifact, 'utf8');
