@@ -21,8 +21,8 @@ function handlePhaseComplete(event, options = {}) {
     }
 
     const context = loadContext(event, options);
-    const repo = resolveRepository(options);
     const phase = readPhaseEvidence(event, context);
+    const repo = resolveRepository(options);
     const meta = enterpriseMeta.readMetaFor(context.specDir);
     const issue = resolveOwnedIssue(event, context, repo, options);
     const selectedPr = resolvePhasePr(context, phase, repo, options);

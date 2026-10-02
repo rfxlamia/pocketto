@@ -13,6 +13,62 @@ function invalidLifecyclePath(label) {
   return new PhaseHandlerError('PHASE_LIFECYCLE_PATH_INVALID', `Lifecycle ${label} must resolve inside the registered project root.`);
 }
 
+function invalidPlanArtifactPath(label) {
+  return new PhaseHandlerError('PHASE_ARTIFACT_PATH_INVALID', `Lifecycle ${label} must resolve inside the selected plan root.`);
+}
+
+function resolvePlanArtifactPath(planDir, relative, label, { allowMissing = false } = {}) {
+  if (typeof relative !== 'string' || relative.length === 0 || path.isAbsolute(relative)) {
+    throw invalidPlanArtifactPath(label);
+  }
+
+  let root;
+  try {
+    root = fs.realpathSync(planDir);
+    if (!fs.statSync(root).isDirectory()) throw new Error('plan root is not a directory');
+  } catch {
+    throw invalidPlanArtifactPath(label);
+  }
+
+  const candidate = path.resolve(root, relative);
+  if (!isInside(root, candidate)) throw invalidPlanArtifactPath(label);
+
+  try {
+    fs.lstatSync(candidate);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      let ancestor = path.dirname(candidate);
+      let physicalAncestor;
+      while (!physicalAncestor) {
+        try {
+          physicalAncestor = fs.realpathSync(ancestor);
+        } catch (ancestorError) {
+          if (!ancestorError || !['ENOENT', 'ENOTDIR'].includes(ancestorError.code)) {
+            throw invalidPlanArtifactPath(label);
+          }
+          const parent = path.dirname(ancestor);
+          if (parent === ancestor) throw invalidPlanArtifactPath(label);
+          ancestor = parent;
+        }
+      }
+      if (!isInside(root, physicalAncestor) || !fs.statSync(physicalAncestor).isDirectory()) {
+        throw invalidPlanArtifactPath(label);
+      }
+      if (allowMissing) return null;
+    }
+    throw error;
+  }
+
+  let physical;
+  try {
+    physical = fs.realpathSync(candidate);
+  } catch {
+    throw invalidPlanArtifactPath(label);
+  }
+  if (!isInside(root, physical)) throw invalidPlanArtifactPath(label);
+  return physical;
+}
+
 function resolveLifecyclePath(root, registeredRoot, value, label) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new PhaseHandlerError('PHASE_LIFECYCLE_PATH_REQUIRED', `Lifecycle metadata does not contain ${label}.`);
@@ -98,4 +154,4 @@ function loadContext(event, options = {}) {
 }
 
 
-module.exports = { loadContext };
+module.exports = { loadContext, resolvePlanArtifactPath };

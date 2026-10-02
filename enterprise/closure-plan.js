@@ -2,13 +2,14 @@
 
 // Final plan-state projection used by closure proof persistence.
 
-const path = require('node:path');
 const { readLog } = require('../cli/lib/logjson');
+const { resolvePlanArtifactPath } = require('./phase-handler-context');
 
 function readPlan(planDir) {
   let log;
   try {
-    log = readLog(path.join(planDir, 'log.json'));
+    const logPath = resolvePlanArtifactPath(planDir, 'log.json', 'plan log');
+    log = readLog(logPath);
   } catch {
     return { ok: false, code: 'PLAN_STATE_UNAVAILABLE', message: 'Final plan log is unavailable or malformed.' };
   }

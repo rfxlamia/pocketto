@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const identity = require('../cli/lib/identity');
 const { PhaseHandlerError, safeMessage } = require('./phase-handler-errors');
+const { resolvePlanArtifactPath } = require('./phase-handler-context');
 
 function readPhaseEvidence(event, context) {
   const ref = findPhaseEvidenceRef(event);
@@ -24,10 +25,11 @@ function findPhaseEvidenceRef(event) {
 }
 
 function readPhaseArtifact(ref, planDir) {
-  const filePath = resolveInside(planDir, ref.path);
   try {
+    const filePath = resolvePlanArtifactPath(planDir, ref.path, 'phase evidence');
     return fs.readFileSync(filePath, 'utf8');
   } catch (error) {
+    if (error instanceof PhaseHandlerError) throw error;
     throw new PhaseHandlerError('STALE_ARTIFACT', `Phase evidence is unavailable: ${safeMessage(error)}`);
   }
 }
@@ -46,8 +48,10 @@ function phaseNumberFromArtifact(ref) {
 function readPhaseLog(planDir, artifactPath) {
   let log;
   try {
-    log = JSON.parse(fs.readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    const logPath = resolvePlanArtifactPath(planDir, 'log.json', 'plan task evidence');
+    log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
   } catch (error) {
+    if (error instanceof PhaseHandlerError) throw error;
     throw new PhaseHandlerError('PHASE_EVIDENCE_UNAVAILABLE', `Cannot read plan task evidence: ${safeMessage(error)}`, {
       status: 'retryable',
       retryable: true,
@@ -78,11 +82,22 @@ function collectPhaseEvidence(number, phaseLog, planDir) {
 
 function readReviewReport(planDir, task) {
   if (!task || typeof task.id !== 'string' || task.id.length === 0) return null;
-  const reviewPath = path.join(planDir, 'reviews', `${task.id}-review.json`);
+  let reviewPath;
+  try {
+    reviewPath = resolvePlanArtifactPath(
+      planDir,
+      path.join('reviews', `${task.id}-review.json`),
+      'review evidence',
+      { allowMissing: true },
+    );
+  } catch (error) {
+    if (error instanceof PhaseHandlerError) throw error;
+    throw new PhaseHandlerError('PHASE_REVIEW_EVIDENCE_INVALID', `Cannot read ${task.id} review evidence: ${safeMessage(error)}`);
+  }
+  if (!reviewPath) return null;
   try {
     return JSON.parse(fs.readFileSync(reviewPath, 'utf8'));
   } catch (error) {
-    if (error && error.code === 'ENOENT') return null;
     throw new PhaseHandlerError('PHASE_REVIEW_EVIDENCE_INVALID', `Cannot read ${task.id} review evidence: ${safeMessage(error)}`);
   }
 }
@@ -135,15 +150,6 @@ function samePath(left, right) {
   return typeof left === 'string'
     && typeof right === 'string'
     && left.replace(/\\/g, '/').replace(/^\.\//, '') === right.replace(/\\/g, '/').replace(/^\.\//, '');
-}
-
-function resolveInside(root, relative) {
-  const base = path.resolve(root);
-  const target = path.resolve(base, relative);
-  if (target !== base && !target.startsWith(`${base}${path.sep}`)) {
-    throw new PhaseHandlerError('PHASE_EVIDENCE_INVALID', 'Phase evidence path escapes the plan root.');
-  }
-  return target;
 }
 
 module.exports = { readPhaseEvidence };

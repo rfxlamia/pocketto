@@ -232,6 +232,97 @@ function assertRawResponse(response, event) {
   assert.match(response.proof_hash, /^[0-9a-f]{64}$/);
 }
 
+function symlinkToExternalFile(t, localPath, prefix, contents) {
+  const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t.after(() => fs.rmSync(externalRoot, { recursive: true, force: true }));
+  const externalPath = path.join(externalRoot, path.basename(localPath));
+  const bytes = Buffer.isBuffer(contents) ? contents : Buffer.from(contents, 'utf8');
+  fs.writeFileSync(externalPath, bytes);
+  fs.rmSync(localPath, { force: true });
+  fs.symlinkSync(externalPath, localPath, 'file');
+  return { externalPath, externalBefore: Buffer.from(bytes) };
+}
+
+test('registered phase-complete rejects phase evidence file symlinks escaping the plan root before GitHub', (t) => {
+  const fixture = createFixture(t);
+  const phaseEvidence = '# Phase 1\n\nContains tasks: T1\n';
+  const external = symlinkToExternalFile(
+    t,
+    path.join(fixture.planDir, PHASE_PATH),
+    'enterprise-dispatch-external-phase-evidence-',
+    phaseEvidence,
+  );
+  const { tracePath, record } = prepareRegisteredRunner(t, fixture);
+
+  const response = invokeAdapter(fixture.phaseEvent, record);
+
+  assert.equal(readCalls(tracePath).length, 0,
+    `symlinked phase evidence must be rejected before fake GitHub; handler status was ${response.status}`);
+  assertBoundedFailure(response, fixture.phaseEvent);
+  assert.deepEqual(fs.readFileSync(external.externalPath), external.externalBefore,
+    'the external phase evidence sentinel must remain unchanged');
+});
+
+test('registered phase-complete rejects review JSON symlinks escaping the plan root before GitHub', (t) => {
+  const fixture = createFixture(t);
+  const externalReport = `${JSON.stringify({
+    task_id: 'T1', overall: 'REVIEW_PASS', stage_1: { issues: [] }, stage_2: { issues: [] },
+  }, null, 2)}\n`;
+  const external = symlinkToExternalFile(
+    t,
+    path.join(fixture.planDir, 'reviews', 'T1-review.json'),
+    'enterprise-dispatch-external-review-',
+    externalReport,
+  );
+  const { tracePath, record } = prepareRegisteredRunner(t, fixture);
+
+  const response = invokeAdapter(fixture.phaseEvent, record);
+
+  assert.equal(readCalls(tracePath).length, 0,
+    `symlinked review JSON must be rejected before fake GitHub; handler status was ${response.status}`);
+  assertBoundedFailure(response, fixture.phaseEvent);
+  assert.deepEqual(fs.readFileSync(external.externalPath), external.externalBefore,
+    'the external review report sentinel must remain unchanged');
+});
+
+test('registered plan-closed rejects log.json symlinks escaping the plan root before GitHub', (t) => {
+  const fixture = createFixture(t);
+  const external = symlinkToExternalFile(
+    t,
+    path.join(fixture.planDir, 'log.json'),
+    'enterprise-dispatch-external-log-',
+    fs.readFileSync(path.join(fixture.planDir, 'log.json')),
+  );
+  const { tracePath, record } = prepareRegisteredRunner(t, fixture);
+
+  const response = invokeAdapter(fixture.closeEvent, record);
+
+  assert.equal(readCalls(tracePath).length, 0,
+    `symlinked log.json must be rejected before fake GitHub; handler status was ${response.status}`);
+  assertBoundedFailure(response, fixture.closeEvent);
+  assert.deepEqual(fs.readFileSync(external.externalPath), external.externalBefore,
+    'the external log sentinel must remain unchanged');
+});
+
+test('registered plan-closed rejects closeout.md symlinks without overwriting external targets', (t) => {
+  const fixture = createFixture(t);
+  const external = symlinkToExternalFile(
+    t,
+    path.join(fixture.planDir, 'closeout.md'),
+    'enterprise-dispatch-external-closeout-',
+    'external closeout sentinel must remain byte-for-byte unchanged\n',
+  );
+  const { tracePath, record } = prepareRegisteredRunner(t, fixture);
+
+  const response = invokeAdapter(fixture.closeEvent, record);
+
+  assert.deepEqual(fs.readFileSync(external.externalPath), external.externalBefore,
+    `T10 must not overwrite the external closeout target; status=${response.status}, fake-gh-calls=${readCalls(tracePath).length}`);
+  assert.equal(readCalls(tracePath).length, 0,
+    'a symlinked closeout target must be rejected before fake GitHub');
+  assertBoundedFailure(response, fixture.closeEvent);
+});
+
 test('Core invokes the packaged Enterprise runner for all concrete handlers through the registered event-file protocol', (t) => {
   const fixture = createFixture(t);
   const tracePath = path.join(fixture.root, 'fake-gh.jsonl');

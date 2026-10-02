@@ -84,17 +84,94 @@ function prepareClosure(event, opts, eventId) {
   if (invalid) return { ok: false, result: invalid };
   const plan = readPlan(opts.planDir);
   if (!plan.ok) return { ok: false, result: adapterResult(eventId, 'terminal', plan.code, plan.message, false) };
-  return loadClosureContext(event, opts, eventId, plan.log);
+
+  let closeoutTarget;
+  try {
+    closeoutTarget = resolveCloseoutTarget(opts.planDir);
+  } catch {
+    return {
+      ok: false,
+      result: adapterResult(eventId, 'terminal', 'CLOSEOUT_PATH_INVALID',
+        'The local closeout target must remain a regular file inside the selected plan directory.', false),
+    };
+  }
+
+  const context = loadClosureContext(event, opts, eventId, plan.log);
+  return context.ok ? { ...context, closeoutRoot: closeoutTarget.root } : context;
 }
 
-function writeCloseoutFile(planDir, content, opts) {
-  const filePath = path.join(planDir, 'closeout.md');
-  try {
-    if (fs.readFileSync(filePath, 'utf8') === content) return;
-  } catch {
-    // A missing or unreadable closeout is repaired by the same local write path.
+function isInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function resolveCloseoutTarget(planDir, expectedRoot, { requireTarget = false } = {}) {
+  const selectedPath = path.resolve(planDir);
+  const root = fs.realpathSync(selectedPath);
+  if (expectedRoot && root !== expectedRoot) {
+    throw new Error('closeout plan directory changed');
   }
-  (opts.writeFile || fs.writeFileSync)(filePath, content, 'utf8');
+
+  const target = path.join(root, 'closeout.md');
+  if (fs.realpathSync(path.dirname(target)) !== root) throw new Error('closeout parent changed');
+  let targetExists = false;
+  try {
+    const targetStat = fs.lstatSync(target);
+    if (targetStat.isSymbolicLink() || !targetStat.isFile()) throw new Error('closeout target is not a regular file');
+    const physicalTarget = fs.realpathSync(target);
+    if (!isInside(root, physicalTarget)) throw new Error('closeout target escaped the plan directory');
+    targetExists = true;
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw error;
+  }
+  if (requireTarget && !targetExists) throw new Error('closeout target is missing after replacement');
+  return { root, target };
+}
+
+function writeCloseoutFile(planDir, content, opts, expectedRoot) {
+  let temporaryDirectory;
+  try {
+    const initial = resolveCloseoutTarget(planDir, expectedRoot);
+    temporaryDirectory = fs.mkdtempSync(path.join(initial.root, '.closeout-'));
+    const physicalTemporaryDirectory = fs.realpathSync(temporaryDirectory);
+    if (!isInside(initial.root, physicalTemporaryDirectory)
+        || path.dirname(physicalTemporaryDirectory) !== initial.root) {
+      throw new Error('closeout temporary directory escaped the plan directory');
+    }
+
+    const temporaryPath = path.join(physicalTemporaryDirectory, 'closeout.md');
+    resolveCloseoutTarget(planDir, initial.root);
+    if (opts.writeFile) {
+      opts.writeFile(temporaryPath, content, 'utf8');
+    } else {
+      const descriptor = fs.openSync(temporaryPath, 'wx', 0o666);
+      try {
+        fs.writeFileSync(descriptor, content, 'utf8');
+        fs.fsyncSync(descriptor);
+      } finally {
+        fs.closeSync(descriptor);
+      }
+    }
+
+    const temporaryStat = fs.lstatSync(temporaryPath);
+    const physicalTemporaryPath = fs.realpathSync(temporaryPath);
+    if (temporaryStat.isSymbolicLink() || !temporaryStat.isFile()
+        || !isInside(initial.root, physicalTemporaryPath)) {
+      throw new Error('closeout temporary artifact is invalid');
+    }
+
+    const beforeRename = resolveCloseoutTarget(planDir, initial.root);
+    if (beforeRename.target !== initial.target
+        || fs.realpathSync(path.dirname(temporaryPath)) !== physicalTemporaryDirectory
+        || fs.realpathSync(temporaryPath) !== physicalTemporaryPath) {
+      throw new Error('closeout paths changed before replacement');
+    }
+    fs.renameSync(temporaryPath, beforeRename.target);
+    const afterRename = resolveCloseoutTarget(planDir, initial.root, { requireTarget: true });
+    if (afterRename.target !== beforeRename.target) throw new Error('closeout target changed after replacement');
+  } finally {
+    if (temporaryDirectory) fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 function isCurrentTasklistProof(event, context, listed, tasklist) {
@@ -111,7 +188,7 @@ function reconcileExistingProof(eventId, context, listed, tasklist, closeout, op
   const existingProof = isCurrentTasklistProof(event, context, listed, tasklist);
   if (!existingProof) return null;
   try {
-    writeCloseoutFile(opts.planDir, closeout, opts);
+    writeCloseoutFile(opts.planDir, closeout, opts, context.closeoutRoot);
   } catch (error) {
     return withTasklistProof(
       adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',
@@ -159,9 +236,9 @@ function persistMetadata(eventId, context, record, proofHash, opts) {
   return null;
 }
 
-function persistCloseout(eventId, opts, closeout, proofHash) {
+function persistCloseout(eventId, opts, closeout, proofHash, closeoutRoot) {
   try {
-    writeCloseoutFile(opts.planDir, closeout, opts);
+    writeCloseoutFile(opts.planDir, closeout, opts, closeoutRoot);
   } catch (error) {
     return withTasklistProof(
       adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',
@@ -178,7 +255,7 @@ function persistClosureProof(eventId, event, context, comment, tasklist, closeou
   record.proof_hash = proofHash;
   const ledgerFailure = persistMetadata(eventId, context, record, proofHash, opts);
   if (ledgerFailure) return ledgerFailure;
-  const closeoutFailure = persistCloseout(eventId, opts, closeout, proofHash);
+  const closeoutFailure = persistCloseout(eventId, opts, closeout, proofHash, context.closeoutRoot);
   if (closeoutFailure) return closeoutFailure;
   return { event_id: eventId, status: 'succeeded', proof_ref: PROOF_REF, proof_hash: proofHash };
 }
