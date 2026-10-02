@@ -21,7 +21,7 @@ function readFakeGhCalls(tracePath) {
   return contents ? contents.split('\n').map((line) => JSON.parse(line)) : [];
 }
 
-test('registered spec-approved rejects an external spec directory symlink before GitHub or metadata writes', (t) => {
+function createExternalSpecSymlinkFixture(t) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-issue-dispatch-project-'));
   const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-issue-dispatch-external-'));
   t.after(() => {
@@ -35,32 +35,38 @@ test('registered spec-approved rejects an external spec directory symlink before
   fs.mkdirSync(externalSpecDir, { recursive: true });
 
   const approvedSpec = '# Approved specification\n\nExternal directory symlink fixture.\n';
-  const approvedSpecPath = path.join(externalSpecDir, 'approved-spec.md');
-  fs.writeFileSync(approvedSpecPath, approvedSpec);
+  fs.writeFileSync(path.join(externalSpecDir, 'approved-spec.md'), approvedSpec);
   const sentinelBytes = Buffer.from('{\n  "sentinel": "external metadata must remain unchanged"\n}\n');
   const externalMetadataPath = path.join(externalSpecDir, '.pocket-meta.json');
   fs.writeFileSync(externalMetadataPath, sentinelBytes);
   fs.symlinkSync(externalSpecDir, specDir, 'dir');
 
-  const event = {
-    event_id: `${PLAN_ID}:spec-approved:r1`,
-    plan_id: PLAN_ID,
-    type: 'spec-approved',
-    revision: 1,
-    occurred_at: '2026-09-19T12:00:00.000Z',
-    artifact_refs: [{
-      root: 'spec',
-      kind: 'approved-spec',
-      path: 'approved-spec.md',
-      sha256: sha256(approvedSpec),
+  return {
+    projectRoot,
+    externalMetadataPath,
+    sentinelBytes,
+    event: {
+      event_id: `${PLAN_ID}:spec-approved:r1`,
+      plan_id: PLAN_ID,
+      type: 'spec-approved',
       revision: 1,
-    }],
-    payload_hash: 'a'.repeat(64),
-    proof_ref: null,
-    proof_hash: null,
-    delivery: { status: 'pending', attempts: 0 },
+      occurred_at: '2026-09-19T12:00:00.000Z',
+      artifact_refs: [{
+        root: 'spec',
+        kind: 'approved-spec',
+        path: 'approved-spec.md',
+        sha256: sha256(approvedSpec),
+        revision: 1,
+      }],
+      payload_hash: 'a'.repeat(64),
+      proof_ref: null,
+      proof_hash: null,
+      delivery: { status: 'pending', attempts: 0 },
+    },
   };
+}
 
+function installFakeGhRecorder(projectRoot, t) {
   const tracePath = path.join(projectRoot, 'fake-gh.jsonl');
   fs.writeFileSync(tracePath, '');
   const binDir = path.join(projectRoot, 'fake-bin');
@@ -85,7 +91,10 @@ process.exit(1);
     if (previousTrace === undefined) delete process.env.FAKE_GH_TRACE;
     else process.env.FAKE_GH_TRACE = previousTrace;
   });
+  return tracePath;
+}
 
+function registerDispatcher(projectRoot) {
   const installed = enterpriseRegistration.installRegistration(projectRoot, {
     argv: [process.execPath, DISPATCH, projectRoot],
     events: ['spec-approved'],
@@ -94,13 +103,24 @@ process.exit(1);
   const loaded = readAdapterRegistration(projectRoot);
   assert.equal(loaded.error, null, loaded.error && loaded.error.message);
   assert.deepEqual(loaded.registration.argv, [process.execPath, DISPATCH, projectRoot]);
+  return loaded.registration;
+}
 
-  const response = invokeAdapter(event, loaded.registration);
-
+function assertRejectedBeforeSideEffects(response, event, tracePath, externalMetadataPath, sentinelBytes) {
   assert.equal(readFakeGhCalls(tracePath).length, 0,
     'the external spec directory symlink must be rejected before any fake-GH call');
   assert.equal(response.event_id, event.event_id, 'the bounded response must preserve the original event ID');
   assert.notEqual(response.status, 'succeeded', 'an external spec directory must fail closed');
   assert.deepEqual(fs.readFileSync(externalMetadataPath), sentinelBytes,
     'external .pocket-meta.json bytes must remain unchanged');
+}
+
+test('registered spec-approved rejects an external spec directory symlink before GitHub or metadata writes', (t) => {
+  const fixture = createExternalSpecSymlinkFixture(t);
+  const tracePath = installFakeGhRecorder(fixture.projectRoot, t);
+  const registration = registerDispatcher(fixture.projectRoot);
+  const response = invokeAdapter(fixture.event, registration);
+  assertRejectedBeforeSideEffects(
+    response, fixture.event, tracePath, fixture.externalMetadataPath, fixture.sentinelBytes,
+  );
 });
