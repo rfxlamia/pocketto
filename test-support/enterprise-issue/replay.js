@@ -68,20 +68,38 @@ test('CYCLE 4: succeeded replay fails closed on missing or mismatched nested pro
   }
 });
 
-test('CYCLE 4: ineligible claimed delivery cannot enter issue reconciliation', () => {
-  const { fixture, handler, metadataPath } = createSucceededFixture();
-  const claimedEvent = {
-    ...fixture.event,
-    delivery: { status: 'claimed', attempts: 1 },
-  };
-  const before = fs.readFileSync(metadataPath, 'utf8');
-  const replayCalls = [];
-  const replay = dispatchReplay(handler, fixture, claimedEvent, replayCalls);
+test('CYCLE 4: claimed delivery enters normal issue reconciliation', (t) => {
+  const fixture = makeProject();
+  t.after(() => fs.rmSync(fixture.projectRoot, { recursive: true, force: true }));
+  fixture.event.delivery = { status: 'claimed', attempts: 1 };
+  const handler = loadIssueHandler();
+  const transport = makeZeroMatchTransport();
 
-  assert.equal(replay.status, 'terminal', JSON.stringify(replay));
-  assert.equal(replay.error.code, 'ISSUE_DELIVERY_INELIGIBLE');
-  assert.deepEqual(replayCalls, [], 'claimed events are not a remote-write path');
-  assert.equal(fs.readFileSync(metadataPath, 'utf8'), before);
+  const result = runHandler(handler, fixture, transport);
+
+  assert.equal(result.status, 'succeeded', JSON.stringify(result));
+  assert.equal(result.event_id, fixture.event.event_id);
+  assert.equal(transport.createdBodies.length, 1, 'claimed attempt must create/reconcile exactly as the normal pending path');
+  assert.ok(transport.calls.some((args) => args[0] === 'repo' && args[1] === 'view'));
+  assert.ok(transport.calls.some((args) => args[0] === 'issue' && args[1] === 'create'));
+});
+
+test('CYCLE 4: terminal and unknown delivery statuses remain ineligible', async (t) => {
+  for (const status of ['terminal', 'unknown']) {
+    await t.test(`${status} delivery is rejected before issue reconciliation`, (t) => {
+      const fixture = makeProject();
+      t.after(() => fs.rmSync(fixture.projectRoot, { recursive: true, force: true }));
+      fixture.event.delivery = { status, attempts: 1 };
+      const handler = loadIssueHandler();
+      const transport = makeZeroMatchTransport();
+
+      const result = runHandler(handler, fixture, transport);
+
+      assert.equal(result.status, 'terminal', JSON.stringify(result));
+      assert.equal(result.error.code, 'ISSUE_DELIVERY_INELIGIBLE');
+      assert.deepEqual(transport.calls, []);
+    });
+  }
 });
 
 function createSucceededFixture() {

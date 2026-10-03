@@ -68,17 +68,15 @@ test('CYCLE 5: missing or mismatched nested closure proof fails closed without f
   }
 });
 
-test('CYCLE 5: claimed closure delivery is ineligible for reconciliation', async (t) => {
+test('CYCLE 5: claimed closure delivery enters normal tasklist reconciliation', async (t) => {
   const fixture = makeFixture();
   cleanupFixture(t, fixture);
   const event = makeEvent(fixture.planDir);
-  event.delivery.status = 'claimed';
-  const metadataPath = enterpriseMeta.resolveMetaPath(fixture.specDir);
-  const metadataBefore = fs.readFileSync(metadataPath, 'utf8');
+  event.delivery = { status: 'claimed', attempts: 1 };
   const gh = makeFakeGh([]);
   let metaWrites = 0;
   let closeoutWrites = 0;
-  const replay = await handlePlanClosed(event, {
+  const result = await handlePlanClosed(event, {
     specDir: fixture.specDir,
     planDir: fixture.planDir,
     ghRunner: gh.runner,
@@ -92,12 +90,49 @@ test('CYCLE 5: claimed closure delivery is ineligible for reconciliation', async
     },
   });
 
-  assert.equal(replay.status, 'terminal', JSON.stringify(replay));
-  assert.equal(replay.error.code, 'CLOSEOUT_DELIVERY_INELIGIBLE');
-  assert.deepEqual(gh.calls, [], 'claimed delivery must not enter the remote-write path');
-  assert.equal(metaWrites, 0);
-  assert.equal(closeoutWrites, 0);
-  assert.equal(fs.readFileSync(metadataPath, 'utf8'), metadataBefore);
+  assert.equal(result.status, 'succeeded', JSON.stringify(result));
+  assert.equal(result.event_id, event.event_id);
+  assert.ok(gh.calls.length > 0, 'claimed event must enter normal GitHub reconciliation');
+  assert.equal(gh.comments.length, 1, 'claimed event must leave one canonical tasklist marker');
+  assert.match(gh.comments[0].body, /<!-- pocket-tasklist -->/);
+  assert.equal(metaWrites, 1);
+  assert.equal(closeoutWrites, 1);
+  assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), true);
+});
+
+test('CYCLE 5: terminal and unknown closure statuses remain rejected', async (t) => {
+  for (const status of ['terminal', 'unknown']) {
+    await t.test(`${status} delivery cannot reconcile the tasklist`, async (t) => {
+      const fixture = makeFixture();
+      cleanupFixture(t, fixture);
+      const event = makeEvent(fixture.planDir);
+      event.delivery = { status, attempts: 1 };
+      const metadataPath = enterpriseMeta.resolveMetaPath(fixture.specDir);
+      const metadataBefore = fs.readFileSync(metadataPath, 'utf8');
+      const gh = makeFakeGh([]);
+      let metaWrites = 0;
+      let closeoutWrites = 0;
+      const result = await handlePlanClosed(event, {
+        specDir: fixture.specDir,
+        planDir: fixture.planDir,
+        ghRunner: gh.runner,
+        writeMeta: (...args) => {
+          metaWrites += 1;
+          return enterpriseMeta.writeMetaFor(...args);
+        },
+        writeFile: (...args) => {
+          closeoutWrites += 1;
+          return fs.writeFileSync(...args);
+        },
+      });
+
+      assert.notEqual(result.status, 'succeeded', JSON.stringify(result));
+      assert.deepEqual(gh.calls, []);
+      assert.equal(metaWrites, 0);
+      assert.equal(closeoutWrites, 0);
+      assert.equal(fs.readFileSync(metadataPath, 'utf8'), metadataBefore);
+    });
+  }
 });
 
 async function seedSucceededProof(fixture) {

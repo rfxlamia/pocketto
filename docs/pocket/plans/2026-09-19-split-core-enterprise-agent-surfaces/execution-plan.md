@@ -975,7 +975,7 @@ Steps:
    Test doubles: recording fake GitHub transport; real metadata files.
    Expected RED: no durable issue proof or idempotent replay path exists.
 11. Run test — verify FAIL: `node --test test/enterprise-issue.test.js`
-12. Implement a succeeded-only, read-only replay guard that validates Core's nested `event.delivery.proof_ref/hash`, recomputes the issue proof hash, verifies `ownership.event_id`, and fails closed without top-level fallback; keep pending/retryable/reconciling reconciliation unchanged. Verify PASS and commit: `fix(enterprise): make issue reconciliation replay-safe`.
+12. Implement a succeeded-only, read-only replay guard that validates Core's nested `event.delivery.proof_ref/hash`, recomputes the issue proof hash, verifies `ownership.event_id`, and fails closed without top-level fallback; claimed/pending/retryable/reconciling events remain eligible for normal reconciliation and partial-work recovery. Verify PASS and commit: `fix(enterprise): make issue reconciliation replay-safe`.
 
 ## REFERENCES LOADED
 - `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md` — issue reconciliation algorithm, proof requirements, and `ISSUE_REQUIRED` behavior.
@@ -989,7 +989,7 @@ Complexity: standard
 Justification: Issue creation is a single remote mapping but has high ownership risk. Isolating it lets the handler prove exact identity, cardinality, repository, state, and replay behavior without coupling to PR or closure logic.
 
 ## SANDWICH CONTEXT
-[CRITICAL: A succeeded event is read-only: validate proof from Core's nested `event.delivery.proof_ref/hash`, return it unchanged if event-bound and valid, and fail closed before GitHub/local writes if missing or mismatched. Never fall back to top-level proof fields.]
+[CRITICAL: A succeeded event is read-only: validate proof from Core's nested `event.delivery.proof_ref/hash`, return it unchanged if event-bound and valid, and fail closed before GitHub/local writes if missing or mismatched. Claimed/pending/retryable/reconciling events may reconcile; terminal and unknown statuses may not. Never fall back to top-level proof fields.]
 You are implementing the Enterprise handler for `spec-approved`.
 Spec: `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md`
 Files in scope: `enterprise/issue-handler.js` and `test/enterprise-issue.test.js`; import the read-only shared seams from T7 without modifying them.
@@ -1000,7 +1000,7 @@ Architecture rule: metadata-first lookup, exact identity search, one owned open 
 Given no owned issue and zero exact matches, When `spec-approved` is processed, Then one issue is created and proof is recorded.
 Given one owned open exact match, When processed, Then it is reconciled without a duplicate.
 Given multiple/foreign/closed/conflicting matches, When evaluated, Then the handler stops with no remote mutation; zero exact open matches are handled by the creation path above.
-Given a succeeded event replay with valid nested delivery proof, When processed, Then the same event-bound proof is returned without GitHub or metadata writes; missing/mismatched nested proof fails closed. Pending/retryable/reconciling events retain the reconciliation path.
+Given a succeeded event replay with valid nested delivery proof, When processed, Then the same event-bound proof is returned without GitHub or metadata writes; missing/mismatched nested proof fails closed. Claimed/pending/retryable/reconciling events retain the reconciliation path; terminal and unknown statuses are rejected.
 Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
 ## QUALITY BAR
@@ -1085,7 +1085,7 @@ Steps:
    Test doubles: deterministic fake GitHub API with call recording; real identity helper behavior.
    Expected RED: `succeeded` currently enters reconciliation, nested delivery proof is ignored, and the current hash is not bound to event ID; reconciling recovery must remain functional.
 14. Run test — verify FAIL: `node --test test/enterprise-phase.test.js`
-15. Implement a succeeded-only read-only guard that validates nested Core delivery proof against a recomputable per-phase record bound to event ID, plan/phase, PR, and fingerprints; fail closed on missing/mismatch and keep remote reconciliation only for pending/retryable/reconciling. Verify PASS, refactor while green, and commit: `fix(enterprise): make phase reporting idempotent`.
+15. Implement a succeeded-only read-only guard that validates nested Core delivery proof against a recomputable per-phase record bound to event ID, plan/phase, PR, and fingerprints; fail closed on missing/mismatch and keep remote reconciliation eligible for claimed/pending/retryable/reconciling. Verify PASS, refactor while green, and commit: `fix(enterprise): make phase reporting idempotent`.
 
 ## REFERENCES LOADED
 - `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md` — PR markers, fingerprints, `PR_REQUIRED`, and no-auto-create rules.
@@ -1099,7 +1099,7 @@ Complexity: deep
 Justification: Phase reporting combines PR ownership, marker races, review-thread reconciliation, fingerprints, metadata migration, and remote-success/local-ledger recovery. It needs an independent integration boundary and explicit fake transport.
 
 ## SANDWICH CONTEXT
-[CRITICAL: A valid `succeeded` event returns its event-bound proof from nested `event.delivery.proof_ref/hash` without GitHub or metadata writes; missing/mismatched proof fails closed. Only pending/retryable/reconciling may reconcile markers and fingerprints; never auto-create a PR.]
+[CRITICAL: A valid `succeeded` event returns its event-bound proof from nested `event.delivery.proof_ref/hash` without GitHub or metadata writes; missing/mismatched proof fails closed. Claimed/pending/retryable/reconciling may reconcile markers and fingerprints; terminal and unknown statuses are rejected. Never auto-create a PR.]
 You are implementing deterministic `phase-complete` synchronization.
 Spec: `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md`
 Files in scope: `enterprise/phase-handler.js`, `cli/lib/identity.js`, `cli/lib/bodies.js`, and `cli/commands/format.js` read-only for reuse, plus `test/enterprise-phase.test.js`; import the read-only Enterprise seams from T7 without modifying them.
@@ -1109,7 +1109,7 @@ Architecture rule: use current origin, exact branch/phase identity, marker upser
 ## DELIVERABLE
 Given an owned open PR, When phase-complete is processed, Then the canonical summary marker and v4 fingerprints are upserted exactly once.
 Given a missing/ambiguous/foreign/closed/mismatched PR, When processed, Then `PR_REQUIRED` or manual resolution is returned without remote mutation.
-Given a valid `succeeded` event proof, When replayed, Then the exact proof is returned read-only; missing/mismatched proof is terminal before remote/local mutation. Given `pending`, `retryable`, or `reconciling` after partial remote success/local-ledger failure, When processed, Then existing markers and finding threads reconcile without duplicates.
+Given a valid `succeeded` event proof, When replayed, Then the exact proof is returned read-only; missing/mismatched proof is terminal before remote/local mutation. Given `claimed`, `pending`, `retryable`, or `reconciling`, When processed, Then normal reconciliation can complete or recover partial remote success/local-ledger failure without duplicate markers or finding threads.
 Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
 ## QUALITY BAR
@@ -1144,7 +1144,7 @@ Escalate when: the implementation proposes replacing marker proof with a new rem
 ### Task 10: Reconcile plan-closed tasklist and closeout proof [depends: T7] [parallel: T8] [test-risk]
 
 ## OBJECTIVE
-Implement the `plan-closed` handler using the existing tasklist marker and additive metadata, while writing local `closeout.md` as informational output. A valid Core `succeeded` event replays its nested, event-bound `event.delivery.proof_ref/hash` read-only; missing or mismatched proof fails closed. Only pending/retryable/reconciling events may repair or reconcile, and the handler never merges a PR or calls `gh issue close`.
+Implement the `plan-closed` handler using the existing tasklist marker and additive metadata, while writing local `closeout.md` as informational output. A valid Core `succeeded` event replays its nested, event-bound `event.delivery.proof_ref/hash` read-only; missing or mismatched proof fails closed. Claimed/pending/retryable/reconciling events may repair or reconcile; terminal and unknown statuses are rejected. The handler never merges a PR or calls `gh issue close`.
 
 Steps:
 1. Write failing test for: plan-closed finalizes tasklist and local closeout without closing or merging remotely.
@@ -1209,7 +1209,7 @@ Complexity: standard
 Justification: Closure has a smaller remote surface than phase reporting but is safety-critical because accidental issue closure or merge would violate the human gate. Isolating the tasklist marker from informational closeout text makes replay identity explicit.
 
 ## SANDWICH CONTEXT
-[CRITICAL: For `succeeded`, validate Core's nested `event.delivery.proof_ref/hash` against the event-bound persisted tasklist record and return read-only; missing/mismatched proof fails closed before GitHub or local output writes. Keep pending/retryable/reconciling repair behavior and never merge or call `gh issue close`.]
+[CRITICAL: For `succeeded`, validate Core's nested `event.delivery.proof_ref/hash` against the event-bound persisted tasklist record and return read-only; missing/mismatched proof fails closed before GitHub or local output writes. Keep claimed/pending/retryable/reconciling repair behavior, reject terminal/unknown statuses, and never merge or call `gh issue close`.]
 You are implementing deterministic `plan-closed` synchronization.
 Spec: `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md`
 Files in scope: `enterprise/closure-handler.js`, `cli/lib/bodies.js` and `cli/commands/format.js` read-only for reuse, and `test/enterprise-closeout.test.js`; import the read-only Enterprise seams from T7 without modifying them.
@@ -1220,7 +1220,7 @@ Architecture rule: preserve the existing human merge gate and local closeout art
 Given a valid plan-closed event and owned issue, When processed, Then tasklist proof, final metadata, and local closeout are written exactly once.
 Given a valid succeeded nested proof, When replayed, Then return the same proof without GitHub, metadata, or closeout writes; missing/mismatched proof fails closed.
 Given tasklist success followed by ledger timeout with `delivery.status: reconciling`, When replayed, Then the existing marker is repaired without duplication.
-Given pending/retryable/reconciling status, When processed, Then permitted reconciliation continues; ineligible statuses never become a write path.
+Given claimed/pending/retryable/reconciling status, When processed, Then permitted reconciliation and partial-work recovery continue; terminal and unknown statuses never become a write path.
 Given missing/ambiguous issue, When processed, Then the handler stops safely with an actionable status.
 Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
@@ -1228,7 +1228,7 @@ Format: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 Must-have:
   - Tasklist marker is the only remote idempotency marker for closure.
   - Closeout file is written locally with normalized content and does not become a remote identity key.
-  - Pending/retryable/reconciling remote results are reconciled before retry mutation; succeeded events are read-only and validate nested event-bound proof.
+  - Claimed/pending/retryable/reconciling remote results are reconciled before retry mutation; succeeded events are read-only and validate nested event-bound proof.
   - Tests assert no merge and no `gh issue close` invocation.
 
 Must-not-have:

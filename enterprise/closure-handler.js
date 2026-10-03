@@ -29,7 +29,7 @@ const {
   upsertTasklist,
 } = require('./closure-tasklist');
 
-const RECONCILABLE_DELIVERY_STATUSES = new Set(['pending', 'retryable', 'reconciling']);
+const RECONCILABLE_DELIVERY_STATUSES = new Set(['claimed', 'pending', 'retryable', 'reconciling']);
 const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 function validateEventAndPaths(event, opts, eventId) {
@@ -329,7 +329,7 @@ function handlePlanClosed(event, opts = {}) {
   if (event.delivery.status === 'succeeded') return replayClosureProof(event, opts, eventId);
   if (!RECONCILABLE_DELIVERY_STATUSES.has(event.delivery.status)) {
     return adapterResult(eventId, 'terminal', 'CLOSEOUT_DELIVERY_INELIGIBLE',
-      'Only pending, retryable, or reconciling closure events may enter remote reconciliation.', false);
+      'Only claimed, pending, retryable, or reconciling closure events may enter remote reconciliation.', false);
   }
   const context = prepareClosure(event, opts, eventId);
   if (!context.ok) return context.result;

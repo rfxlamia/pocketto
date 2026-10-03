@@ -11,6 +11,7 @@ const { invokeAdapter, readAdapterRegistration } = require('../cli/lib/lifecycle
 const enterpriseMeta = require('../enterprise/meta');
 
 const CLI = path.resolve(__dirname, '../enterprise/cli.js');
+const CORE_CLI = path.resolve(__dirname, '../cli/index.js');
 const DISPATCH = path.resolve(__dirname, '../enterprise/dispatch.js');
 const PLAN_ID = 'registered-runner-fixture';
 const REPOSITORY = 'acme/pocketto';
@@ -49,6 +50,38 @@ function runCli(args) {
     try { json = JSON.parse(stdout); } catch { /* keep null */ }
     return { exit: error.status ?? 1, stdout, json };
   }
+}
+
+function runCoreCli(args, options) {
+  const stdout = execFileSync(process.execPath, [CORE_CLI, ...args], {
+    encoding: 'utf8',
+    cwd: options.cwd,
+    env: options.env,
+  });
+  return { stdout, json: JSON.parse(stdout) };
+}
+
+function writeDispatchObserver(root) {
+  const observerPath = path.join(root, 'observe-dispatch.js');
+  fs.writeFileSync(observerPath, `'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const childProcess = require('node:child_process');
+const originalSpawnSync = childProcess.spawnSync;
+childProcess.spawnSync = function observeAdapterEvent(command, args, options) {
+  if (command === process.execPath && Array.isArray(args)
+      && args[0] === process.env.ENTERPRISE_DISPATCH_PATH) {
+    const eventPath = args.find((arg) => typeof arg === 'string' && path.basename(arg) === 'event.json');
+    if (eventPath) {
+      const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+      fs.appendFileSync(process.env.ADAPTER_EVENT_TRACE,
+        JSON.stringify({ event_id: event.event_id, delivery_status: event.delivery.status }) + '\\n');
+    }
+  }
+  return originalSpawnSync.call(this, command, args, options);
+};
+`);
+  return observerPath;
 }
 
 function createFixture(t) {
@@ -388,6 +421,77 @@ test('Core invokes the packaged Enterprise runner for all concrete handlers thro
     assert.ok(!serialized.includes(PR_URL), 'adapter responses must not contain remote PR URLs');
   }
   assert.ok(readCalls(tracePath).length > 0, 'all remote operations must pass through the fake gh executable');
+});
+
+test('Core drain dispatches claimed spec, phase, and closure events through the registered Enterprise executable', (t) => {
+  const fixture = createFixture(t);
+  const tracePath = path.join(fixture.root, 'fake-gh-drain.jsonl');
+  const eventTracePath = path.join(fixture.root, 'adapter-events.jsonl');
+  fs.writeFileSync(tracePath, '');
+  fs.writeFileSync(eventTracePath, '');
+  const fakeGh = writeFakeGh(fixture.root, tracePath);
+  const observerPath = writeDispatchObserver(fixture.root);
+  const installed = runCli(['install', fixture.root, '--json']);
+  assert.equal(installed.exit, 0, `default install must register the executable adapter: ${installed.stdout}`);
+  assert.equal(installed.json.ok, true);
+
+  const lifecyclePath = path.join(fixture.specDir, 'lifecycle.json');
+  const lifecycle = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+  const events = [fixture.specEvent, fixture.phaseEvent, fixture.closeEvent].map((event) => ({
+    ...event,
+    delivery: { status: 'pending', attempts: 0 },
+  }));
+  lifecycle.plan.revision = events.length;
+  lifecycle.events = events;
+  fs.writeFileSync(lifecyclePath, `${JSON.stringify(lifecycle, null, 2)}\n`);
+
+  const env = {
+    ...process.env,
+    PATH: `${fakeGh.binDir}${path.delimiter}${process.env.PATH || ''}`,
+    FAKE_GH_TRACE: tracePath,
+    GITHUB_TOKEN: 'ghp_drain_secret_must_never_escape',
+    POCKETTO_LIFECYCLE_NOW: '2026-09-19T12:00:00.000Z',
+    ADAPTER_EVENT_TRACE: eventTracePath,
+    ENTERPRISE_DISPATCH_PATH: DISPATCH,
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${observerPath}`].filter(Boolean).join(' '),
+  };
+  const drain = runCoreCli(
+    ['lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3'],
+    { cwd: fixture.root, env },
+  );
+  assert.equal(drain.json.ok, true, `Core drain should return its JSON envelope: ${drain.stdout}`);
+  const observed = fs.readFileSync(eventTracePath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.deepEqual(observed[0], {
+    event_id: events[0].event_id,
+    delivery_status: 'claimed',
+  }, 'Core must persist claimed before invoking the registered Enterprise executable');
+  assert.deepEqual(drain.json.data.deliveries.map(({ event_id, status }) => ({ event_id, status })),
+    events.map((event) => ({ event_id: event.event_id, status: 'succeeded' })),
+    `normal claimed attempts must reconcile instead of terminal-failing: ${JSON.stringify(drain.json.data.deliveries)}`);
+  assert.deepEqual(observed, events.map((event) => ({
+    event_id: event.event_id,
+    delivery_status: 'claimed',
+  })), 'all three real adapter invocations must receive the Core claimed state');
+
+  const persisted = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+  assert.equal(persisted.events.length, 3, 'drain must not create lifecycle events');
+  assert.deepEqual(persisted.events.map((event) => event.event_id), events.map((event) => event.event_id));
+  assert.ok(persisted.events.every((event) => event.delivery.status === 'succeeded'));
+  assert.ok(persisted.events.every((event) => typeof event.delivery.proof_ref === 'string'
+    && /^[0-9a-f]{64}$/.test(event.delivery.proof_hash || '')));
+
+  const ghCalls = readCalls(tracePath);
+  assert.ok(ghCalls.some((args) => args[0] === 'issue' && args[1] === 'view' && args[2] === String(ISSUE_NUMBER)),
+    'claimed spec-approved must reach T8 issue reconciliation');
+  assert.ok(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === String(PR_NUMBER)),
+    'claimed phase-complete must reach T9 PR reconciliation');
+  assert.ok(ghCalls.some((args) => args[0] === 'api' && args[1] === 'graphql'),
+    'claimed phase-complete must run T9 review-thread reconciliation');
+  assert.ok(ghCalls.some((args) => args[0] === 'api'
+    && args[1] === `repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments`),
+  'claimed plan-closed must reach T10 tasklist marker reconciliation');
+  assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), true,
+    'T10 must write its local closeout after the claimed attempt');
 });
 
 test('registered event runner fails closed before GitHub calls and keeps diagnostics secret-free', (t) => {

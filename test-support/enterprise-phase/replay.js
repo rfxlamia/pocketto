@@ -84,18 +84,38 @@ test('RED cycle 5: missing, mismatched, or differently-bound succeeded proof fai
   }
 });
 
-test('RED cycle 5: claimed delivery is ineligible for phase reconciliation', (t) => {
+test('RED cycle 5: claimed delivery enters normal phase reconciliation', (t) => {
   const fixture = createFixture(t);
-  fixture.event.delivery.status = 'claimed';
-  const metadataPath = enterpriseMeta.resolveMetaPath(fixture.specDir);
-  const before = fs.readFileSync(metadataPath, 'utf8');
+  fixture.event.delivery = { status: 'claimed', attempts: 1 };
   const handler = loadPhaseHandler();
+
   const response = handler.handlePhaseComplete(fixture.event, handlerOptions(fixture));
 
-  assert.equal(response.status, 'terminal', JSON.stringify(response));
-  assert.equal(response.error.code, 'PHASE_DELIVERY_INELIGIBLE');
-  assert.deepEqual(fixture.remote.calls, [], 'claimed delivery must not enter the remote-write path');
-  assert.equal(fs.readFileSync(metadataPath, 'utf8'), before);
+  assert.equal(response.status, 'succeeded', JSON.stringify(response));
+  assert.equal(response.event_id, fixture.event.event_id);
+  assert.ok(fixture.remote.calls.some((args) => args[0] === 'pr' && args[1] === 'view'),
+    'claimed event must reconcile against its existing PR');
+  assert.ok(fixture.remote.calls.some((args) => args[0] === 'api' && args[1] === 'graphql'),
+    'claimed event must run normal review-thread reconciliation');
+  assert.equal(enterpriseMeta.readMetaFor(fixture.specDir).phases['phase-1'].review.proof.event_id, fixture.event.event_id);
+});
+
+test('RED cycle 5: terminal and unknown delivery statuses remain rejected', async (t) => {
+  for (const status of ['terminal', 'unknown']) {
+    await t.test(`${status} delivery cannot reconcile phase evidence`, (t) => {
+      const fixture = createFixture(t);
+      fixture.event.delivery = { status, attempts: 1 };
+      const metadataPath = enterpriseMeta.resolveMetaPath(fixture.specDir);
+      const before = fs.readFileSync(metadataPath, 'utf8');
+      const handler = loadPhaseHandler();
+
+      const response = handler.handlePhaseComplete(fixture.event, handlerOptions(fixture));
+
+      assert.notEqual(response.status, 'succeeded', JSON.stringify(response));
+      assert.deepEqual(fixture.remote.calls, []);
+      assert.equal(fs.readFileSync(metadataPath, 'utf8'), before);
+    });
+  }
 });
 
 test('RED cycle 5: reconciling replay repairs markers and finding threads', (t) => {

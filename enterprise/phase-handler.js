@@ -12,7 +12,7 @@ const { resolveRepository, resolveOwnedIssue, resolvePhasePr } = require('./phas
 const { readPriorFingerprints, reconcileFindings } = require('./phase-handler-findings');
 const { PhaseHandlerError, phaseFailure, safeMessage } = require('./phase-handler-errors');
 
-const RECONCILABLE_DELIVERY_STATUSES = new Set(['pending', 'retryable', 'reconciling']);
+const RECONCILABLE_DELIVERY_STATUSES = new Set(['claimed', 'pending', 'retryable', 'reconciling']);
 const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 function handlePhaseComplete(event, options = {}) {
@@ -27,7 +27,7 @@ function handlePhaseComplete(event, options = {}) {
     const phase = readPhaseEvidence(event, context);
     if (event.delivery.status === 'succeeded') return replayPhaseProof(event, context, phase);
     if (!RECONCILABLE_DELIVERY_STATUSES.has(event.delivery.status)) {
-      throw new PhaseHandlerError('PHASE_DELIVERY_INELIGIBLE', 'Only pending, retryable, or reconciling phase events may enter remote reconciliation.');
+      throw new PhaseHandlerError('PHASE_DELIVERY_INELIGIBLE', 'Only claimed, pending, retryable, or reconciling phase events may enter remote reconciliation.');
     }
 
     const repo = resolveRepository(options);

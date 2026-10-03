@@ -40,8 +40,8 @@ function handleSpecApproved(event, opts = {}) {
   const spec = specContext(event, projectRoot);
   if (spec.error) return resultError(event, 'STALE_ARTIFACT', `${spec.error}; verify the committed spec artifact before retrying.`);
   if (event.delivery.status === 'succeeded') return replayIssueProof(event, spec);
-  if (!['pending', 'retryable', 'reconciling'].includes(event.delivery.status)) {
-    return resultError(event, 'ISSUE_DELIVERY_INELIGIBLE', 'Only pending, retryable, or reconciling issue events may enter remote reconciliation.');
+  if (!['claimed', 'pending', 'retryable', 'reconciling'].includes(event.delivery.status)) {
+    return resultError(event, 'ISSUE_DELIVERY_INELIGIBLE', 'Only claimed, pending, retryable, or reconciling issue events may enter remote reconciliation.');
   }
 
   const runner = opts.ghRunner;
