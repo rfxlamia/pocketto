@@ -1,0 +1,16 @@
+{
+  "slug": "v3-plan",
+  "github_issue": {
+    "number": 73,
+    "url": "https://example.invalid/pocketto/issues/73"
+  },
+  "phases": {
+    "phase-1": {
+      "github_pr": {
+        "number": 74,
+        "url": "https://example.invalid/pocketto/pull/74"
+      }
+    }
+  },
+  "external_tracker": null
+}

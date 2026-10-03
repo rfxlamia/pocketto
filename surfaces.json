@@ -57,6 +57,7 @@
         "cli/lib/git.js",
         "cli/lib/identity.js",
         "cli/lib/lifecycle-contract.js",
+        "cli/lib/lifecycle-migration.js",
         "cli/lib/lifecycle-store.js",
         "cli/lib/lifecycle-transition.js",
         "cli/lib/logjson.js",
@@ -182,6 +183,7 @@
         "cli/lib/git.js",
         "cli/lib/identity.js",
         "cli/lib/lifecycle-contract.js",
+        "cli/lib/lifecycle-migration.js",
         "cli/lib/lifecycle-store.js",
         "cli/lib/lifecycle-transition.js",
         "cli/lib/logjson.js",
@@ -286,7 +288,8 @@
     "cli/lib/version.js": "core",
     "skills/create-pr/**": "enterprise",
     "skills/pocket-development/references/enterprise-reporting.md": "enterprise",
-    "skills/pocket-enterprise/**": "enterprise"
+    "skills/pocket-enterprise/**": "enterprise",
+    "cli/lib/lifecycle-migration.js": "core"
   },
   "cli_boundary": {
     "loader": "cli/index.js",

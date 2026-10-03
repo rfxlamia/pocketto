@@ -115,6 +115,7 @@ function parseArgs(argv) {
     sha: null,
     allowDuplicateSha: false,
     artifact: [],
+    from: null,
   };
 
   // A flag that takes a value must actually have one — guard against it being
@@ -167,6 +168,8 @@ function parseArgs(argv) {
     else if (a === '--allow-duplicate-sha') flags.allowDuplicateSha = true;
     else if (a === '--artifact') flags.artifact.push(requireValue(argv[++i], '--artifact'));
     else if (a.startsWith('--artifact=')) flags.artifact.push(requireValue(a.slice('--artifact='.length), '--artifact'));
+    else if (a === '--from') flags.from = requireValue(argv[++i], '--from');
+    else if (a.startsWith('--from=')) flags.from = requireValue(a.slice('--from='.length), '--from');
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -206,6 +209,7 @@ Usage:
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
   pocketto-pi log update <plan_dir> <phase_file> --correction <sha> [--for-task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
+  pocketto-pi lifecycle migrate <spec_dir> --from v3      [--json] [--contract 3]
   pocketto-pi meta get   <dir> <field>                    [--json]
   pocketto-pi meta set   <dir> <field> <value>            [--json]
   pocketto-pi doctor                                      [--strict] [--json]
@@ -311,6 +315,7 @@ function main() {
       const result = lifecycle.run({
         positionals: positionals.slice(1),
         artifacts: flags.artifact,
+        from: flags.from,
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'meta') {
