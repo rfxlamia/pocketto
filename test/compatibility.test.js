@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const enterpriseRegistration = require('../enterprise/registration');
 
 const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'cli', 'index.js');
@@ -51,7 +52,7 @@ function runCli(args, options = {}) {
   let json = null;
   try {
     json = JSON.parse(result.stdout.trim());
-  } catch (_) {
+  } catch {
     // Preserve stdout/stderr for a useful assertion message.
   }
   return { status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, json };
@@ -95,7 +96,7 @@ function createAtomicObserver(tempRoot, targetPath) {
   fs.writeFileSync(trace, '');
   fs.writeFileSync(preload, `const fs = require('node:fs');
 const path = require('node:path');
-const target = path.resolve(process.env.ATOMIC_TARGET);
+const target = path.resolve(process.env.ATOMIC_TARGET || ${JSON.stringify(targetPath)});
 const trace = process.env.ATOMIC_TRACE;
 const writeFileSync = fs.writeFileSync;
 const renameSync = fs.renameSync;
@@ -254,4 +255,52 @@ test('RED CYCLE 3: v3 progress refuses migration with PIN_V3_REQUIRED and no fil
     assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', `${scenario.name}: refusal must not invoke the adapter`);
     assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', `${scenario.name}: refusal must not invoke GitHub`);
   }
+});
+
+test('RED CYCLE 4: an active v3 workflow runs locally and a v4-aware boundary records its upgrade warning', (t) => {
+  const fixture = copyV3Plan(t);
+  const logPath = path.join(fixture.specDir, 'log.json');
+  const log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+  log.phases[0].status = 'REVIEW';
+  log.phases[0].tasks[0].status = 'DONE';
+  log.phases[0].tasks[0].done_sha = 'abcdef0123456789abcdef0123456789abcdef01';
+  fs.writeFileSync(logPath, `${JSON.stringify(log, null, 2)}\n`);
+  const remote = installRecordingRemoteBoundary(fixture.specDir, fixture.tempRoot);
+  const before = snapshotTree(fixture.specDir);
+  const sourceFixtureBefore = snapshotTree(V3_FIXTURE);
+  const legacyRunner = path.join(V3_FIXTURE, 'legacy-runner.js');
+
+  const legacy = spawnSync(process.execPath, [legacyRunner, fixture.specDir], {
+    cwd: fixture.specDir,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${remote.binDir}${path.delimiter}${process.env.PATH || ''}`,
+      REMOTE_CALLS: remote.remoteCalls,
+      GH_CALLS: remote.ghCalls,
+    },
+  });
+  assert.equal(legacy.status, 0, `legacy runner must remain operational: ${legacy.stdout}${legacy.stderr}`);
+  const legacyResult = JSON.parse(legacy.stdout.trim());
+  assert.equal(legacyResult.ok, true);
+  assert.equal(legacyResult.workflow_version, 3);
+  assert.equal(legacyResult.phase_status, 'REVIEW');
+  assert.doesNotMatch(legacy.stdout, /v4|upgrade/i, 'an unchanged v3 runner must not predict a future release');
+  assert.equal(fs.existsSync(path.join(fixture.specDir, 'lifecycle.json')), false, 'legacy workflow must not require v4 lifecycle state');
+
+  const checked = enterpriseRegistration.preflight(fixture.specDir, {
+    getCoreInfo: () => ({ present: true, packageMajor: 3, releaseMajor: 3, contract: 2, lifecycleSchema: null, adapterContract: 1 }),
+    getEnterpriseInfo: () => ({ packageMajor: 3, releaseMajor: 3, adapterContract: 1 }),
+  });
+  assert.equal(checked.ok, true, `v4-aware compatibility preflight must allow the legacy pair: ${JSON.stringify(checked)}`);
+  assert.equal(checked.warning.code, 'LEGACY_V3_PAIR');
+  assert.match(checked.warning.message, /upgrade.*v4|v4.*upgrade/i);
+
+  const warningRecord = path.join(fixture.tempRoot, 'v4-upgrade-warning.json');
+  fs.writeFileSync(warningRecord, `${JSON.stringify(checked.warning, null, 2)}\n`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(warningRecord, 'utf8')), checked.warning, 'the compatibility fixture records the v4-aware warning separately from immutable v3 artifacts');
+  assert.deepEqual(snapshotTree(fixture.specDir), before, 'legacy execution and preflight must not rewrite v3 files');
+  assert.deepEqual(snapshotTree(V3_FIXTURE), sourceFixtureBefore, 'the immutable v3 source fixture must remain byte-identical');
+  assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', 'legacy execution/preflight must make no adapter call');
+  assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', 'legacy execution/preflight must make no GitHub call');
 });

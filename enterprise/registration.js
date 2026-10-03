@@ -169,15 +169,49 @@ function loadRegistration(projectRoot, deps = {}) {
   return { ok: true, code: null, message: null, record: parsed, path: target };
 }
 
+function majorFromVersion(version) {
+  const match = typeof version === 'string' ? /^(\d+)\./.exec(version) : null;
+  return match ? Number(match[1]) : null;
+}
+
+function defaultSurfaceInfo() {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'surfaces.json'), 'utf8'));
+    return {
+      releaseMajor: manifest && manifest.release ? manifest.release.major : null,
+      surfaceManifest: manifest && Number.isInteger(manifest.schema) ? manifest.schema : null,
+    };
+  } catch (_) {
+    return { releaseMajor: null, surfaceManifest: null };
+  }
+}
+
 function defaultCoreInfo() {
   if (!CORE_VERSION) {
-    return { present: false, contract: null, lifecycleSchema: null, adapterContract: null };
+    return { present: false, packageMajor: null, releaseMajor: null, contract: null, lifecycleSchema: null, adapterContract: null };
   }
   return {
     present: true,
+    packageMajor: majorFromVersion(CORE_VERSION.CLI_VERSION),
+    ...defaultSurfaceInfo(),
     contract: CORE_VERSION.CONTRACT,
     lifecycleSchema: CORE_VERSION.LIFECYCLE_SCHEMA,
     adapterContract: CORE_VERSION.ADAPTER_CONTRACT,
+  };
+}
+
+function defaultEnterpriseInfo() {
+  return {
+    packageMajor: CORE_VERSION ? majorFromVersion(CORE_VERSION.CLI_VERSION) : null,
+    ...defaultSurfaceInfo(),
+    adapterContract: CORE_VERSION ? CORE_VERSION.ADAPTER_CONTRACT : ADAPTER_CONTRACT,
+  };
+}
+
+function legacyV3Warning() {
+  return {
+    code: 'LEGACY_V3_PAIR',
+    message: 'Core v3 and Enterprise v3 remain usable on the legacy workflow. Upgrade both surfaces to v4 when ready; finish active v3 plans with the v3 CLI.',
   };
 }
 
@@ -215,6 +249,7 @@ function installRegistration(projectRoot, opts = {}) {
 // may pass a recording gh runner to prove zero remote calls.
 function preflight(projectRoot, deps = {}) {
   const getCoreInfo = deps.getCoreInfo || defaultCoreInfo;
+  const getEnterpriseInfo = deps.getEnterpriseInfo || defaultEnterpriseInfo;
   const exists = deps.exists || fs.existsSync;
 
   let core;
@@ -232,9 +267,21 @@ function preflight(projectRoot, deps = {}) {
       'No compatible Core installation was found. Install Core v4 first, then re-run enterprise preflight. No GitHub calls were made.'
     );
   }
+  let enterprise;
+  try {
+    enterprise = getEnterpriseInfo();
+  } catch (err) {
+    return fail(
+      'ENTERPRISE_SURFACE_UNVERIFIED',
+      `Enterprise release compatibility cannot be verified: ${err && err.message ? err.message : String(err)}. No GitHub calls were made.`
+    );
+  }
+  const coreMajor = core.releaseMajor ?? core.packageMajor;
+  const enterpriseMajor = enterprise && (enterprise.releaseMajor ?? enterprise.packageMajor);
+  const legacyV3Pair = coreMajor === 3 && enterpriseMajor === 3;
   const expectedContract = CORE_VERSION ? CORE_VERSION.CONTRACT : 3;
   const expectedSchema = CORE_VERSION ? CORE_VERSION.LIFECYCLE_SCHEMA : 1;
-  if (core.contract !== expectedContract || (core.lifecycleSchema != null && core.lifecycleSchema !== expectedSchema)) {
+  if (!legacyV3Pair && (core.contract !== expectedContract || (core.lifecycleSchema != null && core.lifecycleSchema !== expectedSchema))) {
     return fail(
       'ENTERPRISE_CORE_INCOMPATIBLE',
       `Core contract ${core.contract}/schema ${core.lifecycleSchema} is incompatible with Enterprise (expected contract ${expectedContract}/schema ${expectedSchema}). Upgrade Core to v4; Core remains usable and no GitHub calls were made.`
@@ -256,7 +303,7 @@ function preflight(projectRoot, deps = {}) {
     let present = false;
     try {
       present = exists(resolved);
-    } catch (_) {
+    } catch {
       present = false;
     }
     if (!present) {
@@ -267,7 +314,7 @@ function preflight(projectRoot, deps = {}) {
     }
   }
 
-  return {
+  const result = {
     ok: true,
     code: null,
     message: null,
@@ -275,6 +322,8 @@ function preflight(projectRoot, deps = {}) {
     path: loaded.path,
     core,
   };
+  if (legacyV3Pair) result.warning = legacyV3Warning();
+  return result;
 }
 
 module.exports = {
