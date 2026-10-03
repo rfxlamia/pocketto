@@ -135,6 +135,51 @@ function serializeLifecycle(doc) {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
+function matchesLifecycleIdentity(doc, specDir, planId) {
+  return isObject(doc)
+    && doc.schema === LIFECYCLE_SCHEMA
+    && isObject(doc.plan)
+    && doc.plan.plan_id === planId
+    && typeof doc.plan.spec_dir === 'string'
+    && path.resolve(doc.plan.spec_dir) === path.resolve(specDir)
+    && Number.isInteger(doc.plan.revision)
+    && doc.plan.revision >= 0
+    && Array.isArray(doc.events);
+}
+
+function readExistingLifecycle(specDir, planId) {
+  const lifecyclePath = path.join(specDir, LIFECYCLE_FILE);
+  if (!fs.existsSync(lifecyclePath)) return null;
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+  } catch {
+    return fail('LIFECYCLE_ALREADY_EXISTS', `lifecycle document is unreadable and will not be replaced: ${lifecyclePath}`);
+  }
+  if (!matchesLifecycleIdentity(doc, specDir, planId)) {
+    return fail('LIFECYCLE_ALREADY_EXISTS', `lifecycle document belongs to another or unsupported state and will not be replaced: ${lifecyclePath}`);
+  }
+  return { ok: true, doc, created: false };
+}
+
+function migrationResult(outcome) {
+  const replayed = outcome.created === false;
+  return {
+    command: 'lifecycle migrate',
+    exit: 0,
+    human: [replayed
+      ? `v3 migration already exists for ${outcome.doc.plan.plan_id}; lifecycle revision remains ${outcome.doc.plan.revision}.`
+      : `Migrated pristine v3 snapshot for ${outcome.doc.plan.plan_id} to lifecycle.json (revision 0; no event emitted).`],
+    data: {
+      plan_id: outcome.doc.plan.plan_id,
+      revision: outcome.doc.plan.revision,
+      event_count: outcome.doc.events.length,
+      created: !replayed,
+      idempotent: replayed,
+    },
+  };
+}
+
 function runMigration({ specDir, from } = {}) {
   if (typeof specDir !== 'string' || specDir.length === 0) {
     throw new CliError('USAGE', 'Usage: pocketto-pi lifecycle migrate <spec_dir> --from v3');
@@ -153,19 +198,18 @@ function runMigration({ specDir, from } = {}) {
     throw new CliError('LIFECYCLE_BAD_SPEC_DIR', `spec_dir is not a directory: ${absoluteSpecDir}`);
   }
 
+  const planId = path.basename(absoluteSpecDir);
   const outcome = withLifecycleMutation(absoluteSpecDir, () => {
-    const lifecyclePath = path.join(absoluteSpecDir, LIFECYCLE_FILE);
-    if (fs.existsSync(lifecyclePath)) {
-      return fail('LIFECYCLE_ALREADY_EXISTS', `lifecycle document already exists: ${lifecyclePath}`);
-    }
+    const existing = readExistingLifecycle(absoluteSpecDir, planId);
+    if (existing) return existing;
     const log = readV3Snapshot(absoluteSpecDir);
     const doc = lifecycleSnapshot(absoluteSpecDir, log);
     try {
-      writeFileAtomicSync(lifecyclePath, serializeLifecycle(doc));
+      writeFileAtomicSync(path.join(absoluteSpecDir, LIFECYCLE_FILE), serializeLifecycle(doc));
     } catch (err) {
       return fail('LIFECYCLE_MIGRATION_PERSISTENCE', `could not atomically create lifecycle.json: ${err.message}`);
     }
-    return { ok: true, doc };
+    return { ok: true, doc, created: true };
   });
 
   if (!outcome || outcome.ok === false) {
@@ -173,17 +217,7 @@ function runMigration({ specDir, from } = {}) {
     const message = outcome && outcome.message ? outcome.message : 'could not serialize v3 lifecycle migration';
     throw new CliError(code, message);
   }
-  return {
-    command: 'lifecycle migrate',
-    exit: 0,
-    human: [`Migrated pristine v3 snapshot for ${outcome.doc.plan.plan_id} to lifecycle.json (revision 0; no event emitted).`],
-    data: {
-      plan_id: outcome.doc.plan.plan_id,
-      revision: outcome.doc.plan.revision,
-      event_count: outcome.doc.events.length,
-      created: true,
-    },
-  };
+  return migrationResult(outcome);
 }
 
 module.exports = {

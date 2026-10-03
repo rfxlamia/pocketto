@@ -166,3 +166,44 @@ test('RED CYCLE 1: public v3 migration atomically creates a lifecycle snapshot w
   assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', 'migration must not invoke the registered adapter');
   assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', 'migration must not invoke GitHub');
 });
+
+test('RED CYCLE 2: repeated v3 migration returns the existing identity without changing revision or bytes', (t) => {
+  const fixture = copyV3Plan(t);
+  const remote = installRecordingRemoteBoundary(fixture.specDir, fixture.tempRoot);
+  const env = {
+    ...process.env,
+    PATH: `${remote.binDir}${path.delimiter}${process.env.PATH || ''}`,
+    REMOTE_CALLS: remote.remoteCalls,
+    GH_CALLS: remote.ghCalls,
+    POCKETTO_LIFECYCLE_NOW: '2026-09-19T12:00:00.000Z',
+  };
+  const args = ['lifecycle', 'migrate', fixture.specDir, '--from', 'v3', '--json', '--contract', '3'];
+
+  const first = runCli(args, { cwd: fixture.specDir, env });
+  assert.equal(first.status, 0, `first migration should succeed: ${first.stdout}${first.stderr}`);
+  const lifecyclePath = path.join(fixture.specDir, 'lifecycle.json');
+  const lifecycleBefore = fs.readFileSync(lifecyclePath);
+  const documentBefore = JSON.parse(lifecycleBefore.toString('utf8'));
+  const v3BytesBefore = snapshotTree(fixture.specDir).filter(([relative]) => relative !== 'lifecycle.json');
+  const fullTreeBefore = snapshotTree(fixture.specDir);
+
+  const second = runCli(args, { cwd: fixture.specDir, env });
+  assert.equal(second.status, 0, `repeated migration should return the existing result: ${second.stdout}${second.stderr}`);
+  assert.equal(second.json && second.json.ok, true, `expected idempotent success envelope: ${second.stdout}`);
+  assert.equal(second.json.command, 'lifecycle migrate');
+  assert.deepEqual(
+    [second.json.data.plan_id, second.json.data.revision, second.json.data.idempotent],
+    [documentBefore.plan.plan_id, documentBefore.plan.revision, true],
+    'replay must report the existing lifecycle identity and revision',
+  );
+  assert.deepEqual(fs.readFileSync(lifecyclePath), lifecycleBefore, 'replay must not rewrite or increment lifecycle state');
+  assert.deepEqual(snapshotTree(fixture.specDir), fullTreeBefore, 'replay must make no filesystem changes');
+  assert.deepEqual(
+    snapshotTree(fixture.specDir).filter(([relative]) => relative !== 'lifecycle.json'),
+    v3BytesBefore,
+    'replay must leave all v3 bytes unchanged',
+  );
+  assert.equal(documentBefore.events.length, 0, 'migration identity must not be represented as a retrospective event');
+  assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', 'replay must not invoke the registered adapter');
+  assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', 'replay must not invoke GitHub');
+});
