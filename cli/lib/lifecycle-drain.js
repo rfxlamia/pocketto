@@ -10,6 +10,7 @@ const { failureDeliveryPatch, protocolFailure, responseDeliveryPatch } = require
 const { CLI_VERSION, SURFACE_MANIFEST } = require('./version');
 
 const ACTIVE_DELIVERY_STATUSES = new Set(['pending', 'retryable', 'claimed', 'reconciling']);
+const SUPPORTED_RELEASE_MAJORS = new Set([3, 4]);
 
 function highestContiguousSucceededRevision(doc) {
   const byRevision = new Map(doc.events.map((event) => [event.revision, event]));
@@ -41,7 +42,9 @@ function surfaceMajorAt(manifestPath) {
 
 function installedCoreMajor() {
   const manifestPath = path.resolve(__dirname, '..', '..', 'surfaces.json');
-  return surfaceMajorAt(manifestPath) ?? majorFromVersion(CLI_VERSION);
+  const releaseMajor = surfaceMajorAt(manifestPath);
+  const packageMajor = majorFromVersion(CLI_VERSION);
+  return Number.isInteger(releaseMajor) && releaseMajor === packageMajor ? releaseMajor : null;
 }
 
 function installedAdapterMajor(projectRoot, registration) {
@@ -69,7 +72,25 @@ function preflightAdapter(projectRoot) {
 
   const coreMajor = installedCoreMajor();
   const adapterMajor = installedAdapterMajor(projectRoot, loaded.registration);
-  if (Number.isInteger(coreMajor) && Number.isInteger(adapterMajor) && coreMajor !== adapterMajor) {
+  if (!Number.isInteger(coreMajor) || !Number.isInteger(adapterMajor)) {
+    return {
+      registration: null,
+      error: protocolFailure(
+        'ADAPTER_MAJOR_UNVERIFIED',
+        'Core or installed Enterprise adapter release major cannot be verified; adapter dispatch is disabled and the event remains pending.',
+      ),
+    };
+  }
+  if (!SUPPORTED_RELEASE_MAJORS.has(coreMajor) || !SUPPORTED_RELEASE_MAJORS.has(adapterMajor)) {
+    return {
+      registration: null,
+      error: protocolFailure(
+        'ADAPTER_MAJOR_UNSUPPORTED',
+        `Core v${coreMajor} or Enterprise adapter v${adapterMajor} is unsupported; install a supported release pair and keep the event pending.`,
+      ),
+    };
+  }
+  if (coreMajor !== adapterMajor) {
     let guidance = 'Install matching Core and Enterprise v4 releases';
     if (coreMajor === 3) guidance = 'Upgrade Core to v4';
     else if (adapterMajor === 3) guidance = 'Upgrade Enterprise to v4';

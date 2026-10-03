@@ -32,6 +32,7 @@ try {
 
 const REGISTRATION_SCHEMA = 1;
 const ADAPTER_CONTRACT = 1;
+const SUPPORTED_RELEASE_MAJORS = new Set([3, 4]);
 const REGISTRATION_DIR = '.pocket';
 const REGISTRATION_FILE = 'lifecycle-adapter.json';
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -227,6 +228,28 @@ function defaultEnterpriseInfo() {
   };
 }
 
+function validateReleaseMajorMetadata(info, surface) {
+  if (!info || !Number.isInteger(info.releaseMajor) || !Number.isInteger(info.packageMajor)) {
+    return fail(
+      'ENTERPRISE_MAJOR_UNVERIFIED',
+      `${surface} package and release majors must both be verifiable integers. Repair the installation; Core remains usable and no GitHub calls were made.`,
+    );
+  }
+  if (info.releaseMajor !== info.packageMajor) {
+    return fail(
+      'ENTERPRISE_MAJOR_METADATA_MISMATCH',
+      `${surface} release major ${info.releaseMajor} disagrees with package major ${info.packageMajor}. Reinstall a matching release; Core remains usable and no GitHub calls were made.`,
+    );
+  }
+  if (!SUPPORTED_RELEASE_MAJORS.has(info.releaseMajor)) {
+    return fail(
+      'ENTERPRISE_MAJOR_UNSUPPORTED',
+      `${surface} major ${info.releaseMajor} is unsupported. Install a supported v3/v3 or v4/v4 release pair; Core remains usable and no GitHub calls were made.`,
+    );
+  }
+  return { ok: true, major: info.releaseMajor };
+}
+
 function legacyV3Warning() {
   return {
     code: 'LEGACY_V3_PAIR',
@@ -295,10 +318,13 @@ function preflight(projectRoot, deps = {}) {
       `Enterprise release compatibility cannot be verified: ${err && err.message ? err.message : String(err)}. No GitHub calls were made.`
     );
   }
-  const coreMajor = core.releaseMajor ?? core.packageMajor;
-  const enterpriseMajor = enterprise && (enterprise.releaseMajor ?? enterprise.packageMajor);
-  const knownMajors = Number.isInteger(coreMajor) && Number.isInteger(enterpriseMajor);
-  if (knownMajors && coreMajor !== enterpriseMajor) {
+  const verifiedCore = validateReleaseMajorMetadata(core, 'Core');
+  if (!verifiedCore.ok) return verifiedCore;
+  const verifiedEnterprise = validateReleaseMajorMetadata(enterprise, 'Enterprise');
+  if (!verifiedEnterprise.ok) return verifiedEnterprise;
+  const coreMajor = verifiedCore.major;
+  const enterpriseMajor = verifiedEnterprise.major;
+  if (coreMajor !== enterpriseMajor) {
     let guidance = 'Install matching Core and Enterprise v4 releases';
     if (coreMajor === 3) guidance = 'Upgrade Core to v4';
     else if (enterpriseMajor === 3) guidance = 'Upgrade Enterprise to v4';
@@ -309,7 +335,7 @@ function preflight(projectRoot, deps = {}) {
   }
   const legacyV3Pair = coreMajor === 3 && enterpriseMajor === 3;
   const supportedV4Pair = coreMajor === 4 && enterpriseMajor === 4;
-  if (knownMajors && !legacyV3Pair && !supportedV4Pair) {
+  if (!legacyV3Pair && !supportedV4Pair) {
     return fail(
       'ENTERPRISE_MAJOR_UNSUPPORTED',
       `Core v${coreMajor} and Enterprise v${enterpriseMajor} are not a supported release pair. Install matching v4 releases; Core local work remains usable and no GitHub calls were made.`,
