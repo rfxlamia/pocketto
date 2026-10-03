@@ -423,7 +423,7 @@ test('Core invokes the packaged Enterprise runner for all concrete handlers thro
   assert.ok(readCalls(tracePath).length > 0, 'all remote operations must pass through the fake gh executable');
 });
 
-test('Core drain dispatches claimed spec, phase, and closure events through the registered Enterprise executable', (t) => {
+function setupRegisteredDispatch(t) {
   const fixture = createFixture(t);
   const tracePath = path.join(fixture.root, 'fake-gh-drain.jsonl');
   const eventTracePath = path.join(fixture.root, 'adapter-events.jsonl');
@@ -434,17 +434,8 @@ test('Core drain dispatches claimed spec, phase, and closure events through the 
   const installed = runCli(['install', fixture.root, '--json']);
   assert.equal(installed.exit, 0, `default install must register the executable adapter: ${installed.stdout}`);
   assert.equal(installed.json.ok, true);
-
   const lifecyclePath = path.join(fixture.specDir, 'lifecycle.json');
   const lifecycle = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
-  const events = [fixture.specEvent, fixture.phaseEvent, fixture.closeEvent].map((event) => ({
-    ...event,
-    delivery: { status: 'pending', attempts: 0 },
-  }));
-  lifecycle.plan.revision = events.length;
-  lifecycle.events = events;
-  fs.writeFileSync(lifecyclePath, `${JSON.stringify(lifecycle, null, 2)}\n`);
-
   const env = {
     ...process.env,
     PATH: `${fakeGh.binDir}${path.delimiter}${process.env.PATH || ''}`,
@@ -455,6 +446,19 @@ test('Core drain dispatches claimed spec, phase, and closure events through the 
     ENTERPRISE_DISPATCH_PATH: DISPATCH,
     NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${observerPath}`].filter(Boolean).join(' '),
   };
+  return { fixture, tracePath, eventTracePath, lifecyclePath, lifecycle, env };
+}
+
+test('Core drain dispatches claimed spec, phase, and closure events through the registered Enterprise executable', (t) => {
+  const { fixture, tracePath, eventTracePath, lifecyclePath, lifecycle, env } = setupRegisteredDispatch(t);
+  const events = [fixture.specEvent, fixture.phaseEvent, fixture.closeEvent].map((event) => ({
+    ...event,
+    delivery: { status: 'pending', attempts: 0 },
+  }));
+  lifecycle.plan.revision = events.length;
+  lifecycle.events = events;
+  fs.writeFileSync(lifecyclePath, `${JSON.stringify(lifecycle, null, 2)}\n`);
+
   const drain = runCoreCli(
     ['lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3'],
     { cwd: fixture.root, env },
