@@ -467,6 +467,9 @@ function observeFilePaths(env, root, watchedPaths) {
     const absolute = path.resolve(target);
     normalizedPaths.add(absolute);
     try { normalizedPaths.add(fs.realpathSync(absolute)); } catch { /* dangling targets retain their lexical path */ }
+    try {
+      normalizedPaths.add(path.join(fs.realpathSync(path.dirname(absolute)), path.basename(absolute)));
+    } catch { /* preserve the lexical path when the parent is unavailable */ }
   }
   fs.writeFileSync(tracePath, '');
   env.FORBIDDEN_FILE_IO_TRACE = tracePath;

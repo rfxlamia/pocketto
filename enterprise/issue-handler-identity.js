@@ -14,73 +14,96 @@ function isInside(root, candidate) {
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
-function specContext(event, projectRoot) {
-  if (!PLAN_ID_PATTERN.test(event.plan_id)) return { error: 'plan_id is not a normalized kebab-slug' };
+function resolvePhysicalSpecContext(planId, projectRoot) {
   if (typeof projectRoot !== 'string' || !path.isAbsolute(projectRoot)) {
     return { error: 'registered project root is required and must be absolute' };
   }
-  const refs = event.artifact_refs.filter((ref) => ref.root === 'spec');
-  if (refs.length === 0 || refs.length !== event.artifact_refs.length) {
-    return { error: 'spec-approved requires spec-root artifacts only' };
+
+  try {
+    const realProjectRoot = fs.realpathSync(projectRoot);
+    if (!fs.statSync(realProjectRoot).isDirectory()) return { error: 'registered project root is not a directory' };
+    const expectedSpecDir = path.resolve(realProjectRoot, 'docs', 'pocket', 'spec', planId);
+    const realSpecDir = fs.realpathSync(expectedSpecDir);
+    if (realSpecDir !== expectedSpecDir || !fs.statSync(realSpecDir).isDirectory()) {
+      return { error: 'approved spec directory does not match the selected plan directory' };
+    }
+    if (realSpecDir === realProjectRoot || !isInside(realProjectRoot, realSpecDir)) {
+      return { error: 'approved spec directory escapes the registered project root' };
+    }
+    return { projectRoot: realProjectRoot, specDir: realSpecDir };
+  } catch {
+    return { error: 'approved spec directory is unavailable' };
   }
+}
+
+function preflightArtifactRefs(refs, realSpecDir) {
+  const targets = [];
   for (const ref of refs) {
     if (path.isAbsolute(ref.path) || ref.path.split(/[\\/]/).includes('..')) {
       return { error: 'approved spec artifact path is not root-relative' };
     }
-  }
 
-  let realProjectRoot;
-  let realSpecDir;
-  try {
-    realProjectRoot = fs.realpathSync(projectRoot);
-    if (!fs.statSync(realProjectRoot).isDirectory()) return { error: 'registered project root is not a directory' };
-    const expectedSpecDir = path.resolve(realProjectRoot, 'docs', 'pocket', 'spec', event.plan_id);
-    realSpecDir = fs.realpathSync(expectedSpecDir);
-    if (realSpecDir !== expectedSpecDir || !fs.statSync(realSpecDir).isDirectory()) {
-      return { error: 'approved spec directory does not match the selected plan directory' };
-    }
-    const projectRelative = path.relative(realProjectRoot, realSpecDir);
-    if (projectRelative === '' || projectRelative === '..'
-        || projectRelative.startsWith(`..${path.sep}`) || path.isAbsolute(projectRelative)) {
-      return { error: 'approved spec directory escapes the registered project root' };
-    }
-  } catch {
-    return { error: 'approved spec directory is unavailable' };
-  }
-
-  const targets = [];
-  for (const ref of refs) {
     const artifactPath = path.resolve(realSpecDir, ref.path);
-    const relative = path.relative(realSpecDir, artifactPath);
-    if (relative === '' || !isInside(realSpecDir, artifactPath)) {
+    if (artifactPath === realSpecDir || !isInside(realSpecDir, artifactPath)) {
       return { error: 'approved spec artifact escapes the current plan directory' };
     }
+
     let realArtifact;
     try {
       realArtifact = fs.realpathSync(artifactPath);
-    } catch (err) {
-      return { error: `approved spec artifact is unavailable (${err && err.code === 'ENOENT' ? 'not found' : 'read failed'})` };
+    } catch (error) {
+      const reason = error && error.code === 'ENOENT' ? 'not found' : 'read failed';
+      return { error: `approved spec artifact is unavailable (${reason})` };
     }
-    const realRelative = path.relative(realSpecDir, realArtifact);
-    if (realRelative === '' || !isInside(realSpecDir, realArtifact)) {
+    if (realArtifact === realSpecDir || !isInside(realSpecDir, realArtifact)) {
       return { error: 'approved spec artifact escapes the current plan directory' };
     }
     targets.push({ ref, realArtifact });
   }
+  return { targets };
+}
 
-  const { ref, realArtifact } = targets[0];
+function readSelectedArtifact({ ref, realArtifact }) {
   let markdown;
   try {
     if (!fs.statSync(realArtifact).isFile()) return { error: 'approved spec artifact is not a file' };
     markdown = fs.readFileSync(realArtifact, 'utf8');
-  } catch (err) {
-    return { error: `approved spec artifact is unavailable (${err && err.code === 'ENOENT' ? 'not found' : 'read failed'})` };
+  } catch (error) {
+    const reason = error && error.code === 'ENOENT' ? 'not found' : 'read failed';
+    return { error: `approved spec artifact is unavailable (${reason})` };
   }
   const actualHash = crypto.createHash('sha256').update(markdown).digest('hex');
   if (actualHash !== ref.sha256) return { error: 'approved spec artifact hash does not match the event' };
+  return { markdown };
+}
+
+function specContext(event, projectRoot) {
+  if (!PLAN_ID_PATTERN.test(event.plan_id)) return { error: 'plan_id is not a normalized kebab-slug' };
+  const refs = event.artifact_refs.filter((ref) => ref.root === 'spec');
+  if (refs.length === 0 || refs.length !== event.artifact_refs.length) {
+    return { error: 'spec-approved requires spec-root artifacts only' };
+  }
+
+  const physical = resolvePhysicalSpecContext(event.plan_id, projectRoot);
+  if (physical.error) return physical;
+  const preflight = preflightArtifactRefs(refs, physical.specDir);
+  if (preflight.error) return preflight;
+
+  const selected = readSelectedArtifact(preflight.targets[0]);
+  if (selected.error) return selected;
+  const { ref } = preflight.targets[0];
   const specPath = `docs/pocket/spec/${event.plan_id}/${ref.path.split(path.sep).join('/')}`;
-  const metaContext = { projectRoot: realProjectRoot, specDir: realSpecDir };
-  return { projectRoot: realProjectRoot, specDir: realSpecDir, realProjectRoot, realSpecDir, metaContext, specPath, markdown, ref };
+  const metaContext = { projectRoot: physical.projectRoot, specDir: physical.specDir };
+  return {
+    projectRoot: physical.projectRoot,
+    specDir: physical.specDir,
+    realProjectRoot: physical.projectRoot,
+    realSpecDir: physical.specDir,
+    metaContext,
+    specPath,
+    markdown: selected.markdown,
+    ref,
+  };
 }
 
 function flattenIssuePages(data) {
