@@ -1,10 +1,13 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { CliError } = require('./envelope');
 const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
 const { acquireEventClaim, releaseEventClaim } = require('./lifecycle-claims');
 const { invokeAdapter, readAdapterRegistration } = require('./lifecycle-adapter');
 const { failureDeliveryPatch, protocolFailure, responseDeliveryPatch } = require('./lifecycle-retry');
+const { CLI_VERSION, SURFACE_MANIFEST } = require('./version');
 
 const ACTIVE_DELIVERY_STATUSES = new Set(['pending', 'retryable', 'claimed', 'reconciling']);
 
@@ -19,6 +22,66 @@ function currentTimeMs() {
   const now = new Date(process.env.POCKETTO_LIFECYCLE_NOW || Date.now()).getTime();
   if (!Number.isFinite(now)) throw new CliError('LIFECYCLE_BAD_CLOCK', 'lifecycle clock must be a valid timestamp');
   return now;
+}
+
+function majorFromVersion(version) {
+  const match = typeof version === 'string' ? /^(\d+)\./.exec(version) : null;
+  return match ? Number(match[1]) : null;
+}
+
+function surfaceMajorAt(manifestPath) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (manifest.schema !== SURFACE_MANIFEST || !Number.isInteger(manifest.release && manifest.release.major)) return null;
+    return manifest.release.major;
+  } catch {
+    return null;
+  }
+}
+
+function installedCoreMajor() {
+  const manifestPath = path.resolve(__dirname, '..', '..', 'surfaces.json');
+  return surfaceMajorAt(manifestPath) ?? majorFromVersion(CLI_VERSION);
+}
+
+function installedAdapterMajor(projectRoot, registration) {
+  const argv = registration && Array.isArray(registration.argv) ? registration.argv : [];
+  const candidates = argv.slice(1).filter((arg) => typeof arg === 'string' && !arg.startsWith('-'));
+  const isPathLike = (arg) => path.isAbsolute(arg) || arg.includes(path.sep);
+  const script = candidates.find((arg) => /\.(?:cjs|mjs|js)$/i.test(arg))
+    || candidates.find(isPathLike)
+    || argv.find((arg) => typeof arg === 'string' && isPathLike(arg));
+  if (typeof script !== 'string') return null;
+
+  let directory = path.dirname(path.isAbsolute(script) ? script : path.resolve(projectRoot, script));
+  while (true) {
+    const major = surfaceMajorAt(path.join(directory, 'surfaces.json'));
+    if (major !== null) return major;
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+function preflightAdapter(projectRoot) {
+  const loaded = readAdapterRegistration(projectRoot);
+  if (loaded.error || !loaded.registration) return loaded;
+
+  const coreMajor = installedCoreMajor();
+  const adapterMajor = installedAdapterMajor(projectRoot, loaded.registration);
+  if (Number.isInteger(coreMajor) && Number.isInteger(adapterMajor) && coreMajor !== adapterMajor) {
+    let guidance = 'Install matching Core and Enterprise v4 releases';
+    if (coreMajor === 3) guidance = 'Upgrade Core to v4';
+    else if (adapterMajor === 3) guidance = 'Upgrade Enterprise to v4';
+    return {
+      registration: null,
+      error: protocolFailure(
+        'ADAPTER_MAJOR_MISMATCH',
+        `Core v${coreMajor} cannot dispatch to Enterprise v${adapterMajor}. ${guidance}; the event remains pending and no remote call was made.`,
+      ),
+    };
+  }
+  return loaded;
 }
 
 function recordGap(doc, event, expectedRevision, deliveries, gaps) {
@@ -153,7 +216,7 @@ function runDrain({ specDir } = {}) {
 
   const doc = readLifecycleDoc(specDir);
   if (!doc) throw new CliError('LIFECYCLE_NOT_FOUND', `lifecycle document not found: ${specDir}`);
-  const adapter = readAdapterRegistration(process.cwd());
+  const adapter = preflightAdapter(process.cwd());
   const events = doc.events
     .filter((event) => ACTIVE_DELIVERY_STATUSES.has(event.delivery.status))
     .sort((left, right) => left.revision - right.revision);

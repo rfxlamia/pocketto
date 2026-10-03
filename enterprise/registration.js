@@ -21,10 +21,13 @@ const { writeFileAtomicSync } = require('../cli/lib/atomic-file');
 const { EVENT_TYPES } = require('../cli/lib/lifecycle-contract');
 
 let CORE_VERSION = null;
+let CORE_VERSION_PATH = null;
 try {
-  CORE_VERSION = require('../cli/lib/version');
-} catch (_) {
+  CORE_VERSION_PATH = require.resolve('../cli/lib/version');
+  CORE_VERSION = require(CORE_VERSION_PATH);
+} catch {
   CORE_VERSION = null;
+  CORE_VERSION_PATH = null;
 }
 
 const REGISTRATION_SCHEMA = 1;
@@ -158,7 +161,7 @@ function loadRegistration(projectRoot, deps = {}) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
-  } catch (_) {
+  } catch {
     return fail(
       'ENTERPRISE_REGISTRATION_MALFORMED',
       'Adapter registration is not valid JSON (partial installation?). Re-run enterprise install to repair it.'
@@ -174,15 +177,30 @@ function majorFromVersion(version) {
   return match ? Number(match[1]) : null;
 }
 
-function defaultSurfaceInfo() {
+function defaultSurfaceInfo(manifestPath = path.resolve(__dirname, '..', 'surfaces.json')) {
   try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'surfaces.json'), 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     return {
       releaseMajor: manifest && manifest.release ? manifest.release.major : null,
       surfaceManifest: manifest && Number.isInteger(manifest.schema) ? manifest.schema : null,
     };
-  } catch (_) {
+  } catch {
     return { releaseMajor: null, surfaceManifest: null };
+  }
+}
+
+function coreSurfaceManifestPath() {
+  return CORE_VERSION_PATH
+    ? path.resolve(path.dirname(CORE_VERSION_PATH), '..', '..', 'surfaces.json')
+    : path.resolve(__dirname, '..', 'surfaces.json');
+}
+
+function enterprisePackageMajor() {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8'));
+    return majorFromVersion(manifest.version);
+  } catch {
+    return null;
   }
 }
 
@@ -193,7 +211,7 @@ function defaultCoreInfo() {
   return {
     present: true,
     packageMajor: majorFromVersion(CORE_VERSION.CLI_VERSION),
-    ...defaultSurfaceInfo(),
+    ...defaultSurfaceInfo(coreSurfaceManifestPath()),
     contract: CORE_VERSION.CONTRACT,
     lifecycleSchema: CORE_VERSION.LIFECYCLE_SCHEMA,
     adapterContract: CORE_VERSION.ADAPTER_CONTRACT,
@@ -202,9 +220,9 @@ function defaultCoreInfo() {
 
 function defaultEnterpriseInfo() {
   return {
-    packageMajor: CORE_VERSION ? majorFromVersion(CORE_VERSION.CLI_VERSION) : null,
+    packageMajor: enterprisePackageMajor(),
     ...defaultSurfaceInfo(),
-    adapterContract: CORE_VERSION ? CORE_VERSION.ADAPTER_CONTRACT : ADAPTER_CONTRACT,
+    adapterContract: ADAPTER_CONTRACT,
   };
 }
 
@@ -278,13 +296,43 @@ function preflight(projectRoot, deps = {}) {
   }
   const coreMajor = core.releaseMajor ?? core.packageMajor;
   const enterpriseMajor = enterprise && (enterprise.releaseMajor ?? enterprise.packageMajor);
+  const knownMajors = Number.isInteger(coreMajor) && Number.isInteger(enterpriseMajor);
+  if (knownMajors && coreMajor !== enterpriseMajor) {
+    let guidance = 'Install matching Core and Enterprise v4 releases';
+    if (coreMajor === 3) guidance = 'Upgrade Core to v4';
+    else if (enterpriseMajor === 3) guidance = 'Upgrade Enterprise to v4';
+    return fail(
+      'ENTERPRISE_MAJOR_MISMATCH',
+      `Core v${coreMajor} and Enterprise v${enterpriseMajor} are incompatible. ${guidance}; Enterprise remains disabled, Core local work remains usable, and no GitHub calls were made.`,
+    );
+  }
   const legacyV3Pair = coreMajor === 3 && enterpriseMajor === 3;
+  const supportedV4Pair = coreMajor === 4 && enterpriseMajor === 4;
+  if (knownMajors && !legacyV3Pair && !supportedV4Pair) {
+    return fail(
+      'ENTERPRISE_MAJOR_UNSUPPORTED',
+      `Core v${coreMajor} and Enterprise v${enterpriseMajor} are not a supported release pair. Install matching v4 releases; Core local work remains usable and no GitHub calls were made.`,
+    );
+  }
   const expectedContract = CORE_VERSION ? CORE_VERSION.CONTRACT : 3;
   const expectedSchema = CORE_VERSION ? CORE_VERSION.LIFECYCLE_SCHEMA : 1;
+  const expectedAdapterContract = CORE_VERSION ? CORE_VERSION.ADAPTER_CONTRACT : ADAPTER_CONTRACT;
   if (!legacyV3Pair && (core.contract !== expectedContract || (core.lifecycleSchema != null && core.lifecycleSchema !== expectedSchema))) {
     return fail(
       'ENTERPRISE_CORE_INCOMPATIBLE',
       `Core contract ${core.contract}/schema ${core.lifecycleSchema} is incompatible with Enterprise (expected contract ${expectedContract}/schema ${expectedSchema}). Upgrade Core to v4; Core remains usable and no GitHub calls were made.`
+    );
+  }
+
+  if (
+    !legacyV3Pair
+    && enterprise
+    && enterprise.adapterContract != null
+    && enterprise.adapterContract !== expectedAdapterContract
+  ) {
+    return fail(
+      'ENTERPRISE_ADAPTER_CONTRACT_MISMATCH',
+      `Enterprise adapter contract ${enterprise.adapterContract} is incompatible with Core adapter contract ${expectedAdapterContract}. Upgrade Enterprise to a matching v4 release; Core remains usable and no GitHub calls were made.`,
     );
   }
 
