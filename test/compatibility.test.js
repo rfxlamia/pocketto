@@ -10,6 +10,7 @@ const enterpriseRegistration = require('../enterprise/registration');
 
 const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'cli', 'index.js');
+const ENTERPRISE_CLI = path.join(ROOT, 'enterprise', 'cli.js');
 const V3_FIXTURE = path.join(__dirname, 'fixtures', 'v3-plan');
 
 function tempDirectory(t, prefix = 'pocket-compat-') {
@@ -43,7 +44,7 @@ function snapshotTree(root) {
 function runCli(args, options = {}) {
   const nodeArgs = [];
   if (options.preload) nodeArgs.push('--require', options.preload);
-  nodeArgs.push(CLI, ...args);
+  nodeArgs.push(options.entrypoint || CLI, ...args);
   const result = spawnSync(process.execPath, nodeArgs, {
     cwd: options.cwd || ROOT,
     encoding: 'utf8',
@@ -296,9 +297,6 @@ test('RED CYCLE 4: an active v3 workflow runs locally and a v4-aware boundary re
   assert.equal(checked.warning.code, 'LEGACY_V3_PAIR');
   assert.match(checked.warning.message, /upgrade.*v4|v4.*upgrade/i);
 
-  const warningRecord = path.join(fixture.tempRoot, 'v4-upgrade-warning.json');
-  fs.writeFileSync(warningRecord, `${JSON.stringify(checked.warning, null, 2)}\n`);
-  assert.deepEqual(JSON.parse(fs.readFileSync(warningRecord, 'utf8')), checked.warning, 'the compatibility fixture records the v4-aware warning separately from immutable v3 artifacts');
   assert.deepEqual(snapshotTree(fixture.specDir), before, 'legacy execution and preflight must not rewrite v3 files');
   assert.deepEqual(snapshotTree(V3_FIXTURE), sourceFixtureBefore, 'the immutable v3 source fixture must remain byte-identical');
   assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', 'legacy execution/preflight must make no adapter call');
@@ -324,6 +322,7 @@ test('RED CYCLE 5: mixed-major preflight fails closed while Core preserves local
       packageMajor: major,
       releaseMajor: major,
       contract: major === 3 ? 2 : 3,
+      pipeline: major === 3 ? 4 : 5,
       lifecycleSchema: major === 3 ? null : 1,
       adapterContract: 1,
       surfaceManifest: manifest.schema,
@@ -537,4 +536,105 @@ test('RED CYCLE 5: mixed-major preflight fails closed while Core preserves local
   assert.deepEqual(snapshotLocalState(coreOnly.projectRoot), coreOnlyBefore);
   assert.equal(fs.readFileSync(coreOnly.remote.remoteCalls, 'utf8'), '', 'Core-only drain must make no adapter call');
   assert.equal(fs.readFileSync(coreOnly.remote.ghCalls, 'utf8'), '', 'Core-only drain must make no GitHub call');
+});
+
+test('v4 preflight independently rejects mismatched or missing protocol versions', (t) => {
+  const projectRoot = tempDirectory(t);
+  const installed = enterpriseRegistration.installRegistration(projectRoot, { argv: [process.execPath] });
+  assert.equal(installed.ok, true, `fixture registration should install: ${JSON.stringify(installed)}`);
+
+  const validCore = {
+    present: true,
+    packageMajor: 4,
+    releaseMajor: 4,
+    contract: 3,
+    pipeline: 5,
+    lifecycleSchema: 1,
+    adapterContract: 1,
+    surfaceManifest: 1,
+  };
+  const validEnterprise = {
+    packageMajor: 4,
+    releaseMajor: 4,
+    adapterContract: 1,
+    surfaceManifest: 1,
+  };
+  const scenarios = [
+    { name: 'Core CONTRACT mismatch', surface: 'core', field: 'contract', value: 2 },
+    { name: 'missing Core CONTRACT', surface: 'core', field: 'contract', missing: true },
+    { name: 'Core PIPELINE mismatch', surface: 'core', field: 'pipeline', value: 4 },
+    { name: 'missing Core PIPELINE', surface: 'core', field: 'pipeline', missing: true },
+    { name: 'Core LIFECYCLE_SCHEMA mismatch', surface: 'core', field: 'lifecycleSchema', value: 2 },
+    { name: 'missing Core LIFECYCLE_SCHEMA', surface: 'core', field: 'lifecycleSchema', missing: true },
+    { name: 'Core SURFACE_MANIFEST mismatch', surface: 'core', field: 'surfaceManifest', value: 2 },
+    { name: 'missing Core SURFACE_MANIFEST', surface: 'core', field: 'surfaceManifest', missing: true },
+    { name: 'Enterprise ADAPTER_CONTRACT mismatch', surface: 'enterprise', field: 'adapterContract', value: 2 },
+    { name: 'missing Enterprise ADAPTER_CONTRACT', surface: 'enterprise', field: 'adapterContract', missing: true },
+    { name: 'Enterprise SURFACE_MANIFEST mismatch', surface: 'enterprise', field: 'surfaceManifest', value: 2 },
+    { name: 'missing Enterprise SURFACE_MANIFEST', surface: 'enterprise', field: 'surfaceManifest', missing: true },
+  ];
+
+  for (const scenario of scenarios) {
+    const core = { ...validCore };
+    const enterprise = { ...validEnterprise };
+    const target = scenario.surface === 'core' ? core : enterprise;
+    if (scenario.missing) delete target[scenario.field];
+    else target[scenario.field] = scenario.value;
+
+    const checked = enterpriseRegistration.preflight(projectRoot, {
+      getCoreInfo: () => core,
+      getEnterpriseInfo: () => enterprise,
+    });
+    assert.equal(checked.ok, false, `${scenario.name} must fail closed: ${JSON.stringify(checked)}`);
+  }
+});
+
+test('public Enterprise preflight CLI emits LEGACY_V3_PAIR warning in human and JSON output', (t) => {
+  const projectRoot = tempDirectory(t);
+  const installed = enterpriseRegistration.installRegistration(projectRoot, { argv: [process.execPath] });
+  assert.equal(installed.ok, true, `fixture registration should install: ${JSON.stringify(installed)}`);
+
+  const preload = path.join(projectRoot, 'legacy-preflight.cjs');
+  const registrationPath = path.join(ROOT, 'enterprise', 'registration.js');
+  fs.writeFileSync(preload, `'use strict';
+const registration = require(${JSON.stringify(registrationPath)});
+const preflight = registration.preflight;
+registration.preflight = (root, deps = {}) => preflight(root, {
+  ...deps,
+  getCoreInfo: () => ({
+    present: true,
+    packageMajor: 3,
+    releaseMajor: 3,
+    contract: 2,
+    pipeline: 4,
+    lifecycleSchema: null,
+    adapterContract: 1,
+  }),
+  getEnterpriseInfo: () => ({
+    packageMajor: 3,
+    releaseMajor: 3,
+    adapterContract: 1,
+  }),
+});
+`);
+
+  const options = { entrypoint: ENTERPRISE_CLI, preload };
+  const human = runCli(['preflight', projectRoot], options);
+  const json = runCli(['preflight', projectRoot, '--json'], options);
+  assert.equal(human.status, 0, `human preflight should pass: ${human.stdout}${human.stderr}`);
+  assert.equal(json.status, 0, `JSON preflight should pass: ${json.stdout}${json.stderr}`);
+
+  const humanOutput = `${human.stdout}\n${human.stderr}`;
+  const warningMessage = json.json && json.json.data && json.json.data.warning && json.json.data.warning.message;
+  assert.deepEqual({
+    humanCode: /\bLEGACY_V3_PAIR\b/.exec(humanOutput)?.[0] || null,
+    humanActionable: /upgrade both surfaces to v4/i.test(humanOutput),
+    jsonCode: json.json && json.json.data && json.json.data.warning && json.json.data.warning.code || null,
+    jsonActionable: typeof warningMessage === 'string' && /upgrade both surfaces to v4/i.test(warningMessage),
+  }, {
+    humanCode: 'LEGACY_V3_PAIR',
+    humanActionable: true,
+    jsonCode: 'LEGACY_V3_PAIR',
+    jsonActionable: true,
+  }, 'the public preflight CLI must expose the v4-aware upgrade warning to operators');
 });

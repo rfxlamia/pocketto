@@ -87,11 +87,17 @@ function main(argv) {
       console.log(JSON.stringify({
         ok: true,
         command: 'enterprise-preflight',
-        data: { path: res.path, record: res.record, core: res.core },
+        data: {
+          path: res.path,
+          record: res.record,
+          core: res.core,
+          ...(res.warning ? { warning: res.warning } : {}),
+        },
         error: null,
       }));
     } else {
       console.log(`Enterprise preflight passed: ${res.path}`);
+      if (res.warning) console.warn(`${res.warning.code}: ${res.warning.message}`);
     }
     return;
   }

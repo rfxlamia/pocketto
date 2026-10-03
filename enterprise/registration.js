@@ -213,6 +213,7 @@ function defaultCoreInfo() {
     packageMajor: majorFromVersion(CORE_VERSION.CLI_VERSION),
     ...defaultSurfaceInfo(coreSurfaceManifestPath()),
     contract: CORE_VERSION.CONTRACT,
+    pipeline: CORE_VERSION.PIPELINE,
     lifecycleSchema: CORE_VERSION.LIFECYCLE_SCHEMA,
     adapterContract: CORE_VERSION.ADAPTER_CONTRACT,
   };
@@ -315,24 +316,45 @@ function preflight(projectRoot, deps = {}) {
     );
   }
   const expectedContract = CORE_VERSION ? CORE_VERSION.CONTRACT : 3;
+  const expectedPipeline = CORE_VERSION ? CORE_VERSION.PIPELINE : 5;
   const expectedSchema = CORE_VERSION ? CORE_VERSION.LIFECYCLE_SCHEMA : 1;
   const expectedAdapterContract = CORE_VERSION ? CORE_VERSION.ADAPTER_CONTRACT : ADAPTER_CONTRACT;
-  if (!legacyV3Pair && (core.contract !== expectedContract || (core.lifecycleSchema != null && core.lifecycleSchema !== expectedSchema))) {
+  const expectedSurfaceManifest = CORE_VERSION ? CORE_VERSION.SURFACE_MANIFEST : 1;
+
+  // A v3/v3 pair intentionally stays on its legacy protocol. Every v4
+  // protocol is checked independently and is required to be present.
+  if (!legacyV3Pair && (core.contract !== expectedContract || core.lifecycleSchema !== expectedSchema)) {
     return fail(
       'ENTERPRISE_CORE_INCOMPATIBLE',
       `Core contract ${core.contract}/schema ${core.lifecycleSchema} is incompatible with Enterprise (expected contract ${expectedContract}/schema ${expectedSchema}). Upgrade Core to v4; Core remains usable and no GitHub calls were made.`
     );
   }
 
-  if (
-    !legacyV3Pair
-    && enterprise
-    && enterprise.adapterContract != null
-    && enterprise.adapterContract !== expectedAdapterContract
-  ) {
+  if (!legacyV3Pair && core.pipeline !== expectedPipeline) {
+    return fail(
+      'ENTERPRISE_CORE_INCOMPATIBLE',
+      `Core pipeline ${core.pipeline} is incompatible with Enterprise (expected pipeline ${expectedPipeline}). Upgrade Core to v4; Core remains usable and no GitHub calls were made.`
+    );
+  }
+
+  if (!legacyV3Pair && core.surfaceManifest !== expectedSurfaceManifest) {
+    return fail(
+      'ENTERPRISE_CORE_INCOMPATIBLE',
+      `Core surface manifest schema ${core.surfaceManifest} is incompatible with Enterprise (expected ${expectedSurfaceManifest}). Upgrade Core to v4; Core remains usable and no GitHub calls were made.`
+    );
+  }
+
+  if (!legacyV3Pair && (!enterprise || enterprise.adapterContract !== expectedAdapterContract)) {
     return fail(
       'ENTERPRISE_ADAPTER_CONTRACT_MISMATCH',
-      `Enterprise adapter contract ${enterprise.adapterContract} is incompatible with Core adapter contract ${expectedAdapterContract}. Upgrade Enterprise to a matching v4 release; Core remains usable and no GitHub calls were made.`,
+      `Enterprise adapter contract ${enterprise && enterprise.adapterContract} is incompatible with Core adapter contract ${expectedAdapterContract}. Upgrade Enterprise to a matching v4 release; Core remains usable and no GitHub calls were made.`,
+    );
+  }
+
+  if (!legacyV3Pair && (!enterprise || enterprise.surfaceManifest !== expectedSurfaceManifest)) {
+    return fail(
+      'ENTERPRISE_SURFACE_MANIFEST_MISMATCH',
+      `Enterprise surface manifest schema ${enterprise && enterprise.surfaceManifest} is incompatible with Core (expected ${expectedSurfaceManifest}). Upgrade Enterprise to a matching v4 release; Core remains usable and no GitHub calls were made.`,
     );
   }
 
