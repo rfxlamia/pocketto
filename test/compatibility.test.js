@@ -207,3 +207,51 @@ test('RED CYCLE 2: repeated v3 migration returns the existing identity without c
   assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', 'replay must not invoke the registered adapter');
   assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', 'replay must not invoke GitHub');
 });
+
+test('RED CYCLE 3: v3 progress refuses migration with PIN_V3_REQUIRED and no file or remote changes', (t) => {
+  const scenarios = [
+    { name: 'phase REVIEW', mutate: (log) => { log.phases[0].status = 'REVIEW'; } },
+    { name: 'phase DONE', mutate: (log) => { log.phases[0].status = 'DONE'; } },
+    { name: 'phase BLOCKED', mutate: (log) => { log.phases[0].status = 'BLOCKED'; } },
+    { name: 'task progress', mutate: (log) => {
+      log.phases[0].tasks[0].status = 'DONE';
+      log.phases[0].tasks[0].done_sha = 'abcdef0123456789abcdef0123456789abcdef01';
+    } },
+    { name: 'non-pristine header', mutate: (log) => {
+      log.header.status = 'DONE';
+      log.header.date_completed = '2026-09-20';
+    } },
+    { name: 'undocumented progress field', mutate: (log) => { log.header.execution_started_at = '2026-09-19T12:00:00.000Z'; } },
+  ];
+
+  for (const scenario of scenarios) {
+    const fixture = copyV3Plan(t);
+    const logPath = path.join(fixture.specDir, 'log.json');
+    const log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+    scenario.mutate(log);
+    fs.writeFileSync(logPath, `${JSON.stringify(log, null, 2)}\n`);
+    const remote = installRecordingRemoteBoundary(fixture.specDir, fixture.tempRoot);
+    const before = snapshotTree(fixture.specDir);
+    const result = runCli([
+      'lifecycle', 'migrate', fixture.specDir,
+      '--from', 'v3', '--json', '--contract', '3',
+    ], {
+      cwd: fixture.specDir,
+      env: {
+        ...process.env,
+        PATH: `${remote.binDir}${path.delimiter}${process.env.PATH || ''}`,
+        REMOTE_CALLS: remote.remoteCalls,
+        GH_CALLS: remote.ghCalls,
+      },
+    });
+
+    assert.notEqual(result.status, 0, `${scenario.name}: migration must refuse progress`);
+    assert.equal(result.json && result.json.ok, false, `${scenario.name}: expected a JSON refusal: ${result.stdout}`);
+    assert.equal(result.json.error.code, 'PIN_V3_REQUIRED', `${scenario.name}: refusal needs stable v3 pin guidance`);
+    assert.match(result.json.error.message, /finish.*under v3|v3.*finish/i, `${scenario.name}: explain that the plan must finish on v3`);
+    assert.deepEqual(snapshotTree(fixture.specDir), before, `${scenario.name}: refusal must leave every file byte-identical`);
+    assert.equal(fs.existsSync(path.join(fixture.specDir, 'lifecycle.json')), false, `${scenario.name}: no lifecycle document may be created`);
+    assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', `${scenario.name}: refusal must not invoke the adapter`);
+    assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', `${scenario.name}: refusal must not invoke GitHub`);
+  }
+});

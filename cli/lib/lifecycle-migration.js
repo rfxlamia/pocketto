@@ -85,6 +85,13 @@ function isPristineV3Snapshot(log, specDir) {
   });
 }
 
+function pinV3RequiredError() {
+  return new CliError(
+    'PIN_V3_REQUIRED',
+    'This v3 plan has execution progress or a non-pristine header. Pin/use the v3 CLI and finish the plan under v3; migration is refused without changing v3 files.',
+  );
+}
+
 function readV3Snapshot(specDir) {
   const logPath = path.join(specDir, V3_LOG_FILE);
   let raw;
@@ -102,12 +109,7 @@ function readV3Snapshot(specDir) {
   } catch (err) {
     throw new CliError('LIFECYCLE_V3_SNAPSHOT_INVALID', `v3 log snapshot is not valid JSON: ${err.message}`);
   }
-  if (!isPristineV3Snapshot(log, specDir)) {
-    throw new CliError(
-      'LIFECYCLE_V3_SNAPSHOT_NOT_PRISTINE',
-      'v3 snapshot is not pristine; migration requires a pristine header and no phase or task progress',
-    );
-  }
+  if (!isPristineV3Snapshot(log, specDir)) throw pinV3RequiredError();
   return log;
 }
 
