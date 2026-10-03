@@ -67,6 +67,17 @@ function writeDispatchObserver(root) {
 const fs = require('node:fs');
 const path = require('node:path');
 const childProcess = require('node:child_process');
+const watchedPaths = new Set(JSON.parse(process.env.FORBIDDEN_FILE_IO_PATHS || '[]').map((item) => path.resolve(item)));
+const fileIoTrace = process.env.FORBIDDEN_FILE_IO_TRACE;
+for (const method of ['existsSync', 'statSync', 'readFileSync', 'writeFileSync']) {
+  const original = fs[method];
+  fs[method] = function observeExternalFileAccess(target, ...args) {
+    if (typeof target === 'string' && watchedPaths.has(path.resolve(target)) && fileIoTrace) {
+      fs.appendFileSync(fileIoTrace, JSON.stringify({ method, path: path.resolve(target) }) + '\\n');
+    }
+    return original.call(this, target, ...args);
+  };
+}
 const originalSpawnSync = childProcess.spawnSync;
 childProcess.spawnSync = function observeAdapterEvent(command, args, options) {
   if (command === process.execPath && Array.isArray(args)
@@ -178,6 +189,7 @@ const field = (name) => {
 if (args[0] === 'repo' && args[1] === 'view') { json(repo); process.exit(0); }
 if (args[0] === 'issue' && args[1] === 'view') { json(issue); process.exit(0); }
 if (args[0] === 'issue' && args[1] === 'list') { json([]); process.exit(0); }
+if (args[0] === 'issue' && args[1] === 'create') { process.stdout.write('${ISSUE_URL}\\n'); process.exit(0); }
 if (args[0] === 'pr' && args[1] === 'view') { json(pr); process.exit(0); }
 if (args[0] === 'pr' && args[1] === 'list') { json([pr]); process.exit(0); }
 if (args[0] === 'api' && args[1] === 'graphql') {
@@ -423,8 +435,7 @@ test('Core invokes the packaged Enterprise runner for all concrete handlers thro
   assert.ok(readCalls(tracePath).length > 0, 'all remote operations must pass through the fake gh executable');
 });
 
-function setupRegisteredDispatch(t) {
-  const fixture = createFixture(t);
+function setupRegisteredDispatch(t, fixture = createFixture(t)) {
   const tracePath = path.join(fixture.root, 'fake-gh-drain.jsonl');
   const eventTracePath = path.join(fixture.root, 'adapter-events.jsonl');
   fs.writeFileSync(tracePath, '');
@@ -447,6 +458,73 @@ function setupRegisteredDispatch(t) {
     NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${observerPath}`].filter(Boolean).join(' '),
   };
   return { fixture, tracePath, eventTracePath, lifecyclePath, lifecycle, env };
+}
+
+function observeFilePaths(env, root, watchedPaths) {
+  const tracePath = path.join(root, 'forbidden-file-io.jsonl');
+  const normalizedPaths = new Set();
+  for (const target of watchedPaths) {
+    const absolute = path.resolve(target);
+    normalizedPaths.add(absolute);
+    try { normalizedPaths.add(fs.realpathSync(absolute)); } catch { /* dangling targets retain their lexical path */ }
+  }
+  fs.writeFileSync(tracePath, '');
+  env.FORBIDDEN_FILE_IO_TRACE = tracePath;
+  env.FORBIDDEN_FILE_IO_PATHS = JSON.stringify([...normalizedPaths]);
+  return tracePath;
+}
+
+function readObservedFileIo(tracePath) {
+  const contents = fs.readFileSync(tracePath, 'utf8').trim();
+  return contents ? contents.split('\n').map((line) => JSON.parse(line)) : [];
+}
+
+function runCoreDrainEvent(fixture, lifecyclePath, lifecycle, env, event) {
+  const readyEvent = {
+    ...event,
+    event_id: `${PLAN_ID}:${event.type}:r1`,
+    revision: 1,
+    delivery: { status: 'pending', attempts: 0 },
+  };
+  lifecycle.plan.revision = 1;
+  lifecycle.events = [readyEvent];
+  fs.writeFileSync(lifecyclePath, `${JSON.stringify(lifecycle, null, 2)}\n`);
+  const drain = runCoreCli(
+    ['lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3'],
+    { cwd: fixture.root, env },
+  );
+  assert.equal(drain.json.ok, true, `Core drain should return its JSON envelope: ${drain.stdout}`);
+  const delivery = drain.json.data.deliveries.find((item) => item.event_id === readyEvent.event_id);
+  assert.ok(delivery, `Core drain should report ${readyEvent.event_id}`);
+  return { drain, readyEvent, delivery };
+}
+
+function withProcessEnvironment(env, callback) {
+  const previous = new Map();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+function symlinkMetadataOutsideProject(t, fixture, prefix) {
+  const metadataPath = path.join(fixture.specDir, '.pocket-meta.json');
+  const sentinelBytes = fs.readFileSync(metadataPath);
+  const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t.after(() => fs.rmSync(externalRoot, { recursive: true, force: true }));
+  const externalPath = path.join(externalRoot, '.pocket-meta.json');
+  fs.writeFileSync(externalPath, sentinelBytes);
+  fs.rmSync(metadataPath);
+  fs.symlinkSync(externalPath, metadataPath, 'file');
+  return { metadataPath, externalPath, sentinelBytes };
 }
 
 test('Core drain dispatches claimed spec, phase, and closure events through the registered Enterprise executable', (t) => {
@@ -496,6 +574,277 @@ test('Core drain dispatches claimed spec, phase, and closure events through the 
   'claimed plan-closed must reach T10 tasklist marker reconciliation');
   assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), true,
     'T10 must write its local closeout after the claimed attempt');
+});
+
+test('Core drain rejects T8 artifact symlink escapes before any followed file access', async (t) => {
+  await t.test('hash-matching external artifact target is not statted or read', (t) => {
+    const fixture = createFixture(t);
+    const approvedPath = path.join(fixture.specDir, 'approved-spec.md');
+    const approvedBytes = fs.readFileSync(approvedPath);
+    const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-dispatch-artifact-'));
+    t.after(() => fs.rmSync(externalRoot, { recursive: true, force: true }));
+    const externalPath = path.join(externalRoot, 'approved-spec.md');
+    fs.writeFileSync(externalPath, approvedBytes);
+    fs.rmSync(approvedPath);
+    fs.symlinkSync(externalPath, approvedPath, 'file');
+
+    const setup = setupRegisteredDispatch(t, fixture);
+    const metadataPath = path.join(fixture.specDir, '.pocket-meta.json');
+    const metadataBefore = fs.readFileSync(metadataPath);
+    const fileIoTrace = observeFilePaths(setup.env, fixture.root, [approvedPath, externalPath]);
+    assert.equal(sha256(fs.readFileSync(externalPath)), fixture.specEvent.artifact_refs[0].sha256,
+      'the external target must pass the event hash check if read');
+
+    const { delivery } = runCoreDrainEvent(
+      fixture, setup.lifecyclePath, setup.lifecycle, setup.env, fixture.specEvent,
+    );
+
+    assert.equal(delivery.status, 'terminal');
+    assert.equal(delivery.error.code, 'STALE_ARTIFACT');
+    assert.equal(readCalls(setup.tracePath).length, 0, 'artifact containment must precede every GitHub call');
+    assert.deepEqual(readObservedFileIo(fileIoTrace), [],
+      'external artifact bytes must not be statted, read, or written before rejection');
+    assert.deepEqual(fs.readFileSync(metadataPath), metadataBefore, 'metadata must remain byte-identical');
+    assert.deepEqual(fs.readFileSync(externalPath), approvedBytes, 'the external artifact must remain byte-identical');
+    assert.ok(!JSON.stringify(delivery).includes(externalPath), 'terminal diagnostics must not disclose the external path');
+  });
+
+  await t.test('a later escaping ref is rejected even when the first ref is safe', (t) => {
+    const fixture = createFixture(t);
+    const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-dispatch-later-artifact-'));
+    t.after(() => fs.rmSync(externalRoot, { recursive: true, force: true }));
+    const externalPath = path.join(externalRoot, 'later-spec.md');
+    const externalBytes = Buffer.from('# Later artifact\n\nMust be rejected before any content read.\n');
+    fs.writeFileSync(externalPath, externalBytes);
+    const laterPath = path.join(fixture.specDir, 'later-spec.md');
+    fs.symlinkSync(externalPath, laterPath, 'file');
+
+    const setup = setupRegisteredDispatch(t, fixture);
+    const metadataPath = path.join(fixture.specDir, '.pocket-meta.json');
+    const metadataBefore = fs.readFileSync(metadataPath);
+    const fileIoTrace = observeFilePaths(setup.env, fixture.root, [laterPath, externalPath]);
+    const event = {
+      ...fixture.specEvent,
+      artifact_refs: [...fixture.specEvent.artifact_refs, {
+        root: 'spec', kind: 'supporting-spec', path: 'later-spec.md',
+        sha256: sha256(externalBytes), revision: 1,
+      }],
+    };
+
+    const { delivery } = runCoreDrainEvent(fixture, setup.lifecyclePath, setup.lifecycle, setup.env, event);
+
+    assert.equal(delivery.status, 'terminal');
+    assert.equal(delivery.error.code, 'STALE_ARTIFACT');
+    assert.equal(readCalls(setup.tracePath).length, 0, 'all refs must be contained before reconciliation');
+    assert.deepEqual(readObservedFileIo(fileIoTrace), [], 'later escaping refs must not be followed');
+    assert.deepEqual(fs.readFileSync(metadataPath), metadataBefore);
+    assert.deepEqual(fs.readFileSync(externalPath), externalBytes);
+    assert.ok(!JSON.stringify(delivery).includes(externalPath));
+  });
+});
+
+test('Core drain rejects T8 spec directories redirected to sibling plans inside the project', (t) => {
+  const fixture = createFixture(t);
+  const siblingSpecDir = path.join(path.dirname(fixture.specDir), `${PLAN_ID}-sibling`);
+  fs.cpSync(fixture.specDir, siblingSpecDir, { recursive: true });
+  const siblingArtifact = path.join(siblingSpecDir, 'approved-spec.md');
+  const siblingMetadata = path.join(siblingSpecDir, '.pocket-meta.json');
+  const metadataBefore = fs.readFileSync(siblingMetadata);
+  fs.rmSync(fixture.specDir, { recursive: true, force: true });
+  fs.symlinkSync(siblingSpecDir, fixture.specDir, 'dir');
+
+  const setup = setupRegisteredDispatch(t, fixture);
+  const artifactAlias = path.join(fixture.specDir, 'approved-spec.md');
+  const metadataAlias = path.join(fixture.specDir, '.pocket-meta.json');
+  const fileIoTrace = observeFilePaths(setup.env, fixture.root, [
+    siblingArtifact, artifactAlias, siblingMetadata, metadataAlias,
+  ]);
+
+  const { delivery } = runCoreDrainEvent(
+    fixture, setup.lifecyclePath, setup.lifecycle, setup.env, fixture.specEvent,
+  );
+
+  assert.equal(delivery.status, 'terminal');
+  assert.equal(delivery.error.code, 'STALE_ARTIFACT');
+  assert.equal(readCalls(setup.tracePath).length, 0, 'cross-plan context must be rejected before GitHub');
+  assert.deepEqual(readObservedFileIo(fileIoTrace), [], 'sibling artifact and metadata contents must not be followed');
+  assert.deepEqual(fs.readFileSync(siblingMetadata), metadataBefore, 'sibling metadata must remain byte-identical');
+  assert.ok(!JSON.stringify(delivery).includes(siblingSpecDir), 'terminal diagnostics must not disclose the sibling path');
+});
+
+test('Core drain rejects external metadata symlinks before GitHub or external file access for T8, T9, and T10', async (t) => {
+  const cases = [
+    { type: 'spec-approved', property: 'specEvent', code: 'ISSUE_METADATA_PATH_INVALID' },
+    { type: 'phase-complete', property: 'phaseEvent', code: 'PHASE_METADATA_PATH_INVALID' },
+    { type: 'plan-closed', property: 'closeEvent', code: 'CLOSEOUT_METADATA_PATH_INVALID' },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.type, (t) => {
+      const fixture = createFixture(t);
+      const setup = setupRegisteredDispatch(t, fixture);
+      const external = symlinkMetadataOutsideProject(t, fixture, `enterprise-dispatch-${scenario.type}-metadata-`);
+      const metadataAlias = path.join(fixture.specDir, '.pocket-meta.json');
+      const fileIoTrace = observeFilePaths(setup.env, fixture.root, [metadataAlias, external.externalPath]);
+
+      const { delivery } = runCoreDrainEvent(
+        fixture, setup.lifecyclePath, setup.lifecycle, setup.env, fixture[scenario.property],
+      );
+
+      assert.equal(delivery.status, 'terminal');
+      assert.equal(delivery.error.code, scenario.code, 'the metadata guard must be the failing validation');
+      assert.equal(readCalls(setup.tracePath).length, 0, 'metadata preflight must precede all GitHub calls');
+      assert.deepEqual(readObservedFileIo(fileIoTrace), [], 'external metadata must not be exists/stat/read/written');
+      assert.deepEqual(fs.readFileSync(external.externalPath), external.sentinelBytes,
+        'the external valid metadata sentinel must remain byte-identical');
+      assert.equal(fs.lstatSync(metadataAlias).isSymbolicLink(), true, 'the local metadata symlink must remain intact');
+      assert.ok(!JSON.stringify(delivery).includes(external.externalPath), 'terminal diagnostics must not disclose the target');
+      if (scenario.type === 'plan-closed') {
+        assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), false,
+          'T10 must not write closeout after metadata preflight fails');
+      }
+    });
+  }
+});
+
+test('metadata absence is allowed only for initial T8 creation, while T9 and T10 stop before GitHub', async (t) => {
+  const cases = [
+    { type: 'spec-approved', property: 'specEvent', status: 'succeeded' },
+    { type: 'phase-complete', property: 'phaseEvent', status: 'terminal', code: 'PHASE_METADATA_MISSING' },
+    { type: 'plan-closed', property: 'closeEvent', status: 'terminal', code: 'CLOSEOUT_METADATA_MISSING' },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.type, (t) => {
+      const fixture = createFixture(t);
+      const setup = setupRegisteredDispatch(t, fixture);
+      const metadataPath = path.join(fixture.specDir, '.pocket-meta.json');
+      fs.rmSync(metadataPath, { force: true });
+
+      const { delivery } = runCoreDrainEvent(
+        fixture, setup.lifecyclePath, setup.lifecycle, setup.env, fixture[scenario.property],
+      );
+
+      assert.equal(delivery.status, scenario.status);
+      if (scenario.code) {
+        assert.equal(delivery.error.code, scenario.code);
+        assert.equal(readCalls(setup.tracePath).length, 0, 'missing T9/T10 metadata must fail before GitHub');
+        assert.equal(fs.existsSync(metadataPath), false, 'missing metadata must not be synthesized for T9/T10');
+      } else {
+        assert.ok(fs.statSync(metadataPath).isFile(), 'T8 must create metadata on its initial successful reconciliation');
+        assert.ok(readCalls(setup.tracePath).length > 0, 'initial T8 creation must reconcile with GitHub');
+      }
+    });
+  }
+});
+
+test('Core drain rejects dangling metadata and artifact symlinks as terminal', async (t) => {
+  const cases = [
+    { type: 'spec-approved', property: 'specEvent', metadata: true, code: 'ISSUE_METADATA_PATH_INVALID' },
+    { type: 'phase-complete', property: 'phaseEvent', metadata: true, code: 'PHASE_METADATA_PATH_INVALID' },
+    { type: 'plan-closed', property: 'closeEvent', metadata: true, code: 'CLOSEOUT_METADATA_PATH_INVALID' },
+    { type: 'spec-approved', property: 'specEvent', metadata: false, code: 'STALE_ARTIFACT' },
+  ];
+  for (const scenario of cases) {
+    await t.test(`${scenario.type} ${scenario.metadata ? 'metadata' : 'artifact'}`, (t) => {
+      const fixture = createFixture(t);
+      const setup = setupRegisteredDispatch(t, fixture);
+      const danglingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-dispatch-dangling-'));
+      t.after(() => fs.rmSync(danglingRoot, { recursive: true, force: true }));
+      const danglingTarget = path.join(danglingRoot, 'missing-target.json');
+      let alias;
+      if (scenario.metadata) {
+        alias = path.join(fixture.specDir, '.pocket-meta.json');
+        fs.rmSync(alias, { force: true });
+        fs.symlinkSync(danglingTarget, alias, 'file');
+      } else {
+        alias = path.join(fixture.specDir, 'approved-spec.md');
+        fs.rmSync(alias, { force: true });
+        fs.symlinkSync(danglingTarget, alias, 'file');
+      }
+      const fileIoTrace = observeFilePaths(setup.env, fixture.root, [alias, danglingTarget]);
+
+      const { delivery } = runCoreDrainEvent(
+        fixture, setup.lifecyclePath, setup.lifecycle, setup.env, fixture[scenario.property],
+      );
+
+      assert.equal(delivery.status, 'terminal');
+      assert.equal(delivery.error.code, scenario.code);
+      assert.equal(readCalls(setup.tracePath).length, 0, 'dangling paths must be rejected before GitHub');
+      assert.deepEqual(readObservedFileIo(fileIoTrace), [], 'a dangling link must never be followed by file I/O');
+      assert.ok(!JSON.stringify(delivery).includes(danglingRoot));
+    });
+  }
+});
+
+test('Core drain allows artifact and metadata symlinks whose targets remain in the same spec directory', async (t) => {
+  await t.test('internal artifact symlink', (t) => {
+    const fixture = createFixture(t);
+    const artifactPath = path.join(fixture.specDir, 'approved-spec.md');
+    const targetPath = path.join(fixture.specDir, 'approved-spec-target.md');
+    fs.renameSync(artifactPath, targetPath);
+    fs.symlinkSync(targetPath, artifactPath, 'file');
+    const setup = setupRegisteredDispatch(t, fixture);
+
+    const { delivery } = runCoreDrainEvent(
+      fixture, setup.lifecyclePath, setup.lifecycle, setup.env, fixture.specEvent,
+    );
+
+    assert.equal(delivery.status, 'succeeded', JSON.stringify(delivery));
+    assert.ok(readCalls(setup.tracePath).length > 0);
+  });
+
+  await t.test('internal metadata symlink', (t) => {
+    const fixture = createFixture(t);
+    const metadataPath = path.join(fixture.specDir, '.pocket-meta.json');
+    const targetPath = path.join(fixture.specDir, '.pocket-meta-target.json');
+    fs.renameSync(metadataPath, targetPath);
+    fs.symlinkSync(targetPath, metadataPath, 'file');
+    const setup = setupRegisteredDispatch(t, fixture);
+
+    const { delivery } = runCoreDrainEvent(
+      fixture, setup.lifecyclePath, setup.lifecycle, setup.env, fixture.specEvent,
+    );
+
+    assert.equal(delivery.status, 'succeeded', JSON.stringify(delivery));
+    const updated = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+    assert.equal(updated.github_issue.ownership.event_id, fixture.specEvent.event_id);
+    assert.equal(fs.lstatSync(metadataPath).isSymbolicLink(), true);
+  });
+});
+
+test('registered succeeded replays reject external metadata symlinks without reading them', async (t) => {
+  const cases = [
+    { type: 'spec-approved', property: 'specEvent', code: 'ISSUE_METADATA_PATH_INVALID' },
+    { type: 'phase-complete', property: 'phaseEvent', code: 'PHASE_METADATA_PATH_INVALID' },
+    { type: 'plan-closed', property: 'closeEvent', code: 'CLOSEOUT_METADATA_PATH_INVALID' },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.type, (t) => {
+      const fixture = createFixture(t);
+      const setup = setupRegisteredDispatch(t, fixture);
+      const { delivery } = runCoreDrainEvent(
+        fixture, setup.lifecyclePath, setup.lifecycle, setup.env, fixture[scenario.property],
+      );
+      assert.equal(delivery.status, 'succeeded', `fixture must first persist a valid proof: ${JSON.stringify(delivery)}`);
+      const succeededEvent = JSON.parse(fs.readFileSync(setup.lifecyclePath, 'utf8')).events[0];
+      const closeoutPath = path.join(fixture.planDir, 'closeout.md');
+      const closeoutBefore = fs.existsSync(closeoutPath) ? fs.readFileSync(closeoutPath) : null;
+      const external = symlinkMetadataOutsideProject(t, fixture, `enterprise-dispatch-${scenario.type}-replay-`);
+      const metadataAlias = path.join(fixture.specDir, '.pocket-meta.json');
+      const fileIoTrace = observeFilePaths(setup.env, fixture.root, [metadataAlias, external.externalPath]);
+      const beforeGhCalls = readCalls(setup.tracePath).length;
+      const response = withProcessEnvironment(setup.env, () => invokeAdapter(succeededEvent, registeredAdapter(fixture.root)));
+
+      assert.equal(response.status, 'terminal');
+      assert.equal(response.error.code, scenario.code);
+      assert.equal(readCalls(setup.tracePath).length, beforeGhCalls, 'succeeded replay must not call GitHub');
+      assert.deepEqual(readObservedFileIo(fileIoTrace), [], 'external metadata must not be read during proof replay');
+      assert.deepEqual(fs.readFileSync(external.externalPath), external.sentinelBytes);
+      if (scenario.type === 'plan-closed') {
+        assert.deepEqual(fs.readFileSync(closeoutPath), closeoutBefore, 'succeeded replay must not rewrite closeout');
+      }
+      assert.ok(!JSON.stringify(response).includes(external.externalPath));
+    });
+  }
 });
 
 test('registered event runner fails closed before GitHub calls and keeps diagnostics secret-free', (t) => {

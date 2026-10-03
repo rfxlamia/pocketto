@@ -39,7 +39,7 @@ function replayIssueProof(event, spec) {
   const delivery = event.delivery;
   let recorded;
   try {
-    recorded = meta.readMetaFor(spec.specDir).github_issue || {};
+    recorded = meta.readMetaFor(spec.specDir, spec.metaContext).github_issue || {};
   } catch {
     return resultError(event, 'ISSUE_PROOF_MISMATCH', 'Succeeded event has no readable persisted issue ownership proof; resolve metadata manually before replay.');
   }
@@ -75,7 +75,7 @@ function replayIssueProof(event, spec) {
   };
 }
 
-function saveIssueProof(specDir, event, issue, repo, specPath, identity, clock) {
+function saveIssueProof(specDir, event, issue, repo, specPath, identity, clock, metaContext) {
   const proofHash = computeProofHash({
     event,
     issue,
@@ -83,7 +83,7 @@ function saveIssueProof(specDir, event, issue, repo, specPath, identity, clock) 
     specPath,
     identity,
   });
-  const current = meta.readMetaFor(specDir);
+  const current = meta.readMetaFor(specDir, metaContext);
   const createdAt = typeof issue.createdAt === 'string'
     ? issue.createdAt
     : clock().toISOString();
@@ -104,7 +104,7 @@ function saveIssueProof(specDir, event, issue, repo, specPath, identity, clock) 
       },
     },
   };
-  meta.writeMetaFor(specDir, updated);
+  meta.writeMetaFor(specDir, updated, metaContext);
   return proofHash;
 }
 
@@ -122,7 +122,9 @@ function proveIssue(event, issue, spec, repo, clock) {
   const identityProof = identity.titleMatch && identity.pathMatch
     ? 'title+full-spec-path'
     : identity.titleMatch ? 'title' : 'full-spec-path';
-  const proofHash = saveIssueProof(spec.specDir, event, issue, repo, spec.specPath, identityProof, clock);
+  const proofHash = saveIssueProof(
+    spec.specDir, event, issue, repo, spec.specPath, identityProof, clock, spec.metaContext,
+  );
   return resultSucceeded(event, proofHash);
 }
 

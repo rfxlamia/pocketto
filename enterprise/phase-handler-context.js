@@ -119,6 +119,10 @@ function loadContext(event, options = {}) {
   const specCandidate = path.resolve(registeredRoot, 'docs', 'pocket', 'spec', event.plan_id);
   const specPath = resolveLifecyclePath(root, registeredRoot, specCandidate, 'spec directory');
   const specDir = specPath.physical;
+  const expectedSpecDir = path.resolve(root, 'docs', 'pocket', 'spec', event.plan_id);
+  if (specDir !== expectedSpecDir) {
+    throw new PhaseHandlerError('PHASE_SPEC_DIR_MISMATCH', 'Lifecycle spec directory must resolve to the exact selected plan directory.');
+  }
   const lifecyclePath = resolveLifecycleFile(root, path.join(specDir, 'lifecycle.json'));
   let lifecycle;
   try {

@@ -7,18 +7,101 @@
 // through these helpers; Core never reads `.pocket-meta.json` remote
 // identity directly.
 
+const fs = require('node:fs');
+const path = require('node:path');
 const coreMeta = require('../cli/lib/meta');
+
+function isInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function metaPathError(code = 'ENTERPRISE_META_PATH_INVALID') {
+  const message = code === 'ENTERPRISE_META_MISSING'
+    ? 'Metadata file is missing from the selected plan spec directory.'
+    : 'Metadata path must resolve to a regular file inside the selected plan spec directory.';
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function resolveMetaContext(specDir, context) {
+  if (typeof specDir !== 'string' || !path.isAbsolute(specDir)) throw metaPathError();
+  const hasExplicitContext = context && typeof context === 'object'
+    && (context.projectRoot !== undefined || context.specDir !== undefined);
+  try {
+    if (hasExplicitContext) {
+      if (typeof context.projectRoot !== 'string' || !path.isAbsolute(context.projectRoot)
+          || typeof context.specDir !== 'string' || !path.isAbsolute(context.specDir)) {
+        throw metaPathError();
+      }
+      const root = fs.realpathSync(context.projectRoot);
+      const specPath = path.resolve(context.specDir);
+      const physicalSpecDir = fs.realpathSync(specPath);
+      if (physicalSpecDir !== specPath || path.resolve(specDir) !== physicalSpecDir
+          || physicalSpecDir === root || !isInside(root, physicalSpecDir)
+          || !fs.statSync(root).isDirectory() || !fs.statSync(physicalSpecDir).isDirectory()) {
+        throw metaPathError();
+      }
+      return { root, specDir: physicalSpecDir };
+    }
+
+    // Standalone Enterprise metadata helpers use the explicit specDir argument
+    // as their physical boundary. Registered handlers always supply projectRoot.
+    const physicalSpecDir = fs.realpathSync(specDir);
+    if (!fs.statSync(physicalSpecDir).isDirectory()) throw metaPathError();
+    return { root: physicalSpecDir, specDir: physicalSpecDir };
+  } catch (error) {
+    if (error && error.code === 'ENTERPRISE_META_PATH_INVALID') throw error;
+    throw metaPathError();
+  }
+}
+
+function resolveSafeMetaTarget(specDir, context) {
+  const physical = resolveMetaContext(specDir, context);
+  const metadataPath = path.join(physical.specDir, coreMeta.META_FILE);
+  try {
+    fs.lstatSync(metadataPath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { path: metadataPath, exists: false };
+    throw metaPathError();
+  }
+
+  let target;
+  try {
+    target = fs.realpathSync(metadataPath);
+  } catch {
+    // A dangling symlink is present according to lstat but has no safe target.
+    throw metaPathError();
+  }
+  if (!isInside(physical.specDir, target)) throw metaPathError();
+  try {
+    if (!fs.statSync(target).isFile()) throw metaPathError();
+  } catch (error) {
+    if (error && error.code === 'ENTERPRISE_META_PATH_INVALID') throw error;
+    throw metaPathError();
+  }
+  return { path: target, exists: true };
+}
 
 function resolveMetaPath(specDir) {
   return coreMeta.metaPathFor(specDir);
 }
 
-function readMetaFor(specDir) {
-  return coreMeta.readMeta(resolveMetaPath(specDir));
+function preflightMetaFor(specDir, context, { allowMissing = false } = {}) {
+  const target = resolveSafeMetaTarget(specDir, context);
+  if (!target.exists && !allowMissing) throw metaPathError('ENTERPRISE_META_MISSING');
+  return target;
 }
 
-function writeMetaFor(specDir, meta) {
-  coreMeta.writeMeta(resolveMetaPath(specDir), meta);
+function readMetaFor(specDir, context) {
+  const target = resolveSafeMetaTarget(specDir, context);
+  return coreMeta.readMeta(target.path);
+}
+
+function writeMetaFor(specDir, meta, context) {
+  const target = resolveSafeMetaTarget(specDir, context);
+  coreMeta.writeMeta(target.path, meta);
   return meta;
 }
 
@@ -104,6 +187,7 @@ function phasePrProofRef(phase) {
 
 module.exports = {
   resolveMetaPath,
+  preflightMetaFor,
   readMetaFor,
   writeMetaFor,
   getIssueIdentity,

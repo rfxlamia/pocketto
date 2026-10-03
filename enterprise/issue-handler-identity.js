@@ -9,9 +9,16 @@ const ISSUE_FIELDS = 'number,url,state,title,body,labels,createdAt';
 const PLAN_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const { issueUrlBelongsTo } = require('./issue-identity');
 
+function isInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 function specContext(event, projectRoot) {
   if (!PLAN_ID_PATTERN.test(event.plan_id)) return { error: 'plan_id is not a normalized kebab-slug' };
-  const specDir = path.resolve(projectRoot, 'docs', 'pocket', 'spec', event.plan_id);
+  if (typeof projectRoot !== 'string' || !path.isAbsolute(projectRoot)) {
+    return { error: 'registered project root is required and must be absolute' };
+  }
   const refs = event.artifact_refs.filter((ref) => ref.root === 'spec');
   if (refs.length === 0 || refs.length !== event.artifact_refs.length) {
     return { error: 'spec-approved requires spec-root artifacts only' };
@@ -21,38 +28,59 @@ function specContext(event, projectRoot) {
       return { error: 'approved spec artifact path is not root-relative' };
     }
   }
-  const ref = refs[0];
-  const artifactPath = path.resolve(specDir, ref.path);
-  const relative = path.relative(specDir, artifactPath);
-  if (relative === '' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    return { error: 'approved spec artifact escapes the current plan directory' };
-  }
+
   let realProjectRoot;
   let realSpecDir;
-  let realArtifact;
-  let markdown;
   try {
     realProjectRoot = fs.realpathSync(projectRoot);
-    realSpecDir = fs.realpathSync(specDir);
+    if (!fs.statSync(realProjectRoot).isDirectory()) return { error: 'registered project root is not a directory' };
+    const expectedSpecDir = path.resolve(realProjectRoot, 'docs', 'pocket', 'spec', event.plan_id);
+    realSpecDir = fs.realpathSync(expectedSpecDir);
+    if (realSpecDir !== expectedSpecDir || !fs.statSync(realSpecDir).isDirectory()) {
+      return { error: 'approved spec directory does not match the selected plan directory' };
+    }
     const projectRelative = path.relative(realProjectRoot, realSpecDir);
     if (projectRelative === '' || projectRelative === '..'
         || projectRelative.startsWith(`..${path.sep}`) || path.isAbsolute(projectRelative)) {
       return { error: 'approved spec directory escapes the registered project root' };
     }
-    realArtifact = fs.realpathSync(artifactPath);
+  } catch {
+    return { error: 'approved spec directory is unavailable' };
+  }
+
+  const targets = [];
+  for (const ref of refs) {
+    const artifactPath = path.resolve(realSpecDir, ref.path);
+    const relative = path.relative(realSpecDir, artifactPath);
+    if (relative === '' || !isInside(realSpecDir, artifactPath)) {
+      return { error: 'approved spec artifact escapes the current plan directory' };
+    }
+    let realArtifact;
+    try {
+      realArtifact = fs.realpathSync(artifactPath);
+    } catch (err) {
+      return { error: `approved spec artifact is unavailable (${err && err.code === 'ENOENT' ? 'not found' : 'read failed'})` };
+    }
+    const realRelative = path.relative(realSpecDir, realArtifact);
+    if (realRelative === '' || !isInside(realSpecDir, realArtifact)) {
+      return { error: 'approved spec artifact escapes the current plan directory' };
+    }
+    targets.push({ ref, realArtifact });
+  }
+
+  const { ref, realArtifact } = targets[0];
+  let markdown;
+  try {
     if (!fs.statSync(realArtifact).isFile()) return { error: 'approved spec artifact is not a file' };
     markdown = fs.readFileSync(realArtifact, 'utf8');
   } catch (err) {
     return { error: `approved spec artifact is unavailable (${err && err.code === 'ENOENT' ? 'not found' : 'read failed'})` };
   }
-  const realRelative = path.relative(realSpecDir, realArtifact);
-  if (realRelative === '' || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
-    return { error: 'approved spec artifact escapes the current plan directory' };
-  }
   const actualHash = crypto.createHash('sha256').update(markdown).digest('hex');
   if (actualHash !== ref.sha256) return { error: 'approved spec artifact hash does not match the event' };
   const specPath = `docs/pocket/spec/${event.plan_id}/${ref.path.split(path.sep).join('/')}`;
-  return { specDir, specPath, markdown, ref };
+  const metaContext = { projectRoot: realProjectRoot, specDir: realSpecDir };
+  return { projectRoot: realProjectRoot, specDir: realSpecDir, realProjectRoot, realSpecDir, metaContext, specPath, markdown, ref };
 }
 
 function flattenIssuePages(data) {

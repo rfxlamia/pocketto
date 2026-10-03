@@ -57,7 +57,7 @@ function validateEventAndPaths(event, opts, eventId) {
 function loadClosureContext(event, opts, eventId, log) {
   let metadata;
   try {
-    metadata = enterpriseMeta.readMetaFor(opts.specDir);
+    metadata = enterpriseMeta.readMetaFor(opts.specDir, metadataContextFor(opts));
   } catch {
     return {
       ok: false,
@@ -231,7 +231,12 @@ function persistMetadata(eventId, context, record, proofHash, opts) {
     tasklist: record,
   };
   try {
-    (opts.writeMeta || enterpriseMeta.writeMetaFor)(opts.specDir, context.metadata);
+    if (opts.writeMeta) {
+      enterpriseMeta.preflightMetaFor(opts.specDir, metadataContextFor(opts));
+      opts.writeMeta(opts.specDir, context.metadata);
+    } else {
+      enterpriseMeta.writeMetaFor(opts.specDir, context.metadata, metadataContextFor(opts));
+    }
   } catch (error) {
     return withTasklistProof(
       adapterResult(eventId, 'reconciling', 'CLOSEOUT_LEDGER_WRITE_FAILED',
@@ -280,7 +285,7 @@ function replayClosureProof(event, opts, eventId) {
   const delivery = event.delivery || {};
   let metadata;
   try {
-    metadata = enterpriseMeta.readMetaFor(opts.specDir);
+    metadata = enterpriseMeta.readMetaFor(opts.specDir, metadataContextFor(opts));
   } catch {
     return adapterResult(eventId, 'terminal', 'CLOSEOUT_PROOF_MISMATCH',
       'Succeeded event has no readable persisted tasklist proof; resolve metadata manually before replay.', false);
@@ -322,10 +327,26 @@ function replayClosureProof(event, opts, eventId) {
   };
 }
 
+function metadataContextFor(opts) {
+  if (typeof opts.projectRoot !== 'string') return undefined;
+  return { projectRoot: opts.projectRoot, specDir: opts.specDir };
+}
+
+function metadataFailure(eventId, error) {
+  const missing = error && error.code === 'ENTERPRISE_META_MISSING';
+  return adapterResult(eventId, 'terminal', missing ? 'CLOSEOUT_METADATA_MISSING' : 'CLOSEOUT_METADATA_PATH_INVALID',
+    'Linked issue metadata is missing or has an unsafe path; manual resolution is required.', false);
+}
+
 function handlePlanClosed(event, opts = {}) {
   const eventId = event && typeof event.event_id === 'string' ? event.event_id : 'unknown-event';
   const invalid = validateEventAndPaths(event, opts, eventId);
   if (invalid) return invalid;
+  try {
+    enterpriseMeta.preflightMetaFor(opts.specDir, metadataContextFor(opts));
+  } catch (error) {
+    return metadataFailure(eventId, error);
+  }
   if (event.delivery.status === 'succeeded') return replayClosureProof(event, opts, eventId);
   if (!RECONCILABLE_DELIVERY_STATUSES.has(event.delivery.status)) {
     return adapterResult(eventId, 'terminal', 'CLOSEOUT_DELIVERY_INELIGIBLE',

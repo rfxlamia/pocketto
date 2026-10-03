@@ -25,13 +25,17 @@ function handlePhaseComplete(event, options = {}) {
 
     const context = loadContext(event, options);
     const phase = readPhaseEvidence(event, context);
-    if (event.delivery.status === 'succeeded') return replayPhaseProof(event, context, phase);
+    if (event.delivery.status === 'succeeded') {
+      preflightPhaseMetadata(context);
+      return replayPhaseProof(event, context, phase);
+    }
     if (!RECONCILABLE_DELIVERY_STATUSES.has(event.delivery.status)) {
       throw new PhaseHandlerError('PHASE_DELIVERY_INELIGIBLE', 'Only claimed, pending, retryable, or reconciling phase events may enter remote reconciliation.');
     }
+    preflightPhaseMetadata(context);
 
     const repo = resolveRepository(options);
-    const meta = enterpriseMeta.readMetaFor(context.specDir);
+    const meta = enterpriseMeta.readMetaFor(context.specDir, metaContextFor(context));
     const issue = resolveOwnedIssue(event, context, repo, options);
     const selectedPr = resolvePhasePr(context, phase, repo, options);
     const pr = selectedPr.pr;
@@ -69,12 +73,26 @@ function handlePhaseComplete(event, options = {}) {
   }
 }
 
+function preflightPhaseMetadata(context) {
+  try {
+    enterpriseMeta.preflightMetaFor(context.specDir, metaContextFor(context));
+  } catch (error) {
+    const missing = error && error.code === 'ENTERPRISE_META_MISSING';
+    const code = missing ? 'PHASE_METADATA_MISSING' : 'PHASE_METADATA_PATH_INVALID';
+    throw new PhaseHandlerError(code, 'Phase metadata is missing or has an unsafe path; resolve it manually.');
+  }
+}
+
+function metaContextFor(context) {
+  return { projectRoot: context.root, specDir: context.specDir };
+}
+
 function replayPhaseProof(event, context, phase) {
   const delivery = event.delivery || {};
   const proofRef = phaseProofRef(phase.key);
   let metadata;
   try {
-    metadata = enterpriseMeta.readMetaFor(context.specDir);
+    metadata = enterpriseMeta.readMetaFor(context.specDir, metaContextFor(context));
   } catch {
     return phaseFailure(event.event_id, 'PHASE_PROOF_MISMATCH', 'Succeeded event has no readable persisted phase proof; resolve metadata manually before replay.', 'terminal', false);
   }
@@ -116,7 +134,7 @@ function replayPhaseProof(event, context, phase) {
 }
 
 function persistPhaseProof(event, context, issue, phase, pr, marker, fingerprints) {
-  const meta = enterpriseMeta.readMetaFor(context.specDir);
+  const meta = enterpriseMeta.readMetaFor(context.specDir, metaContextFor(context));
   meta.github_issue = { ...(meta.github_issue || {}), number: issue.number, url: issue.url };
   const entry = phaseEntry(meta, phase.key);
   entry.github_pr = { ...(entry.github_pr || {}), number: pr.number, url: pr.url };
@@ -137,7 +155,7 @@ function persistPhaseProof(event, context, issue, phase, pr, marker, fingerprint
   review.proof = { ...proof, proof_hash: proofHash };
   entry.review = review;
   try {
-    enterpriseMeta.writeMetaFor(context.specDir, meta);
+    enterpriseMeta.writeMetaFor(context.specDir, meta, metaContextFor(context));
   } catch (error) {
     throw new PhaseHandlerError('PHASE_PROOF_RECONCILING', `Remote phase proof succeeded but local metadata could not be saved: ${safeMessage(error)}`, {
       status: 'reconciling',

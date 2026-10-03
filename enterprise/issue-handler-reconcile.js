@@ -88,7 +88,7 @@ function issueViewNotFound(result) {
 }
 
 function lookupMetadataIssue(event, spec, repo, runner) {
-  const recorded = meta.readMetaFor(spec.specDir).github_issue || {};
+  const recorded = meta.readMetaFor(spec.specDir, spec.metaContext).github_issue || {};
   const hasRecordedIdentity = (Number.isInteger(recorded.number) && recorded.number > 0)
     || (typeof recorded.url === 'string' && recorded.url.length > 0);
   if (!hasRecordedIdentity) return { hasRecordedIdentity: false };

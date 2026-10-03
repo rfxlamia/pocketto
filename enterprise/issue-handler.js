@@ -7,6 +7,7 @@
 // checks only the fields needed to operate safely without importing Core.
 
 const { specContext } = require('./issue-handler-identity');
+const enterpriseMeta = require('./meta');
 const { repoIdentity } = require('./issue-identity');
 const { proveIssue, replayIssueProof, resultError } = require('./issue-handler-proof');
 const {
@@ -39,10 +40,15 @@ function handleSpecApproved(event, opts = {}) {
   }
   const spec = specContext(event, projectRoot);
   if (spec.error) return resultError(event, 'STALE_ARTIFACT', `${spec.error}; verify the committed spec artifact before retrying.`);
-  if (event.delivery.status === 'succeeded') return replayIssueProof(event, spec);
+  if (event.delivery.status === 'succeeded') {
+    const metadataError = preflightIssueMetadata(event, spec, false);
+    return metadataError || replayIssueProof(event, spec);
+  }
   if (!['claimed', 'pending', 'retryable', 'reconciling'].includes(event.delivery.status)) {
     return resultError(event, 'ISSUE_DELIVERY_INELIGIBLE', 'Only claimed, pending, retryable, or reconciling issue events may enter remote reconciliation.');
   }
+  const metadataError = preflightIssueMetadata(event, spec, true);
+  if (metadataError) return metadataError;
 
   const runner = opts.ghRunner;
   const clock = typeof opts.clock === 'function' ? opts.clock : () => new Date();
@@ -70,6 +76,17 @@ function handleSpecApproved(event, opts = {}) {
   if (created.error) return mapGhFailure(event, 'Issue creation or validation', created.error);
   if (created.manual) return resultError(event, 'ISSUE_MANUAL_RESOLUTION', `${created.manual}; verify the target manually before retrying.`);
   return proveIssue(event, created.issue, spec, repo, clock);
+}
+
+function preflightIssueMetadata(event, spec, allowMissing) {
+  try {
+    enterpriseMeta.preflightMetaFor(spec.specDir, spec.metaContext, { allowMissing });
+    return null;
+  } catch (error) {
+    const missing = error && error.code === 'ENTERPRISE_META_MISSING';
+    return resultError(event, missing ? 'ISSUE_METADATA_MISSING' : 'ISSUE_METADATA_PATH_INVALID',
+      'Issue metadata is missing or has an unsafe path; resolve it manually before retrying.');
+  }
 }
 
 module.exports = { handleSpecApproved };
