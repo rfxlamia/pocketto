@@ -9,8 +9,15 @@ const { enterpriseMeta, makeFixture, makeEvent, makeFakeGh } = require('./fixtur
 
 // T10 correction: a Core-succeeded event is a read-only proof replay.
 test('CYCLE 5: succeeded closure replay returns event-bound proof without remote or local writes', async (t) => {
-  const fixture = makeFixture();
-  cleanupFixture(t, fixture);
+  let nestedRoot;
+  await t.test('fixture roots are removed after their child test completes', async (t) => {
+    const fixture = makeFixture(t);
+    nestedRoot = path.dirname(path.dirname(fixture.specDir));
+    assert.equal(fs.existsSync(nestedRoot), true, 'fixture root exists while its child test is running');
+  });
+  assert.equal(fs.existsSync(nestedRoot), false, 'fixture root is removed before the child test promise resolves');
+
+  const fixture = makeFixture(t);
   const state = await seedSucceededProof(fixture);
   const closeoutPath = state.closeoutPath;
   fs.writeFileSync(closeoutPath, '# Existing closeout sentinel\n', 'utf8');
@@ -37,8 +44,7 @@ test('CYCLE 5: succeeded closure replay returns event-bound proof without remote
 test('CYCLE 5: missing or mismatched nested closure proof fails closed without fallback', async (t) => {
   for (const scenario of ['missing', 'mismatched']) {
     await t.test(`${scenario} delivery proof is terminal and read-only`, async (t) => {
-      const fixture = makeFixture();
-      cleanupFixture(t, fixture);
+      const fixture = makeFixture(t);
       const state = await seedSucceededProof(fixture);
       const closeoutPath = state.closeoutPath;
       fs.writeFileSync(closeoutPath, '# Existing closeout sentinel\n', 'utf8');
@@ -69,8 +75,7 @@ test('CYCLE 5: missing or mismatched nested closure proof fails closed without f
 });
 
 test('CYCLE 5: claimed closure delivery enters normal tasklist reconciliation', async (t) => {
-  const fixture = makeFixture();
-  cleanupFixture(t, fixture);
+  const fixture = makeFixture(t);
   const event = makeEvent(fixture.planDir);
   event.delivery = { status: 'claimed', attempts: 1 };
   const gh = makeFakeGh([]);
@@ -103,8 +108,7 @@ test('CYCLE 5: claimed closure delivery enters normal tasklist reconciliation', 
 test('CYCLE 5: terminal and unknown closure statuses remain rejected', async (t) => {
   for (const status of ['terminal', 'unknown']) {
     await t.test(`${status} delivery cannot reconcile the tasklist`, async (t) => {
-      const fixture = makeFixture();
-      cleanupFixture(t, fixture);
+      const fixture = makeFixture(t);
       const event = makeEvent(fixture.planDir);
       event.delivery = { status, attempts: 1 };
       const metadataPath = enterpriseMeta.resolveMetaPath(fixture.specDir);
@@ -170,9 +174,4 @@ async function seedSucceededProof(fixture) {
     metadataPath: enterpriseMeta.resolveMetaPath(fixture.specDir),
     closeoutPath: path.join(fixture.planDir, 'closeout.md'),
   };
-}
-
-function cleanupFixture(t, fixture) {
-  const root = path.dirname(path.dirname(fixture.specDir));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 }

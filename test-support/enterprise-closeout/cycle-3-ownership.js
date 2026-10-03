@@ -55,8 +55,8 @@ const scenarios = [
   },
 ];
 
-async function assertIssueRejected(scenario) {
-  const fixture = makeFixture();
+async function assertIssueRejected(t, scenario) {
+  const fixture = makeFixture(t);
   scenario.prepare(fixture);
   const event = makeEvent(fixture.planDir);
   const metadataPath = path.join(fixture.specDir, '.pocket-meta.json');
@@ -80,6 +80,6 @@ async function assertIssueRejected(scenario) {
 
 test('CYCLE 3: missing, foreign, closed, or ambiguous issue ownership fails without mutation', async (t) => {
   for (const scenario of scenarios) {
-    await t.test(scenario.name, async () => assertIssueRejected(scenario));
+    await t.test(scenario.name, async (t) => assertIssueRejected(t, scenario));
   }
 });

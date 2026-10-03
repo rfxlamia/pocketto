@@ -83,8 +83,8 @@ test('CYCLE 1: T8 and T10 reject conflicting title and full-spec-path ownership'
     assertNoT8Mutation(transport, fixture.specDir, beforeMetadata);
   });
 
-  await t.test('T10 plan-closed rejects the conflicting candidate without mutation', async () => {
-    const fixture = makeFixture();
+  await t.test('T10 plan-closed rejects the conflicting candidate without mutation', async (t) => {
+    const fixture = makeFixture(t);
     const issue = {
       ...ISSUE,
       title: `Pocket Plan: ${T10_PLAN_ID}`,
@@ -122,8 +122,8 @@ test('CYCLE 2: T8 and T10 reject incomplete recorded and candidate issue URLs', 
     assertNoT8Mutation(transport, fixture.specDir, beforeMetadata);
   });
 
-  await t.test('T10 rejects a candidate without a current-origin URL even when metadata has one', async () => {
-    const fixture = makeFixture();
+  await t.test('T10 rejects a candidate without a current-origin URL even when metadata has one', async (t) => {
+    const fixture = makeFixture(t);
     const metadataPath = path.join(fixture.specDir, '.pocket-meta.json');
     const beforeMetadata = fs.readFileSync(metadataPath, 'utf8');
     const issue = { ...ISSUE };
@@ -142,8 +142,8 @@ test('CYCLE 2: T8 and T10 reject incomplete recorded and candidate issue URLs', 
     assertNoT10Mutation(gh, fixture, beforeMetadata);
   });
 
-  await t.test('T10 rejects missing metadata and candidate URLs', async () => {
-    const fixture = makeFixture();
+  await t.test('T10 rejects missing metadata and candidate URLs', async (t) => {
+    const fixture = makeFixture(t);
     const metadata = t10Meta.readMetaFor(fixture.specDir);
     delete metadata.github_issue.url;
     t10Meta.writeMetaFor(fixture.specDir, metadata);

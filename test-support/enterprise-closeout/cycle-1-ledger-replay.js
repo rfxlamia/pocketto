@@ -5,8 +5,8 @@ const assert = require('node:assert/strict');
 const { handlePlanClosed } = require('../../enterprise/closure-handler');
 const { fs, path, enterpriseMeta, makeFixture, makeEvent, makeFakeGh } = require('./fixtures');
 
-test('CYCLE 1: ledger failure after marker mutation reconciles on replay', async () => {
-  const retry = makeFixture();
+test('CYCLE 1: ledger failure after marker mutation reconciles on replay', async (t) => {
+  const retry = makeFixture(t);
   const retryEvent = makeEvent(retry.planDir);
   const retryGh = makeFakeGh();
   let failLedgerWrite = true;

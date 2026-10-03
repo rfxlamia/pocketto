@@ -15,8 +15,8 @@ const { handlePlanClosed } = require('../../enterprise/closure-handler');
 const { TASKLIST_MARKER, tasklistBody } = require('../../cli/lib/bodies');
 const { enterpriseMeta, makeFixture, makeEvent, makeFakeGh } = require('./fixtures');
 
-test('CYCLE 2: paginated marker replay returns proof after a local ledger timeout', async () => {
-  const fixture = makeFixture();
+test('CYCLE 2: paginated marker replay returns proof after a local ledger timeout', async (t) => {
+  const fixture = makeFixture(t);
   const event = makeEvent(fixture.planDir);
   const canonicalTasklist = tasklistBody(fixture.log);
   const informational = '# Closeout — demo-plan\n\n- **Result:** CLOSED — informational only';

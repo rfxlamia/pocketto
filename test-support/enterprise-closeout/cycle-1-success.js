@@ -15,8 +15,8 @@ const { handlePlanClosed } = require('../../enterprise/closure-handler');
 const { TASKLIST_MARKER } = require('../../cli/lib/bodies');
 const { fs, path, enterpriseMeta, makeFixture, makeEvent, makeFakeGh } = require('./fixtures');
 
-test('CYCLE 1: plan-closed persists canonical tasklist proof and reconciles local write failure', async () => {
-  const success = makeFixture();
+test('CYCLE 1: plan-closed persists canonical tasklist proof and reconciles local write failure', async (t) => {
+  const success = makeFixture(t);
   const successEvent = makeEvent(success.planDir);
   const successGh = makeFakeGh();
   const result = await handlePlanClosed(successEvent, {

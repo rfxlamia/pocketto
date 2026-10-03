@@ -5,8 +5,8 @@ const assert = require('node:assert/strict');
 const { handlePlanClosed } = require('../../enterprise/closure-handler');
 const { fs, path, makeFixture, makeEvent, makeFakeGh } = require('./fixtures');
 
-test('CYCLE 1: local closeout failure preserves proof and replay does not duplicate the marker', async () => {
-  const fixture = makeFixture();
+test('CYCLE 1: local closeout failure preserves proof and replay does not duplicate the marker', async (t) => {
+  const fixture = makeFixture(t);
   const event = makeEvent(fixture.planDir);
   const gh = makeFakeGh();
   const initial = await handlePlanClosed(event, {

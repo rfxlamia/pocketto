@@ -23,8 +23,9 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function makeFixture() {
+function makeFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-closeout-c1-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const specDir = path.join(root, 'spec', PLAN_ID);
   const planDir = path.join(root, 'plans', PLAN_ID);
   fs.mkdirSync(specDir, { recursive: true });
