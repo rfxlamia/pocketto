@@ -47,49 +47,50 @@ function installedCoreMajor() {
   return manifest && manifest.release.major === majorFromVersion(CLI_VERSION) ? manifest.release.major : null;
 }
 
+function resolveEntrypointPath(projectRoot, target, script = false) {
+  if (typeof target !== 'string' || target.startsWith('-')) return null;
+  const pathLike = path.isAbsolute(target) || target.includes(path.sep) || target.includes('/') || (script && /\.(?:cjs|mjs|js)$/i.test(target));
+  if (!pathLike) return null;
+  try { const resolved = fs.realpathSync(path.isAbsolute(target) ? target : path.resolve(projectRoot, target));
+    return fs.statSync(resolved).isFile() ? resolved : null;
+  } catch { return null; }
+}
+
+function adapterMajorForEntrypoint(entrypointPath) {
+  let packageRoot = path.dirname(entrypointPath), packageManifest;
+  while (true) {
+    try { packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')); break; }
+    catch (err) {
+      if (err.code !== 'ENOENT' || path.dirname(packageRoot) === packageRoot) return null;
+      packageRoot = path.dirname(packageRoot);
+    }
+  }
+  if (!packageManifest || typeof packageManifest !== 'object' || Array.isArray(packageManifest)) return null;
+  const surface = surfaceManifestAt(path.join(packageRoot, 'surfaces.json'));
+  const relative = path.relative(packageRoot, entrypointPath);
+  const roles = surface && surface.roles;
+  const owned = roles && typeof roles === 'object' && !Array.isArray(roles)
+    && Object.values(roles).some((role) => role && typeof role === 'object' && role.kind === 'enterprise'
+      && Array.isArray(role.includes) && role.includes.includes(relative.split(path.sep).join('/')));
+  const packageMajor = majorFromVersion(packageManifest.version);
+  return surface && relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && owned
+    && packageMajor === surface.release.major ? packageMajor : null;
+}
+
 function installedAdapterMajor(projectRoot, registration) {
   const argv = registration && Array.isArray(registration.argv) ? registration.argv : [];
-  const candidates = argv.slice(1).filter((arg) => typeof arg === 'string' && !arg.startsWith('-'));
-  const isPathLike = (arg) => path.isAbsolute(arg) || arg.includes(path.sep);
-  const script = candidates.find((arg) => /\.(?:cjs|mjs|js)$/i.test(arg))
-    || candidates.find(isPathLike)
-    || argv.find((arg) => typeof arg === 'string' && isPathLike(arg));
-  if (typeof script !== 'string') return null;
-
-  let scriptPath;
+  const executablePath = resolveEntrypointPath(projectRoot, argv[0]);
+  if (!executablePath) return null;
+  let entrypointPath = executablePath;
   try {
-    scriptPath = fs.realpathSync(path.isAbsolute(script) ? script : path.resolve(projectRoot, script));
+    fs.accessSync(executablePath, fs.constants.X_OK);
+    if (executablePath === fs.realpathSync(process.execPath)) {
+      entrypointPath = resolveEntrypointPath(projectRoot, argv[1], true);
+    }
   } catch {
     return null;
   }
-
-  let packageRoot = path.dirname(scriptPath);
-  let packageManifest;
-  while (true) {
-    try {
-      packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
-      if (!packageManifest || typeof packageManifest !== 'object' || Array.isArray(packageManifest)) return null;
-      break;
-    } catch (err) {
-      if (!err || err.code !== 'ENOENT') return null;
-      const parent = path.dirname(packageRoot);
-      if (parent === packageRoot) return null;
-      packageRoot = parent;
-    }
-  }
-
-  const surface = surfaceManifestAt(path.join(packageRoot, 'surfaces.json'));
-  const relativeScript = path.relative(packageRoot, scriptPath);
-  if (!surface || !relativeScript || relativeScript === '..' || relativeScript.startsWith(`..${path.sep}`)) return null;
-  const roles = surface.roles;
-  if (!roles || typeof roles !== 'object' || Array.isArray(roles)) return null;
-  const scriptName = relativeScript.split(path.sep).join('/');
-  const owned = Object.values(roles).some((role) => (
-    role && typeof role === 'object' && role.kind === 'enterprise'
-    && Array.isArray(role.includes) && role.includes.includes(scriptName)
-  ));
-  const packageMajor = majorFromVersion(packageManifest.version);
-  return owned && packageMajor === surface.release.major ? packageMajor : null;
+  return entrypointPath ? adapterMajorForEntrypoint(entrypointPath) : null;
 }
 
 function preflightAdapter(projectRoot) {

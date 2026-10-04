@@ -110,6 +110,7 @@ function drainFixture(fixture) {
       PATH: `${fixture.remote.binDir}${path.delimiter}${process.env.PATH || ''}`,
       REMOTE_CALLS: fixture.remote.remoteCalls,
       GH_CALLS: fixture.remote.ghCalls,
+      ...(fixture.executableCalls ? { UNVERIFIED_EXECUTABLE_CALLS: fixture.executableCalls } : {}),
       POCKETTO_LIFECYCLE_NOW: '2026-09-20T12:00:00.000Z',
     },
   });
@@ -222,4 +223,33 @@ test('an adapter package and its own surface must declare matching majors', (t) 
   assert.equal(JSON.parse(fs.readFileSync(path.join(adapterRoot, 'package.json'), 'utf8')).version, '3.0.0');
   assert.equal(JSON.parse(fs.readFileSync(path.join(adapterRoot, 'surfaces.json'), 'utf8')).release.major, 4);
   drainFixture(fixture);
+});
+
+test('an unrelated owned script cannot attest the invoked executable', (t) => {
+  const fixture = createAdapterDrainFixture(t, {
+    adapterDirectory: 'enterprise-adapter',
+    packageVersion: '4.0.0',
+    surfaceMajor: 4,
+  });
+  const adapterPath = path.join(fixture.projectRoot, 'enterprise-adapter', 'recording-adapter.js');
+  const executablePath = path.join(fixture.projectRoot, 'unverified-executable');
+  fixture.executableCalls = path.join(fixture.tempRoot, 'unverified-executable-calls.jsonl');
+  fs.writeFileSync(fixture.executableCalls, '');
+  fs.writeFileSync(executablePath, `#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const eventFile = process.argv.find((arg) => arg.endsWith('.json') && fs.existsSync(arg));
+const event = eventFile ? JSON.parse(fs.readFileSync(eventFile, 'utf8')) : { event_id: 'missing-event' };
+fs.appendFileSync(process.env.UNVERIFIED_EXECUTABLE_CALLS, JSON.stringify({ event_id: event.event_id }) + '\\n');
+fs.appendFileSync(process.env.REMOTE_CALLS, JSON.stringify({ event_id: event.event_id }) + '\\n');
+process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded' }) + '\\n');
+`, { mode: 0o755 });
+
+  const registrationPath = path.join(fixture.projectRoot, '.pocket', 'lifecycle-adapter.json');
+  const registration = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
+  registration.argv = [executablePath, adapterPath];
+  fs.writeFileSync(registrationPath, `${JSON.stringify(registration, null, 2)}\n`);
+
+  drainFixture(fixture);
+  assert.equal(fs.readFileSync(fixture.executableCalls, 'utf8'), '', 'unverified executable must not be invoked');
 });
