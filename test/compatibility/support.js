@@ -59,7 +59,7 @@ function runCli(args, options = {}) {
   return { status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, json };
 }
 
-function installRecordingRemoteBoundary(specDir, tempRoot) {
+function installRecordingRemoteBoundary(specDir, tempRoot, { adapterMajor } = {}) {
   const pocketDir = path.join(specDir, '.pocket');
   fs.mkdirSync(pocketDir, { recursive: true });
   const remoteCalls = path.join(tempRoot, 'remote-calls.jsonl');
@@ -76,6 +76,19 @@ const event = eventFile ? JSON.parse(fs.readFileSync(eventFile, 'utf8')) : { eve
 fs.appendFileSync(process.env.REMOTE_CALLS, JSON.stringify({ event_id: event.event_id }) + '\\n');
 process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded' }) + '\\n');
 `, { mode: 0o755 });
+  if (Number.isInteger(adapterMajor)) {
+    fs.writeFileSync(path.join(tempRoot, 'package.json'), `${JSON.stringify({
+      name: 'test-enterprise-adapter',
+      version: `${adapterMajor}.0.0`,
+    }, null, 2)}\n`);
+    fs.writeFileSync(path.join(tempRoot, 'surfaces.json'), `${JSON.stringify({
+      schema: 1,
+      release: { major: adapterMajor },
+      roles: {
+        'pi/enterprise': { kind: 'enterprise', includes: ['recording-adapter.js'] },
+      },
+    }, null, 2)}\n`);
+  }
   fs.writeFileSync(path.join(pocketDir, 'lifecycle-adapter.json'), `${JSON.stringify({
     schema: 1,
     adapter_contract: 1,

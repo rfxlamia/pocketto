@@ -108,8 +108,7 @@ function prepareUnavailableAdapter(fixture, mode) {
 
 function restoreUnavailableAdapter(fixture, mode, registrationPath, validRegistration) {
   if (mode === 'removed') {
-    installRecordingRemoteBoundary(fixture.projectRoot, fixture.tempRoot);
-    writeSurface(fixture.tempRoot, 4);
+    installRecordingRemoteBoundary(fixture.projectRoot, fixture.tempRoot, { adapterMajor: 4 });
   } else {
     fs.writeFileSync(registrationPath, `${JSON.stringify(validRegistration, null, 2)}\n`);
   }

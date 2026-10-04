@@ -44,8 +44,8 @@ function createMatrixFixture(t, coreMajor, enterpriseMajor) {
   const projectRoot = path.join(tempRoot, 'project');
   fs.mkdirSync(projectRoot, { recursive: true });
   const coreManifest = writeSurface(path.join(tempRoot, 'core'), coreMajor);
-  const enterpriseManifest = writeSurface(tempRoot, enterpriseMajor);
-  const remote = installRecordingRemoteBoundary(projectRoot, tempRoot);
+  const remote = installRecordingRemoteBoundary(projectRoot, tempRoot, { adapterMajor: enterpriseMajor });
+  const enterpriseManifest = path.join(tempRoot, 'surfaces.json');
   return { tempRoot, projectRoot, coreManifest, enterpriseManifest, remote };
 }
 

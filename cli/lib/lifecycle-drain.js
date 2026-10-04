@@ -30,21 +30,21 @@ function majorFromVersion(version) {
   return match ? Number(match[1]) : null;
 }
 
-function surfaceMajorAt(manifestPath) {
+function surfaceManifestAt(manifestPath) {
   try {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    if (manifest.schema !== SURFACE_MANIFEST || !Number.isInteger(manifest.release && manifest.release.major)) return null;
-    return manifest.release.major;
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+      || manifest.schema !== SURFACE_MANIFEST
+      || !Number.isInteger(manifest.release && manifest.release.major)) return null;
+    return manifest;
   } catch {
     return null;
   }
 }
 
 function installedCoreMajor() {
-  const manifestPath = path.resolve(__dirname, '..', '..', 'surfaces.json');
-  const releaseMajor = surfaceMajorAt(manifestPath);
-  const packageMajor = majorFromVersion(CLI_VERSION);
-  return Number.isInteger(releaseMajor) && releaseMajor === packageMajor ? releaseMajor : null;
+  const manifest = surfaceManifestAt(path.resolve(__dirname, '..', '..', 'surfaces.json'));
+  return manifest && manifest.release.major === majorFromVersion(CLI_VERSION) ? manifest.release.major : null;
 }
 
 function installedAdapterMajor(projectRoot, registration) {
@@ -56,14 +56,40 @@ function installedAdapterMajor(projectRoot, registration) {
     || argv.find((arg) => typeof arg === 'string' && isPathLike(arg));
   if (typeof script !== 'string') return null;
 
-  let directory = path.dirname(path.isAbsolute(script) ? script : path.resolve(projectRoot, script));
-  while (true) {
-    const major = surfaceMajorAt(path.join(directory, 'surfaces.json'));
-    if (major !== null) return major;
-    const parent = path.dirname(directory);
-    if (parent === directory) return null;
-    directory = parent;
+  let scriptPath;
+  try {
+    scriptPath = fs.realpathSync(path.isAbsolute(script) ? script : path.resolve(projectRoot, script));
+  } catch {
+    return null;
   }
+
+  let packageRoot = path.dirname(scriptPath);
+  let packageManifest;
+  while (true) {
+    try {
+      packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+      if (!packageManifest || typeof packageManifest !== 'object' || Array.isArray(packageManifest)) return null;
+      break;
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') return null;
+      const parent = path.dirname(packageRoot);
+      if (parent === packageRoot) return null;
+      packageRoot = parent;
+    }
+  }
+
+  const surface = surfaceManifestAt(path.join(packageRoot, 'surfaces.json'));
+  const relativeScript = path.relative(packageRoot, scriptPath);
+  if (!surface || !relativeScript || relativeScript === '..' || relativeScript.startsWith(`..${path.sep}`)) return null;
+  const roles = surface.roles;
+  if (!roles || typeof roles !== 'object' || Array.isArray(roles)) return null;
+  const scriptName = relativeScript.split(path.sep).join('/');
+  const owned = Object.values(roles).some((role) => (
+    role && typeof role === 'object' && role.kind === 'enterprise'
+    && Array.isArray(role.includes) && role.includes.includes(scriptName)
+  ));
+  const packageMajor = majorFromVersion(packageManifest.version);
+  return owned && packageMajor === surface.release.major ? packageMajor : null;
 }
 
 function preflightAdapter(projectRoot) {
