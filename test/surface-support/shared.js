@@ -32,6 +32,9 @@ const ENTERPRISE_RUNTIME_FILES = [
   'enterprise/registration-preflight.js',
   'enterprise/github.js',
   'enterprise/meta.js',
+  'enterprise/lifecycle-delivery.js',
+  'enterprise/lifecycle-proof.js',
+  'enterprise/lifecycle-watermark.js',
   'enterprise/retry.js',
 ];
 const T8_ISSUE_RUNTIME_FILES = [

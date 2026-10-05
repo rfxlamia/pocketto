@@ -87,6 +87,9 @@
       "kind": "enterprise",
       "includes": [
         "enterprise/dispatch.js",
+        "enterprise/lifecycle-delivery.js",
+        "enterprise/lifecycle-proof.js",
+        "enterprise/lifecycle-watermark.js",
         "enterprise/phase-handler.js",
         "enterprise/phase-handler-context.js",
         "enterprise/phase-handler-errors.js",
@@ -217,6 +220,9 @@
       "kind": "enterprise",
       "includes": [
         "enterprise/dispatch.js",
+        "enterprise/lifecycle-delivery.js",
+        "enterprise/lifecycle-proof.js",
+        "enterprise/lifecycle-watermark.js",
         "enterprise/phase-handler.js",
         "enterprise/phase-handler-context.js",
         "enterprise/phase-handler-errors.js",
