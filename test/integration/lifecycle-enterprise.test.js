@@ -201,6 +201,12 @@ const commentsFor = (number) => state.comments[String(number)] || (state.comment
 if (args[0] === 'repo' && args[1] === 'view') json(repo);
 if (args[0] === 'issue' && args[1] === 'list') json(state.issues.filter((issue) => issue.state === 'OPEN'));
 if (args[0] === 'issue' && args[1] === 'create') {
+  if (process.env.FAKE_GH_GATE_EFFECT === 'issue-create'
+      && !fs.existsSync(process.env.FAKE_GH_GATE_READY_FILE)) {
+    fs.writeFileSync(process.env.FAKE_GH_GATE_READY_FILE, 'issue-create');
+    const signal = new Int32Array(new SharedArrayBuffer(4));
+    while (!fs.existsSync(process.env.FAKE_GH_GATE_RELEASE_FILE)) Atomics.wait(signal, 0, 0, 10);
+  }
   const number = state.nextIssueNumber++;
   const url = '${REPOSITORY_URL}/issues/' + number;
   const bodyFile = value('--body-file');
@@ -293,7 +299,7 @@ function readRemote(fixture) {
   return JSON.parse(fs.readFileSync(fixture.remotePath, 'utf8'));
 }
 
-function installFakeAdapter(fixture, tracePath, { recordRemoteEffects = false, remoteGate = null } = {}) {
+function installFakeAdapter(fixture, tracePath, { recordRemoteEffects = false } = {}) {
   const adapterPath = path.join(fixture.root, 'fake-adapter.js');
   writeFile(path.join(fixture.root, 'package.json'), JSON.stringify({ name: 'fake-enterprise-fixture', version: '4.0.0' }, null, 2));
   writeFile(path.join(fixture.root, 'surfaces.json'), JSON.stringify({
@@ -305,25 +311,15 @@ function installFakeAdapter(fixture, tracePath, { recordRemoteEffects = false, r
 const body = '<!-- lifecycle-revision -->\\nrevision=' + event.revision;
 execFileSync('gh', ['api', 'repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments', '-f', 'body=' + body], { stdio: 'ignore' });
 ` : '';
-  const remoteGateWait = remoteGate ? `if (!fs.existsSync(process.env.FAKE_ADAPTER_REMOTE_READY_FILE)) {
-  fs.writeFileSync(process.env.FAKE_ADAPTER_REMOTE_READY_FILE, event.event_id);
-  const signal = new Int32Array(new SharedArrayBuffer(4));
-  while (!fs.existsSync(process.env.FAKE_ADAPTER_REMOTE_RELEASE_FILE)) Atomics.wait(signal, 0, 0, 10);
-}
-` : '';
   writeFile(adapterPath, `#!/usr/bin/env node
 'use strict';
 const fs = require('node:fs');
 const event = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 ${remoteMutation}fs.appendFileSync(process.env.FAKE_ADAPTER_TRACE, JSON.stringify({ event_id: event.event_id, revision: event.revision }) + '\\n');
-${remoteGateWait}process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded', proof_ref: 'test:proof', proof_hash: '${'a'.repeat(64)}' }) + '\\n');
+process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded', proof_ref: 'test:proof', proof_hash: '${'a'.repeat(64)}' }) + '\\n');
 `);
   fs.chmodSync(adapterPath, 0o755);
   const env = { ...fixture.env, FAKE_ADAPTER_TRACE: tracePath };
-  if (remoteGate) {
-    env.FAKE_ADAPTER_REMOTE_READY_FILE = remoteGate.readyPath;
-    env.FAKE_ADAPTER_REMOTE_RELEASE_FILE = remoteGate.releasePath;
-  }
   const installed = runProcess(process.execPath, [
     ENTERPRISE_CLI, 'install', fixture.root, '--argv', adapterPath, '--json',
   ], { cwd: path.resolve(__dirname, '../..'), env });
@@ -973,7 +969,7 @@ test('remote phase proof survives a local ledger timeout without another remote 
   assert.equal(fs.existsSync(claimPath), false, 'successful proof reconciliation must release the recovered claim');
 });
 
-test('concurrent public drains produce one claim and one remote effect', async (t) => {
+test('concurrent public drains produce one claim and one real Enterprise remote effect', async (t) => {
   const fixture = createFixture(t);
   initializePlan(fixture);
   const approved = runCore(fixture, [
@@ -982,13 +978,16 @@ test('concurrent public drains produce one claim and one remote effect', async (
     '--json', '--contract', '3',
   ]);
   const eventId = assertCliOk(approved, 'public spec-approved transition').event_id;
-  const adapterTrace = path.join(fixture.root, 'concurrent-adapter.jsonl');
-  fs.writeFileSync(adapterTrace, '');
-  const remoteGate = {
-    readyPath: path.join(fixture.root, 'adapter-remote.ready'),
-    releasePath: path.join(fixture.root, 'adapter-remote.release'),
+  const fakeGitHubGate = {
+    readyPath: path.join(fixture.root, 'fake-github-create.ready'),
+    releasePath: path.join(fixture.root, 'fake-github-create.release'),
   };
-  const env = installFakeAdapter(fixture, adapterTrace, { recordRemoteEffects: true, remoteGate });
+  const env = {
+    ...fixture.env,
+    FAKE_GH_GATE_EFFECT: 'issue-create',
+    FAKE_GH_GATE_READY_FILE: fakeGitHubGate.readyPath,
+    FAKE_GH_GATE_RELEASE_FILE: fakeGitHubGate.releasePath,
+  };
   const gateA = installStaleCandidateGate(fixture, 'worker-a');
   const gateB = installStaleCandidateGate(fixture, 'worker-b');
   const startGatedDrain = (gate) => startProcess(process.execPath, [
@@ -1010,19 +1009,22 @@ test('concurrent public drains produce one claim and one remote effect', async (
     await waitForFile(gateA.readyPath, workerA.child);
     workerB = startGatedDrain(gateB);
     await waitForFile(gateB.readyPath, workerB.child);
-    assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false,
-      'both workers must have observed the pending event before either acquires its claim');
+    const claimPath = path.join(fixture.specDir, '.lifecycle.lock');
+    assert.equal(fs.existsSync(claimPath), false,
+      'both workers must have observed the same pending event before either acquires its claim');
 
     writeFile(gateA.releasePath, 'claim');
-    await waitForFile(remoteGate.readyPath, workerA.child);
-    const claimPath = path.join(fixture.specDir, '.lifecycle.lock');
+    await waitForFile(fakeGitHubGate.readyPath, workerA.child);
     const activeClaim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
     assert.equal(activeClaim.event_id, eventId);
     assert.equal(activeClaim.owner_pid, workerA.child.pid,
-      'worker A must hold the one real event claim while its remote invocation is active');
+      'worker A must hold the real event claim while the Enterprise issue handler is at the fake GitHub boundary');
     const claimedEvent = readLifecycle(fixture).events[0];
     assert.equal(claimedEvent.delivery.status, 'claimed');
     assert.equal(claimedEvent.delivery.attempts, 1);
+    const remoteBeforeWorkerB = readRemote(fixture);
+    assert.deepEqual(remoteBeforeWorkerB.effects, [],
+      'the fake GitHub gate must pause before the real Enterprise handler mutates the remote state');
 
     writeFile(gateB.releasePath, 'claim');
     const workerBOutput = await workerB.done;
@@ -1035,16 +1037,13 @@ test('concurrent public drains produce one claim and one remote effect', async (
       status: 'pending',
       deferred: true,
       reason: 'claim-held',
-    }], 'the competing worker must fail the real claim rather than invoke the adapter');
-    assert.equal(fs.readFileSync(adapterTrace, 'utf8').trim().split('\\n').length, 1,
-      'only the claim owner may invoke the registered adapter');
-    const remoteWhileWorkerAHeldClaim = readRemote(fixture);
-    assert.equal(remoteWhileWorkerAHeldClaim.effects.length, 1,
-      'the fake GitHub runner must observe one remote effect while the owner is held');
+    }], 'the competing worker must fail the real claim rather than invoke the Enterprise handler');
+    assert.deepEqual(readRemote(fixture), remoteBeforeWorkerB,
+      'the competing worker must not call the fake GitHub transport or mutate remote state');
     assert.equal(JSON.parse(fs.readFileSync(claimPath, 'utf8')).owner_pid, workerA.child.pid,
       'worker B must not replace or release worker A’s claim');
 
-    writeFile(remoteGate.releasePath, 'complete');
+    writeFile(fakeGitHubGate.releasePath, 'complete');
     const workerAOutput = await workerA.done;
     let workerAJson = null;
     try { workerAJson = JSON.parse(workerAOutput.stdout); } catch { /* Preserve raw output for the assertion. */ }
@@ -1056,14 +1055,15 @@ test('concurrent public drains produce one claim and one remote effect', async (
     assert.equal(finalLifecycle.events[0].delivery.status, 'succeeded');
     assert.equal(finalLifecycle.events[0].delivery.attempts, 1,
       'the shared ledger must record one invocation, not a second delivery attempt');
-    assert.equal(readRemote(fixture).effects.length, 1,
-      'both workers must converge on exactly one remote effect');
-    assert.equal(fs.readFileSync(adapterTrace, 'utf8').trim().split('\\n').length, 1);
+    const remote = readRemote(fixture);
+    assert.deepEqual(remote.effects.map((effect) => effect.kind), ['issue-create'],
+      'both workers must converge on exactly one real Enterprise issue effect');
+    assert.equal(remote.issues.length, 1);
     assert.equal(fs.existsSync(claimPath), false, 'the successful owner must release the real claim');
   } finally {
     writeFile(gateA.releasePath, 'claim');
     writeFile(gateB.releasePath, 'claim');
-    writeFile(remoteGate.releasePath, 'complete');
+    writeFile(fakeGitHubGate.releasePath, 'complete');
     await workerA.done.catch(() => {});
     if (workerB) await workerB.done.catch(() => {});
   }
