@@ -292,7 +292,7 @@ function readRemote(fixture) {
   return JSON.parse(fs.readFileSync(fixture.remotePath, 'utf8'));
 }
 
-function installFakeAdapter(fixture, tracePath, { recordRemoteEffects = false } = {}) {
+function installFakeAdapter(fixture, tracePath, { recordRemoteEffects = false, remoteGate = null } = {}) {
   const adapterPath = path.join(fixture.root, 'fake-adapter.js');
   writeFile(path.join(fixture.root, 'package.json'), JSON.stringify({ name: 'fake-enterprise-fixture', version: '4.0.0' }, null, 2));
   writeFile(path.join(fixture.root, 'surfaces.json'), JSON.stringify({
@@ -304,15 +304,25 @@ function installFakeAdapter(fixture, tracePath, { recordRemoteEffects = false } 
 const body = '<!-- lifecycle-revision -->\\nrevision=' + event.revision;
 execFileSync('gh', ['api', 'repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments', '-f', 'body=' + body], { stdio: 'ignore' });
 ` : '';
+  const remoteGateWait = remoteGate ? `if (!fs.existsSync(process.env.FAKE_ADAPTER_REMOTE_READY_FILE)) {
+  fs.writeFileSync(process.env.FAKE_ADAPTER_REMOTE_READY_FILE, event.event_id);
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.existsSync(process.env.FAKE_ADAPTER_REMOTE_RELEASE_FILE)) Atomics.wait(signal, 0, 0, 10);
+}
+` : '';
   writeFile(adapterPath, `#!/usr/bin/env node
 'use strict';
 const fs = require('node:fs');
 const event = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 ${remoteMutation}fs.appendFileSync(process.env.FAKE_ADAPTER_TRACE, JSON.stringify({ event_id: event.event_id, revision: event.revision }) + '\\n');
-process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded', proof_ref: 'test:proof', proof_hash: '${'a'.repeat(64)}' }) + '\\n');
+${remoteGateWait}process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded', proof_ref: 'test:proof', proof_hash: '${'a'.repeat(64)}' }) + '\\n');
 `);
   fs.chmodSync(adapterPath, 0o755);
   const env = { ...fixture.env, FAKE_ADAPTER_TRACE: tracePath };
+  if (remoteGate) {
+    env.FAKE_ADAPTER_REMOTE_READY_FILE = remoteGate.readyPath;
+    env.FAKE_ADAPTER_REMOTE_RELEASE_FILE = remoteGate.releasePath;
+  }
   const installed = runProcess(process.execPath, [
     ENTERPRISE_CLI, 'install', fixture.root, '--argv', adapterPath, '--json',
   ], { cwd: path.resolve(__dirname, '../..'), env });
@@ -411,10 +421,10 @@ function appendOrderedPendingRevisions(fixture) {
   return lifecycle;
 }
 
-function installStaleCandidateGate(fixture) {
+function installStaleCandidateGate(fixture, workerId = 'stale-candidate') {
   const hookPath = path.join(fixture.root, 'stale-candidate-gate.js');
-  const readyPath = path.join(fixture.root, 'stale-candidate.ready');
-  const releasePath = path.join(fixture.root, 'stale-candidate.release');
+  const readyPath = path.join(fixture.root, `${workerId}.ready`);
+  const releasePath = path.join(fixture.root, `${workerId}.release`);
   writeFile(hookPath, `const fs = require('node:fs');
 const Module = require('node:module');
 const originalLoad = Module._load;
@@ -675,5 +685,101 @@ test('a stale lower revision is a no-op after a later revision has succeeded', a
   } finally {
     writeFile(gate.releasePath, 'resume');
     await staleWorker.done.catch(() => {});
+  }
+});
+
+test('concurrent public drains produce one claim and one remote effect', async (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const approved = runCore(fixture, [
+    'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+    '--artifact', `spec:approved-spec:approved-spec.md:${sha256(fixture.approvedSpec)}`,
+    '--json', '--contract', '3',
+  ]);
+  const eventId = assertCliOk(approved, 'public spec-approved transition').event_id;
+  const adapterTrace = path.join(fixture.root, 'concurrent-adapter.jsonl');
+  fs.writeFileSync(adapterTrace, '');
+  const remoteGate = {
+    readyPath: path.join(fixture.root, 'adapter-remote.ready'),
+    releasePath: path.join(fixture.root, 'adapter-remote.release'),
+  };
+  const env = installFakeAdapter(fixture, adapterTrace, { recordRemoteEffects: true, remoteGate });
+  const gateA = installStaleCandidateGate(fixture, 'worker-a');
+  const gateB = installStaleCandidateGate(fixture, 'worker-b');
+  const startGatedDrain = (gate) => startProcess(process.execPath, [
+    CORE_CLI, 'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], {
+    cwd: fixture.root,
+    env: {
+      ...env,
+      NODE_OPTIONS: [env.NODE_OPTIONS, `--require=${gate.hookPath}`].filter(Boolean).join(' '),
+      STALE_QUEUE_EVENT_ID: eventId,
+      STALE_QUEUE_READY_FILE: gate.readyPath,
+      STALE_QUEUE_RELEASE_FILE: gate.releasePath,
+    },
+  });
+  const workerA = startGatedDrain(gateA);
+  let workerB;
+
+  try {
+    await waitForFile(gateA.readyPath, workerA.child);
+    workerB = startGatedDrain(gateB);
+    await waitForFile(gateB.readyPath, workerB.child);
+    assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false,
+      'both workers must have observed the pending event before either acquires its claim');
+
+    writeFile(gateA.releasePath, 'claim');
+    await waitForFile(remoteGate.readyPath, workerA.child);
+    const claimPath = path.join(fixture.specDir, '.lifecycle.lock');
+    const activeClaim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+    assert.equal(activeClaim.event_id, eventId);
+    assert.equal(activeClaim.owner_pid, workerA.child.pid,
+      'worker A must hold the one real event claim while its remote invocation is active');
+    const claimedEvent = readLifecycle(fixture).events[0];
+    assert.equal(claimedEvent.delivery.status, 'claimed');
+    assert.equal(claimedEvent.delivery.attempts, 1);
+
+    writeFile(gateB.releasePath, 'claim');
+    const workerBOutput = await workerB.done;
+    let workerBJson = null;
+    try { workerBJson = JSON.parse(workerBOutput.stdout); } catch { /* Preserve raw output for the assertion. */ }
+    const workerBData = assertCliOk({ ...workerBOutput, json: workerBJson }, 'concurrent public drain worker B');
+    assert.deepEqual(workerBData.deliveries, [{
+      event_id: eventId,
+      revision: 1,
+      status: 'pending',
+      deferred: true,
+      reason: 'claim-held',
+    }], 'the competing worker must fail the real claim rather than invoke the adapter');
+    assert.equal(fs.readFileSync(adapterTrace, 'utf8').trim().split('\\n').length, 1,
+      'only the claim owner may invoke the registered adapter');
+    const remoteWhileWorkerAHeldClaim = readRemote(fixture);
+    assert.equal(remoteWhileWorkerAHeldClaim.effects.length, 1,
+      'the fake GitHub runner must observe one remote effect while the owner is held');
+    assert.equal(JSON.parse(fs.readFileSync(claimPath, 'utf8')).owner_pid, workerA.child.pid,
+      'worker B must not replace or release worker A’s claim');
+
+    writeFile(remoteGate.releasePath, 'complete');
+    const workerAOutput = await workerA.done;
+    let workerAJson = null;
+    try { workerAJson = JSON.parse(workerAOutput.stdout); } catch { /* Preserve raw output for the assertion. */ }
+    const workerAData = assertCliOk({ ...workerAOutput, json: workerAJson }, 'concurrent public drain worker A');
+    assert.deepEqual(workerAData.deliveries.map(({ event_id, revision, status }) => ({ event_id, revision, status })), [
+      { event_id: eventId, revision: 1, status: 'succeeded' },
+    ]);
+    const finalLifecycle = readLifecycle(fixture);
+    assert.equal(finalLifecycle.events[0].delivery.status, 'succeeded');
+    assert.equal(finalLifecycle.events[0].delivery.attempts, 1,
+      'the shared ledger must record one invocation, not a second delivery attempt');
+    assert.equal(readRemote(fixture).effects.length, 1,
+      'both workers must converge on exactly one remote effect');
+    assert.equal(fs.readFileSync(adapterTrace, 'utf8').trim().split('\\n').length, 1);
+    assert.equal(fs.existsSync(claimPath), false, 'the successful owner must release the real claim');
+  } finally {
+    writeFile(gateA.releasePath, 'claim');
+    writeFile(gateB.releasePath, 'claim');
+    writeFile(remoteGate.releasePath, 'complete');
+    await workerA.done.catch(() => {});
+    if (workerB) await workerB.done.catch(() => {});
   }
 });
