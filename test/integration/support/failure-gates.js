@@ -86,6 +86,48 @@ fs.readFileSync = function(target, ...args) {
   return { hookPath, hitPath, dispatchPath };
 }
 
+function installRegisteredEnterprisePathFaultGate(fixture) {
+  const hookPath = path.join(fixture.root, 'registered-enterprise-path-fault-gate.js');
+  const hitPath = path.join(fixture.root, 'registered-enterprise-path-fault.hit');
+  const dispatchPath = path.resolve(__dirname, '../../../enterprise/dispatch.js');
+  writeFile(hookPath, `const fs = require('node:fs');
+const path = require('node:path');
+const originalRealpathSync = fs.realpathSync;
+const originalStatSync = fs.statSync;
+const originalWriteFileSync = fs.writeFileSync;
+const expectedRoot = originalRealpathSync(path.resolve(process.env.LIFECYCLE_ENTERPRISE_PATH_FAILURE_ROOT));
+const expectedMethod = process.env.LIFECYCLE_ENTERPRISE_PATH_FAILURE_METHOD;
+const expectedDispatch = path.resolve(process.env.LIFECYCLE_ENTERPRISE_DISPATCH_PATH);
+let injected = false;
+function shouldInject(method, target) {
+  const fromRegisteredEnterprise = typeof process.argv[1] === 'string'
+    && path.resolve(process.argv[1]) === expectedDispatch;
+  const stack = new Error().stack || '';
+  return !injected && method === expectedMethod && fromRegisteredEnterprise
+    && typeof target === 'string' && path.resolve(target) === expectedRoot
+    && stack.includes('resolvePlanArtifactPath');
+}
+function inject(method, target) {
+  injected = true;
+  originalWriteFileSync.call(fs, process.env.LIFECYCLE_ENTERPRISE_PATH_FAILURE_HIT_FILE, JSON.stringify({
+    code: 'EIO', executable: path.resolve(process.argv[1]), method, target: path.resolve(target),
+  }));
+  const error = new Error('injected registered Enterprise path-resolution failure');
+  error.code = 'EIO';
+  throw error;
+}
+fs.realpathSync = function(target, ...args) {
+  if (shouldInject('realpathSync', target)) return inject('realpathSync', target);
+  return originalRealpathSync.call(this, target, ...args);
+};
+fs.statSync = function(target, ...args) {
+  if (shouldInject('statSync', target)) return inject('statSync', target);
+  return originalStatSync.call(this, target, ...args);
+};
+`);
+  return { hookPath, hitPath, dispatchPath };
+}
+
 function installLifecycleWatermarkWriteFaultGate(fixture) {
   const hookPath = path.join(fixture.root, 'lifecycle-watermark-write-fault-gate.js');
   const hitPath = path.join(fixture.root, 'lifecycle-watermark-write-fault.hit');
@@ -181,6 +223,7 @@ module.exports = {
   installLedgerFaultGate,
   installArtifactReadFaultGate,
   installRegisteredEnterpriseReadFaultGate,
+  installRegisteredEnterprisePathFaultGate,
   installLifecycleWatermarkWriteFaultGate,
   installLifecycleHandlerCallTraceGate,
   installStaleCandidateGate,

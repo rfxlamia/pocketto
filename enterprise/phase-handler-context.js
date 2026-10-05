@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const enterpriseMeta = require('./meta');
 const { PhaseHandlerError, safeMessage } = require('./phase-handler-errors');
 
 function isInside(root, candidate) {
@@ -26,7 +27,8 @@ function resolvePlanArtifactPath(planDir, relative, label, { allowMissing = fals
   try {
     root = fs.realpathSync(planDir);
     if (!fs.statSync(root).isDirectory()) throw new Error('plan root is not a directory');
-  } catch {
+  } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) throw error;
     throw invalidPlanArtifactPath(label);
   }
 
@@ -43,6 +45,7 @@ function resolvePlanArtifactPath(planDir, relative, label, { allowMissing = fals
         try {
           physicalAncestor = fs.realpathSync(ancestor);
         } catch (ancestorError) {
+          if (enterpriseMeta.isTransientIoError(ancestorError)) throw ancestorError;
           if (!ancestorError || !['ENOENT', 'ENOTDIR'].includes(ancestorError.code)) {
             throw invalidPlanArtifactPath(label);
           }
@@ -62,7 +65,8 @@ function resolvePlanArtifactPath(planDir, relative, label, { allowMissing = fals
   let physical;
   try {
     physical = fs.realpathSync(candidate);
-  } catch {
+  } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) throw error;
     throw invalidPlanArtifactPath(label);
   }
   if (!isInside(root, physical)) throw invalidPlanArtifactPath(label);

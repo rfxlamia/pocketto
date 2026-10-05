@@ -10,3 +10,4 @@ require('./lifecycle-proof-replay.scenario');
 require('./lifecycle-stale-artifact.scenario');
 require('./lifecycle-artifact-retry.scenario');
 require('./lifecycle-enterprise-read-retry.scenario');
+require('./lifecycle-evidence-classification.scenario');

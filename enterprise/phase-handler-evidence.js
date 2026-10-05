@@ -60,10 +60,17 @@ function readPhaseLog(planDir, artifactPath) {
     log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
   } catch (error) {
     if (error instanceof PhaseHandlerError) throw error;
-    throw new PhaseHandlerError('PHASE_EVIDENCE_UNAVAILABLE', `Cannot read plan task evidence: ${safeMessage(error)}`, {
-      status: 'retryable',
-      retryable: true,
-    });
+    if (enterpriseMeta.isTransientIoError(error)) {
+      throw new PhaseHandlerError('PHASE_EVIDENCE_UNAVAILABLE',
+        `Cannot read plan task evidence because of a temporary I/O failure: ${safeMessage(error)}`, {
+          status: 'retryable',
+          retryable: true,
+        });
+    }
+    throw new PhaseHandlerError('PHASE_EVIDENCE_INVALID', `Cannot read plan task evidence: ${safeMessage(error)}`);
+  }
+  if (!log || typeof log !== 'object' || Array.isArray(log)) {
+    throw new PhaseHandlerError('PHASE_EVIDENCE_INVALID', 'Plan task evidence must be a JSON object.');
   }
   const phaseLog = (Array.isArray(log.phases) ? log.phases : []).find((phase) => samePath(phase.file, artifactPath));
   if (!phaseLog || !Array.isArray(phaseLog.tasks)) {
@@ -100,12 +107,26 @@ function readReviewReport(planDir, task) {
     );
   } catch (error) {
     if (error instanceof PhaseHandlerError) throw error;
+    if (enterpriseMeta.isTransientIoError(error)) {
+      throw new PhaseHandlerError('PHASE_REVIEW_EVIDENCE_UNAVAILABLE',
+        `Cannot read ${task.id} review evidence because of a temporary I/O failure: ${safeMessage(error)}`, {
+          status: 'retryable',
+          retryable: true,
+        });
+    }
     throw new PhaseHandlerError('PHASE_REVIEW_EVIDENCE_INVALID', `Cannot read ${task.id} review evidence: ${safeMessage(error)}`);
   }
   if (!reviewPath) return null;
   try {
     return JSON.parse(fs.readFileSync(reviewPath, 'utf8'));
   } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) {
+      throw new PhaseHandlerError('PHASE_REVIEW_EVIDENCE_UNAVAILABLE',
+        `Cannot read ${task.id} review evidence because of a temporary I/O failure: ${safeMessage(error)}`, {
+          status: 'retryable',
+          retryable: true,
+        });
+    }
     throw new PhaseHandlerError('PHASE_REVIEW_EVIDENCE_INVALID', `Cannot read ${task.id} review evidence: ${safeMessage(error)}`);
   }
 }
