@@ -781,6 +781,46 @@ test('expired event claims are reclaimed without overlapping the prior worker or
   assert.equal(fs.existsSync(claimPath), false, 'the reclaimed worker must release the real lock after success');
 });
 
+test('committed artifacts that are missing or changed become terminal without GitHub mutation', async (t) => {
+  for (const artifactState of ['missing', 'changed']) {
+    await t.test(`${artifactState} spec artifact`, (t) => {
+      const fixture = createFixture(t);
+      initializePlan(fixture);
+      const transition = runCore(fixture, [
+        'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+        '--artifact', `spec:approved-spec:approved-spec.md:${sha256(fixture.approvedSpec)}`,
+        '--json', '--contract', '3',
+      ]);
+      const eventId = assertCliOk(transition, 'public spec-approved transition').event_id;
+      const artifactPath = path.join(fixture.specDir, 'approved-spec.md');
+      if (artifactState === 'missing') fs.unlinkSync(artifactPath);
+      else fs.writeFileSync(artifactPath, `${fixture.approvedSpec}Changed after commit.\\n`);
+
+      const drain = runCore(fixture, [
+        'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+      ]);
+      const data = assertCliOk(drain, `public drain with ${artifactState} committed artifact`);
+      assert.deepEqual(data.deliveries.map(({ event_id, revision, status, error }) => ({
+        event_id,
+        revision,
+        status,
+        code: error && error.code,
+      })), [{ event_id: eventId, revision: 1, status: 'terminal', code: 'STALE_ARTIFACT' }]);
+      const lifecycle = readLifecycle(fixture);
+      assert.equal(lifecycle.events[0].delivery.status, 'terminal');
+      assert.equal(lifecycle.events[0].delivery.error.code, 'STALE_ARTIFACT');
+      const remote = readRemote(fixture);
+      assert.deepEqual(remote.calls, [], 'artifact validation must stop before the fake GitHub transport');
+      assert.deepEqual(remote.effects, []);
+      assert.deepEqual(remote.issues, []);
+      const metadata = JSON.parse(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json'), 'utf8'));
+      assert.equal(metadata.github_issue.ownership, undefined, 'stale content must not write Enterprise issue ownership proof');
+      assert.equal(metadata.github_issue.number, undefined);
+      assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false);
+    });
+  }
+});
+
 test('remote phase proof survives a local ledger timeout without another remote effect', async (t) => {
   const fixture = createFixture(t);
   initializePlan(fixture);
