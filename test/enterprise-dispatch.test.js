@@ -9,6 +9,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { invokeAdapter, readAdapterRegistration } = require('../cli/lib/lifecycle-adapter');
 const enterpriseMeta = require('../enterprise/meta');
+const { createLifecycleDelivery } = require('../enterprise/lifecycle-delivery');
 
 const CLI = path.resolve(__dirname, '../enterprise/cli.js');
 const CORE_CLI = path.resolve(__dirname, '../cli/index.js');
@@ -848,6 +849,44 @@ test('registered succeeded replays reject external metadata symlinks without rea
       assert.ok(!JSON.stringify(response).includes(external.externalPath));
     });
   }
+
+  const fixture = createFixture(t);
+  const physicalRoot = fs.realpathSync(fixture.root);
+  const physicalSpecDir = fs.realpathSync(fixture.specDir);
+  const metadataPath = path.join(physicalSpecDir, '.pocket-meta.json');
+  const originalLstatSync = fs.lstatSync;
+  fs.lstatSync = function failMetadataPreflightWithEio(target, ...args) {
+    if (typeof target === 'string' && path.resolve(target) === path.resolve(metadataPath)) {
+      const error = new Error('injected transient metadata I/O failure');
+      error.code = 'EIO';
+      throw error;
+    }
+    return originalLstatSync.call(this, target, ...args);
+  };
+  let prepared;
+  try {
+    prepared = createLifecycleDelivery(fixture.root).prepare({
+      ...fixture.specEvent,
+      delivery: { ...fixture.specEvent.delivery, status: 'succeeded' },
+    });
+    assert.throws(() => enterpriseMeta.preflightMetaFor(physicalSpecDir, {
+      projectRoot: physicalRoot,
+      specDir: physicalSpecDir,
+    }), { code: 'EIO' });
+  } finally {
+    fs.lstatSync = originalLstatSync;
+  }
+  assert.equal(prepared.response.status, 'retryable');
+  assert.equal(prepared.response.error.code, 'ADAPTER_LIFECYCLE_DELIVERY_INVALID');
+  assert.equal(prepared.response.error.retryable, true);
+
+  const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+  metadata.lifecycle_delivery = { schema: 1, plan_id: PLAN_ID, last_applied_revision: -1 };
+  fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+  const invalidWatermark = createLifecycleDelivery(fixture.root).prepare(fixture.specEvent);
+  assert.equal(invalidWatermark.response.status, 'terminal');
+  assert.equal(invalidWatermark.response.error.code, 'ADAPTER_LIFECYCLE_DELIVERY_INVALID');
+  assert.equal(invalidWatermark.response.error.retryable, false);
 });
 
 test('registered event runner fails closed before GitHub calls and keeps diagnostics secret-free', (t) => {

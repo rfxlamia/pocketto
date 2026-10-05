@@ -14,6 +14,14 @@ const { writeFileAtomicSync } = require('../cli/lib/atomic-file');
 const lifecycleProof = require('./lifecycle-proof');
 const lifecycleWatermark = require('./lifecycle-watermark');
 
+const TRANSIENT_IO_ERROR_CODES = new Set([
+  'EAGAIN', 'EBUSY', 'EINTR', 'EIO', 'EMFILE', 'ENFILE', 'ESTALE', 'ETIMEDOUT', 'EWOULDBLOCK',
+]);
+
+function isTransientIoError(error) {
+  return Boolean(error && TRANSIENT_IO_ERROR_CODES.has(error.code));
+}
+
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
@@ -55,7 +63,7 @@ function resolveMetaContext(specDir, context) {
     if (!fs.statSync(physicalSpecDir).isDirectory()) throw metaPathError();
     return { root: physicalSpecDir, specDir: physicalSpecDir };
   } catch (error) {
-    if (error && error.code === 'ENTERPRISE_META_PATH_INVALID') throw error;
+    if ((error && error.code === 'ENTERPRISE_META_PATH_INVALID') || isTransientIoError(error)) throw error;
     throw metaPathError();
   }
 }
@@ -67,13 +75,15 @@ function resolveSafeMetaTarget(specDir, context) {
     fs.lstatSync(metadataPath);
   } catch (error) {
     if (error && error.code === 'ENOENT') return { path: metadataPath, exists: false };
+    if (isTransientIoError(error)) throw error;
     throw metaPathError();
   }
 
   let target;
   try {
     target = fs.realpathSync(metadataPath);
-  } catch {
+  } catch (error) {
+    if (isTransientIoError(error)) throw error;
     // A dangling symlink is present according to lstat but has no safe target.
     throw metaPathError();
   }
@@ -81,7 +91,7 @@ function resolveSafeMetaTarget(specDir, context) {
   try {
     if (!fs.statSync(target).isFile()) throw metaPathError();
   } catch (error) {
-    if (error && error.code === 'ENTERPRISE_META_PATH_INVALID') throw error;
+    if ((error && error.code === 'ENTERPRISE_META_PATH_INVALID') || isTransientIoError(error)) throw error;
     throw metaPathError();
   }
   return { path: target, exists: true };
@@ -208,6 +218,7 @@ function phasePrProofRef(phase) {
 
 module.exports = {
   resolveMetaPath,
+  isTransientIoError,
   preflightMetaFor,
   readMetaFor,
   writeMetaFor,

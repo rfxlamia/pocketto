@@ -5,6 +5,21 @@ const path = require('node:path');
 const { serializeResponse } = require('./adapter');
 const enterpriseMeta = require('./meta');
 
+const METADATA_ERROR_CODES = {
+  'spec-approved': {
+    ENTERPRISE_META_MISSING: 'ISSUE_METADATA_MISSING',
+    ENTERPRISE_META_PATH_INVALID: 'ISSUE_METADATA_PATH_INVALID',
+  },
+  'phase-complete': {
+    ENTERPRISE_META_MISSING: 'PHASE_METADATA_MISSING',
+    ENTERPRISE_META_PATH_INVALID: 'PHASE_METADATA_PATH_INVALID',
+  },
+  'plan-closed': {
+    ENTERPRISE_META_MISSING: 'CLOSEOUT_METADATA_MISSING',
+    ENTERPRISE_META_PATH_INVALID: 'CLOSEOUT_METADATA_PATH_INVALID',
+  },
+};
+
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
@@ -49,16 +64,48 @@ function lifecycleDeliveryResponse(event, status, code, retryable, message, proo
   return serializeResponse(response, event.event_id);
 }
 
+function retryableDeliveryStateFailure(event) {
+  return {
+    response: lifecycleDeliveryResponse(event, 'retryable', 'ADAPTER_LIFECYCLE_DELIVERY_INVALID', true,
+      'Enterprise lifecycle delivery metadata could not be read because of a temporary I/O failure; retry delivery. No handler or GitHub call ran.'),
+  };
+}
+
+function lifecycleContextFailure(event, error) {
+  if (enterpriseMeta.isTransientIoError(error)) return retryableDeliveryStateFailure(event);
+  return {
+    response: lifecycleDeliveryResponse(event, 'terminal', 'STALE_ARTIFACT', false,
+      'The selected lifecycle plan context is invalid or unsafe; verify the selected plan artifacts. No handler or GitHub call ran.'),
+  };
+}
+
+function lifecycleMetadataFailure(event, error) {
+  if (enterpriseMeta.isTransientIoError(error)) return retryableDeliveryStateFailure(event);
+  const code = METADATA_ERROR_CODES[event.type]
+    && METADATA_ERROR_CODES[event.type][error && error.code]
+    ? METADATA_ERROR_CODES[event.type][error.code]
+    : 'ADAPTER_LIFECYCLE_DELIVERY_INVALID';
+  const message = code === 'ADAPTER_LIFECYCLE_DELIVERY_INVALID'
+    ? 'Enterprise lifecycle delivery metadata is malformed or invalid; resolve it manually. No handler or GitHub call ran.'
+    : 'Enterprise lifecycle metadata is missing or has an unsafe path; resolve it manually. No handler or GitHub call ran.';
+  return {
+    response: lifecycleDeliveryResponse(event, 'terminal', code, false, message),
+  };
+}
+
 function readDeliveryState(projectRoot, event) {
+  let context;
   try {
-    const context = lifecycleDeliveryContext(projectRoot, event.plan_id);
+    context = lifecycleDeliveryContext(projectRoot, event.plan_id);
+  } catch (error) {
+    return lifecycleContextFailure(event, error);
+  }
+
+  try {
     const delivery = enterpriseMeta.readLifecycleDelivery(context.specDir, event.plan_id, context);
     return { context, delivery };
-  } catch {
-    return {
-      response: lifecycleDeliveryResponse(event, 'retryable', 'ADAPTER_LIFECYCLE_DELIVERY_INVALID', true,
-        'Enterprise lifecycle delivery metadata could not be read or validated safely; no handler or GitHub call ran.'),
-    };
+  } catch (error) {
+    return lifecycleMetadataFailure(event, error);
   }
 }
 
