@@ -3,6 +3,8 @@
 // Final plan-state projection used by closure proof persistence.
 
 const { readLog } = require('../cli/lib/logjson');
+const enterpriseMeta = require('./meta');
+const { PhaseHandlerError } = require('./phase-handler-errors');
 const { resolvePlanArtifactPath } = require('./phase-handler-context');
 
 function readPlan(planDir) {
@@ -10,7 +12,14 @@ function readPlan(planDir) {
   try {
     const logPath = resolvePlanArtifactPath(planDir, 'log.json', 'plan log');
     log = readLog(logPath);
-  } catch {
+  } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) {
+      throw new PhaseHandlerError('PLAN_STATE_UNAVAILABLE',
+        'Final plan log could not be read because of a temporary I/O failure; retry delivery.', {
+          status: 'retryable',
+          retryable: true,
+        });
+    }
     return { ok: false, code: 'PLAN_STATE_UNAVAILABLE', message: 'Final plan log is unavailable or malformed.' };
   }
   if (!log.header || log.header.status !== 'DONE' || !Array.isArray(log.phases)

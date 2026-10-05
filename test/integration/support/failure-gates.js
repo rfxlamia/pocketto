@@ -57,6 +57,35 @@ fs.readFileSync = function(target, ...args) {
   return { hookPath, hitPath };
 }
 
+function installRegisteredEnterpriseReadFaultGate(fixture) {
+  const hookPath = path.join(fixture.root, 'registered-enterprise-read-fault-gate.js');
+  const hitPath = path.join(fixture.root, 'registered-enterprise-read-fault.hit');
+  const dispatchPath = path.resolve(__dirname, '../../../enterprise/dispatch.js');
+  writeFile(hookPath, `const fs = require('node:fs');
+const path = require('node:path');
+const originalReadFileSync = fs.readFileSync;
+const expectedPath = fs.realpathSync(process.env.LIFECYCLE_ENTERPRISE_READ_FAILURE_PATH);
+const expectedDispatch = path.resolve(process.env.LIFECYCLE_ENTERPRISE_DISPATCH_PATH);
+let injected = false;
+fs.readFileSync = function(target, ...args) {
+  const fromRegisteredEnterprise = typeof process.argv[1] === 'string'
+    && path.resolve(process.argv[1]) === expectedDispatch;
+  if (!injected && fromRegisteredEnterprise && typeof target === 'string'
+      && path.resolve(target) === expectedPath) {
+    injected = true;
+    fs.writeFileSync(process.env.LIFECYCLE_ENTERPRISE_READ_FAILURE_HIT_FILE, JSON.stringify({
+      code: 'EIO', executable: path.resolve(process.argv[1]), target: path.resolve(target),
+    }));
+    const error = new Error('injected registered Enterprise read failure');
+    error.code = 'EIO';
+    throw error;
+  }
+  return originalReadFileSync.call(this, target, ...args);
+};
+`);
+  return { hookPath, hitPath, dispatchPath };
+}
+
 function installLifecycleWatermarkWriteFaultGate(fixture) {
   const hookPath = path.join(fixture.root, 'lifecycle-watermark-write-fault-gate.js');
   const hitPath = path.join(fixture.root, 'lifecycle-watermark-write-fault.hit');
@@ -151,6 +180,7 @@ Module._load = function(request, parent, isMain) {
 module.exports = {
   installLedgerFaultGate,
   installArtifactReadFaultGate,
+  installRegisteredEnterpriseReadFaultGate,
   installLifecycleWatermarkWriteFaultGate,
   installLifecycleHandlerCallTraceGate,
   installStaleCandidateGate,

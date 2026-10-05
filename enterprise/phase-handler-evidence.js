@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const identity = require('../cli/lib/identity');
+const enterpriseMeta = require('./meta');
 const { PhaseHandlerError, safeMessage } = require('./phase-handler-errors');
 const { resolvePlanArtifactPath } = require('./phase-handler-context');
 
@@ -30,6 +31,13 @@ function readPhaseArtifact(ref, planDir) {
     return fs.readFileSync(filePath, 'utf8');
   } catch (error) {
     if (error instanceof PhaseHandlerError) throw error;
+    if (enterpriseMeta.isTransientIoError(error)) {
+      throw new PhaseHandlerError('PHASE_EVIDENCE_UNAVAILABLE',
+        `Phase evidence could not be read because of a temporary I/O failure: ${safeMessage(error)}`, {
+          status: 'retryable',
+          retryable: true,
+        });
+    }
     throw new PhaseHandlerError('STALE_ARTIFACT', `Phase evidence is unavailable: ${safeMessage(error)}`);
   }
 }

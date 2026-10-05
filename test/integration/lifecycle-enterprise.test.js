@@ -9,3 +9,4 @@ require('./lifecycle-expired-claim.scenario');
 require('./lifecycle-proof-replay.scenario');
 require('./lifecycle-stale-artifact.scenario');
 require('./lifecycle-artifact-retry.scenario');
+require('./lifecycle-enterprise-read-retry.scenario');
