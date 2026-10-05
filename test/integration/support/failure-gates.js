@@ -57,6 +57,41 @@ fs.readFileSync = function(target, ...args) {
   return { hookPath, hitPath };
 }
 
+function installLifecycleWatermarkWriteFaultGate(fixture) {
+  const hookPath = path.join(fixture.root, 'lifecycle-watermark-write-fault-gate.js');
+  const hitPath = path.join(fixture.root, 'lifecycle-watermark-write-fault.hit');
+  writeFile(hookPath, `const fs = require('node:fs');
+const path = require('node:path');
+const originalWriteFileSync = fs.writeFileSync;
+const expectedMetaPath = fs.realpathSync(process.env.LIFECYCLE_WATERMARK_FAULT_META_PATH);
+const expectedRevision = Number(process.env.LIFECYCLE_WATERMARK_FAULT_REVISION);
+const tempPrefix = '.' + path.basename(expectedMetaPath) + '.tmp-';
+let injected = false;
+fs.writeFileSync = function(target, data, ...args) {
+  const targetPath = typeof target === 'string' ? path.resolve(target) : null;
+  const isMetadataReplacement = targetPath === expectedMetaPath
+    || (targetPath && path.dirname(targetPath) === path.dirname(expectedMetaPath)
+      && path.basename(targetPath).startsWith(tempPrefix));
+  if (!injected && isMetadataReplacement) {
+    const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
+    let replacement;
+    try { replacement = JSON.parse(text); } catch { /* Not a metadata replacement. */ }
+    if (replacement && replacement.lifecycle_delivery
+        && replacement.lifecycle_delivery.last_applied_revision === expectedRevision) {
+      injected = true;
+      originalWriteFileSync.call(this, target, '', ...args);
+      originalWriteFileSync.call(fs, process.env.LIFECYCLE_WATERMARK_FAULT_HIT_FILE, 'revision-' + expectedRevision);
+      const error = new Error('injected lifecycle watermark write failure');
+      error.code = 'EIO';
+      throw error;
+    }
+  }
+  return originalWriteFileSync.call(this, target, data, ...args);
+};
+`);
+  return { hookPath, hitPath };
+}
+
 function installStaleCandidateGate(fixture, workerId = 'stale-candidate') {
   const hookPath = path.join(fixture.root, 'stale-candidate-gate.js');
   const readyPath = path.join(fixture.root, `${workerId}.ready`);
@@ -85,4 +120,9 @@ Module._load = function(request, parent, isMain) {
   return { hookPath, readyPath, releasePath };
 }
 
-module.exports = { installLedgerFaultGate, installArtifactReadFaultGate, installStaleCandidateGate };
+module.exports = {
+  installLedgerFaultGate,
+  installArtifactReadFaultGate,
+  installLifecycleWatermarkWriteFaultGate,
+  installStaleCandidateGate,
+};

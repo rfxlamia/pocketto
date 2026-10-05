@@ -10,6 +10,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const coreMeta = require('../cli/lib/meta');
+const { writeFileAtomicSync } = require('../cli/lib/atomic-file');
 
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate);
@@ -101,7 +102,7 @@ function readMetaFor(specDir, context) {
 
 function writeMetaFor(specDir, meta, context) {
   const target = resolveSafeMetaTarget(specDir, context);
-  coreMeta.writeMeta(target.path, meta);
+  writeFileAtomicSync(target.path, `${JSON.stringify(meta, null, 2)}\n`);
   return meta;
 }
 

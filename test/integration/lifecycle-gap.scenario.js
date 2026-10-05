@@ -13,6 +13,7 @@ const { runProcess } = require('./support/process');
 const { sha256, writeFile } = require('./support/files');
 const { commitTransition } = require('../../cli/lib/lifecycle-store');
 const { validateEvent } = require('../../cli/lib/lifecycle-contract');
+const { installLifecycleWatermarkWriteFaultGate } = require('./support/failure-gates');
 const enterpriseMeta = require('../../enterprise/meta');
 
 test('the registered Enterprise adapter defers an out-of-order revision until its predecessor is applied', (t) => {
@@ -73,13 +74,45 @@ test('the registered Enterprise adapter defers an out-of-order revision until it
   assert.deepEqual(fs.readFileSync(lifecyclePath), journalBeforeDelivery,
     'reordered adapter delivery must not mutate Core’s authoritative append-ordered journal');
 
+  const watermarkFault = installLifecycleWatermarkWriteFaultGate(fixture);
+  const reconciling4 = deliverRegisteredEvent(fixture, event4, {
+    faultGate: watermarkFault,
+    failWatermarkRevision: 4,
+  });
+  assert.equal(reconciling4.status, 'reconciling');
+  assert.deepEqual(reconciling4.error && {
+    code: reconciling4.error.code,
+    retryable: reconciling4.error.retryable,
+  }, { code: 'LIFECYCLE_WATERMARK_WRITE_FAILED', retryable: true });
+  assert.equal(fs.readFileSync(watermarkFault.hitPath, 'utf8'), 'revision-4');
+  let metadataAfterWatermarkFailure;
+  try {
+    metadataAfterWatermarkFailure = readMetadata(fixture);
+  } catch (error) {
+    assert.fail(`a failed watermark write must preserve parseable metadata and the existing proof: ${error.message}`);
+  }
+  assert.deepEqual(metadataAfterWatermarkFailure.lifecycle_delivery, {
+    schema: 1,
+    plan_id: PLAN_ID,
+    last_applied_revision: 3,
+  }, 'a failed watermark write must preserve the previous contiguous revision');
+  assertCanonicalPersistedProof(fixture, event4, reconciling4);
+  const remoteAfterProof = readRemote(fixture);
+  assert.deepEqual(remoteAfterProof.effects.slice(remoteBeforeGap.effects.length), [{
+    kind: 'phase-summary-create',
+    number: PR_NUMBER + 2,
+    marker: '<!-- pocket-phase-3-summary -->',
+  }], 'the event proof and remote effect must be durable before the injected watermark write failure');
+
   const applied4 = deliverRegisteredEvent(fixture, event4);
   assertSuccessfulProof(applied4, event4);
+  assert.deepEqual(readRemote(fixture).effects, remoteAfterProof.effects,
+    'replay must reconcile the persisted event proof without repeating the remote effect');
   assert.deepEqual(readWatermark(fixture), {
     schema: 1,
     plan_id: PLAN_ID,
     last_applied_revision: 4,
-  }, 'applying the missing predecessor must advance the watermark exactly once');
+  }, 'replaying the missing predecessor must repair and advance the watermark exactly once');
 
   const applied5 = deliverRegisteredEvent(fixture, event5);
   assertSuccessfulProof(applied5, event5);
@@ -162,7 +195,7 @@ function assertValidOrderedJournal(fixture) {
   }
 }
 
-function deliverRegisteredEvent(fixture, event) {
+function deliverRegisteredEvent(fixture, event, { faultGate, failWatermarkRevision } = {}) {
   const registrationPath = path.join(fixture.root, '.pocket', 'lifecycle-adapter.json');
   const registration = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
   const eventDir = path.join(fixture.root, 'adapter-deliveries');
@@ -170,13 +203,20 @@ function deliverRegisteredEvent(fixture, event) {
   const eventFile = path.join(eventDir, `revision-${event.revision}.json`);
   fs.writeFileSync(eventFile, `${JSON.stringify(event, null, 2)}\n`);
   const [executable, ...registeredArgs] = registration.argv;
+  const env = { ...fixture.env };
+  if (faultGate) {
+    env.NODE_OPTIONS = [env.NODE_OPTIONS, `--require=${faultGate.hookPath}`].filter(Boolean).join(' ');
+    env.LIFECYCLE_WATERMARK_FAULT_META_PATH = path.join(fixture.specDir, '.pocket-meta.json');
+    env.LIFECYCLE_WATERMARK_FAULT_REVISION = String(failWatermarkRevision);
+    env.LIFECYCLE_WATERMARK_FAULT_HIT_FILE = faultGate.hitPath;
+  }
   const result = runProcess(executable, [
     ...registeredArgs,
     eventFile,
     '--json',
     '--contract',
     '3',
-  ], { cwd: fixture.root, env: fixture.env });
+  ], { cwd: fixture.root, env });
   assert.equal(result.exit, 0, `registered Enterprise executable must return a bounded response: ${result.stdout}${result.stderr}`);
   let response;
   try {
@@ -192,6 +232,17 @@ function assertSuccessfulProof(response, event) {
   assert.equal(response.status, 'succeeded', `${event.event_id} must be applied successfully`);
   assert.equal(typeof response.proof_ref, 'string');
   assert.match(response.proof_hash, /^[0-9a-f]{64}$/);
+}
+
+function assertCanonicalPersistedProof(fixture, event, response) {
+  const proof = readMetadata(fixture).phases['phase-3'].review.proof;
+  assert.equal(proof.event_id, event.event_id);
+  assert.equal(proof.plan_id, PLAN_ID);
+  assert.equal(proof.phase_key, 'phase-3');
+  assert.deepEqual(proof.artifact_refs, event.artifact_refs);
+  assert.equal(proof.proof_ref, response.proof_ref);
+  assert.equal(proof.proof_hash, response.proof_hash);
+  assert.match(proof.proof_hash, /^[0-9a-f]{64}$/);
 }
 
 function assertCanonicalPhaseProof(fixture, phaseNumber, event, response) {
