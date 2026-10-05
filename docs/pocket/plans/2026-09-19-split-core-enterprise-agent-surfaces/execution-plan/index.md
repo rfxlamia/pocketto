@@ -3,7 +3,7 @@
 **Date:** 2026-09-19
 **Spec:** docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md
 **Source Plan:** ../execution-plan.md
-**source-sha256:** 9275e40e4a4bf57f319396a4f94621d609746d10611ac2294c4ba954731bf19e
+**source-sha256:** c181d372b912c2a587471074e8497c9517d99f0f0827c699eefcd6e1666de41a
 **Total Tasks:** 14
 **Total Phases:** 3
 

@@ -131,6 +131,7 @@ Enterprise users lose required checks when the model context window grows. If En
 - The adapter's issue reconciliation algorithm is normative: use a positive `github_issue.number/url` in `.pocket-meta.json` first; validate that it is in the current `origin` repository, open, and tied to the exact normalized `plan_id` in the issue title or embedded full-spec path. Otherwise search open `pocket-plan` issues in the current repository with that exact identity. Zero matches may create, exactly one owned open match may reconcile, and multiple, foreign-owned, manually conflicting, or closed matches become terminal/manual resolution without silent mutation or reopening. A missing issue for `phase-complete` is `ISSUE_REQUIRED` and stops without mutation.
 - PR reconciliation is also normative: use `phases.<phase>.github_pr.number/url` first; validate current `origin`, OPEN state, the expected `plan.branch`, and the expected phase marker. If metadata is absent, search the current repository for the exact branch and phase identity. Zero matches returns `PR_REQUIRED`, multiple matches or foreign/closed/mismatched matches return terminal manual resolution, and the adapter never auto-creates a PR. The existing recorder/explicit user flow must supply a PR before phase comments are written.
 - Core stores only opaque proof refs: `meta:github_issue` for issue proof, `meta:phases.<phase>.github_pr` plus `meta:phases.<phase>.review.fingerprints` for phase proof, and `meta:github_issue|marker:issue-tasklist` for closure proof. The adapter owns and updates remote IDs in `.pocket-meta.json`; v4 does not require a remote closeout comment, only the existing tasklist marker and local `closeout.md`.
+- Enterprise persists an adapter-owned per-plan `lifecycle_delivery: { schema: 1, plan_id, last_applied_revision }` watermark in `.pocket-meta.json`. This is delivery progress only, not a second event journal; `<spec_dir>/lifecycle.json` remains the authoritative append-ordered journal. A fresh lifecycle stream starts at revision 0. If an incoming event revision exceeds `last_applied_revision + 1`, the adapter returns a retryable `REVISION_GAP` response with an actionable message identifying the plan, blocked revision, and missing predecessor; no handler/GitHub operation runs and the watermark is unchanged. When the expected revision is delivered, Enterprise invokes the handler and advances the watermark only after the event's canonical proof is durably persisted. If proof persistence succeeds but watermark persistence fails, replay enters `reconciling`, looks up the existing event-bound proof before any remote mutation, then repairs the watermark. A stale revision at or below the watermark never regresses remote state and is a no-op backed by its existing event-bound proof.
 - An explicit `pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3` may create `lifecycle.json` from a v3 plan snapshot atomically only when the plan has no execution progress. If any task/phase is `REVIEW`, `DONE`, or `BLOCKED`, or the plan header is no longer pristine, it returns `PIN_V3_REQUIRED` and makes no file or remote change; the plan must finish under v3. Migration never rewrites v3 files or emits retrospective remote side effects; future transitions use the v4 contract.
 
 ### Release and Ownership Contract (Normative)
@@ -367,8 +368,9 @@ Scenario: Plan closure replay reuses the tasklist marker
 
 **Rule 1: Claims and revisions protect ordering.**
 - A single worker claims an event ID.
-- Events for one plan are processed serially.
-- Gaps remain pending; stale lower revisions are no-ops; remote state never regresses.
+- Core's append-ordered journal remains authoritative; Enterprise maintains only a per-plan contiguous applied-revision watermark in `.pocket-meta.json`.
+- Events for one plan are processed serially; when the adapter receives a revision greater than the watermark plus one, it returns retryable `REVISION_GAP` with the missing predecessor and makes no handler/remote mutation.
+- The watermark advances only after canonical proof persistence; gaps remain retryable and stale lower revisions are no-ops, so remote state never regresses.
 
 **Rule 2: Ambiguity never causes blind mutation.**
 - A malformed, absolute/path-escaping, cross-plan, or hash-mismatched reference is rejected during Core commit and creates no event.
@@ -388,11 +390,14 @@ Scenario: Out-of-order delivery does not regress state
   Then revision 3 becomes a no-op
   And remote state remains at revision 5
 
-Scenario: A revision gap remains pending
-  Given revision 5 arrives while revision 4 is not available
-  When the adapter receives revision 5
-  Then it does not apply revision 5 out of order
-  And it records a pending gap with an actionable diagnostic
+Scenario: A revision gap remains pending at the Enterprise adapter boundary
+  Given Core has a valid append-ordered journal containing revisions 1 through 5
+  And Enterprise's per-plan lifecycle watermark is 3 after revisions 1 through 3 were applied
+  When the registered Enterprise adapter receives revision 5 before revision 4
+  Then it returns retryable `REVISION_GAP` with the plan ID, blocked revision 5, missing predecessor 4, and an actionable recovery message
+  And no handler or GitHub mutation runs and the watermark remains 3
+  When revision 4 is then delivered and revision 5 is retried
+  Then Enterprise applies both in revision order and advances the watermark to 5 without duplicate proof
 
 Scenario: Concurrent delivery produces one remote effect
   Given two workers receive the same pending event

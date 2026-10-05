@@ -1375,15 +1375,15 @@ Steps:
 2. Run test — verify FAIL: `node --test test/integration/lifecycle-enterprise.test.js`
 3. Implement the shared integration harness and fix only the named seams in `cli/lib/lifecycle-dispatch.js`, `enterprise/adapter.js`, `enterprise/issue-handler.js`, `enterprise/phase-handler.js`, and `enterprise/closure-handler.js` required for the event-to-handler flow; use `cli/commands/lifecycle.js` as a read-only public boundary; verify PASS, refactor while green, and commit: `test(integration): verify lifecycle delivery to Enterprise adapter`.
 
-4. Write failing test for: revision gaps remain pending across Core and Enterprise.
+4. Write failing test for: the Enterprise adapter defers an out-of-order revision until its predecessor is applied.
    Test file: `test/integration/lifecycle-enterprise.test.js`
    Level: integration
-   Test intent: Given revision 5 arrives before revision 4, When public drain runs, Then revision 5 remains pending with plan ID, missing predecessor, and an actionable gap diagnostic, and no Enterprise handler is invoked.
-   Exercise through: public drain against one temporary lifecycle document and fake adapter.
-   Test doubles: fake clock and GitHub runner; use real store and ledger files.
-   Expected RED: isolated order tests cannot prove producer/dispatcher/adapter gap coordination.
+   Test intent: Given the Core journal contains valid append-ordered events r1 through r5 and Enterprise `.pocket-meta.json` has `lifecycle_delivery.last_applied_revision = 3`, When the registered Enterprise executable receives event r5 before r4, Then it returns `retryable` with stable code `REVISION_GAP` and an actionable diagnostic containing the plan ID, blocked revision 5, and missing predecessor 4; it invokes no handler or GitHub operation and leaves the watermark at 3. When r4 is then delivered and r5 is retried, Then Enterprise applies both in order and advances the watermark to 5 without duplicate proof.
+   Exercise through: the public registered Enterprise executable using valid event files produced from real Core transitions; reorder only adapter delivery order, never the authoritative Core journal.
+   Test doubles: fake GitHub transport and clock only; use real Enterprise adapter, dispatcher, metadata writer, and handlers.
+   Expected RED: Enterprise has no per-plan applied-revision watermark or adapter-boundary gap classification.
 5. Run test — verify FAIL: `node --test test/integration/lifecycle-enterprise.test.js`
-6. Implement/fix the cross-unit gap seam, verify PASS, refactor while green, and commit: `fix(integration): preserve lifecycle revision gaps`.
+6. Implement the Enterprise-owned revision watermark and retryable gap guard in `.pocket-meta.json`, verify PASS, refactor while green, and commit: `fix(integration): preserve lifecycle revision gaps`.
 
 7. Write failing test for: stale lower revisions are no-ops across Core and Enterprise.
    Test file: `test/integration/lifecycle-enterprise.test.js`
@@ -1448,7 +1448,8 @@ Steps:
 ## REFERENCES LOADED
 - `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md` — cross-unit acceptance scenarios for ordering, claims, retries, stale artifacts, and replay.
 - `cli/commands/lifecycle.js`, `cli/lib/lifecycle-store.js`, `cli/lib/lifecycle-dispatch.js` — Core producer/consumer boundary.
-- `enterprise/adapter.js`, `enterprise/issue-handler.js`, `enterprise/phase-handler.js`, `enterprise/closure-handler.js` — handler units from T7–T10.
+- `enterprise/adapter.js`, `enterprise/dispatch.js`, `enterprise/meta.js`, `enterprise/issue-handler.js`, `enterprise/phase-handler.js`, `enterprise/closure-handler.js` — registered Enterprise boundary, metadata, and handler units from T7–T10.
+- `test/enterprise-protocol.test.js` — user-approved fixture-only correction to supply valid v4 package/release majors for the Core contract mismatch scenario.
 - `test/lifecycle-dispatch.test.js`, `test/enterprise-protocol.test.js`, `test/enterprise-issue.test.js`, `test/enterprise-phase.test.js`, and `test/enterprise-closeout.test.js` — unit/integration seams that this task must not duplicate as substitutes.
 
 ## WHY THIS APPROACH
@@ -1459,7 +1460,7 @@ Justification: These GWT scenarios span the lifecycle store, claim/dispatch work
 [CRITICAL: Core remains locally successful and remote effects are exactly-once-by-proof, not exactly-once-by-process; replay must reconcile existing markers before mutation.]
 You are verifying the full Core-to-Enterprise lifecycle boundary.
 Spec: `docs/pocket/spec/2026-09-19-split-core-enterprise-agent-surfaces/core-enterprise-agent-surfaces.md`
-Files in scope: `test/integration/lifecycle-enterprise.test.js`, `cli/lib/lifecycle-dispatch.js`, `enterprise/adapter.js`, `enterprise/issue-handler.js`, `enterprise/phase-handler.js`, and `enterprise/closure-handler.js`; use `cli/commands/lifecycle.js` read-only and modify production files only when an end-to-end seam is missing.
+Files in scope: `test/integration/lifecycle-enterprise.test.js`, `cli/lib/lifecycle-dispatch.js`, `enterprise/adapter.js`, `enterprise/dispatch.js`, `enterprise/meta.js`, `enterprise/issue-handler.js`, `enterprise/phase-handler.js`, and `enterprise/closure-handler.js`; `test/enterprise-protocol.test.js` is approved for fixture-only correction. Use `cli/commands/lifecycle.js` read-only and modify production files only when an end-to-end seam is missing.
 Architecture rule: use real store/claims/handlers and fake only network, clock, and injected failure boundaries.
 [RESTATE: A passing unit suite is insufficient if the producer, dispatcher, handler, and proof ledger do not cooperate end-to-end.]
 
