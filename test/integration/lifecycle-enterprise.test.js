@@ -6,8 +6,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawnSync, spawn } = require('node:child_process');
 const enterpriseMeta = require('../../enterprise/meta');
+const { hashCanonicalPayload } = require('../../cli/lib/lifecycle-contract');
 
 const CORE_CLI = path.resolve(__dirname, '../../cli/index.js');
 const ENTERPRISE_CLI = path.resolve(__dirname, '../../enterprise/cli.js');
@@ -36,8 +37,44 @@ function runProcess(command, args, { cwd, env = process.env } = {}) {
   };
 }
 
+function startProcess(command, args, { cwd, env = process.env } = {}) {
+  const child = spawn(command, args, { cwd, env, encoding: 'utf8' });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const done = new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (status) => resolve({
+      exit: typeof status === 'number' ? status : 1,
+      stdout,
+      stderr,
+    }));
+  });
+  return { child, done };
+}
+
+async function waitForFile(filePath, child, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) return;
+    if (child.exitCode !== null) throw new Error(`worker exited before creating ${filePath}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
+}
+
 function runCore(fixture, args, env = fixture.env) {
   const result = runProcess(process.execPath, [CORE_CLI, ...args], { cwd: fixture.root, env });
+  let json = null;
+  try { json = JSON.parse(result.stdout); } catch { /* Preserve raw output for the assertion. */ }
+  return { ...result, json };
+}
+
+async function runCoreAsync(fixture, args, env = fixture.env) {
+  const result = await startProcess(process.execPath, [CORE_CLI, ...args], { cwd: fixture.root, env }).done;
   let json = null;
   try { json = JSON.parse(result.stdout); } catch { /* Preserve raw output for the assertion. */ }
   return { ...result, json };
@@ -255,7 +292,7 @@ function readRemote(fixture) {
   return JSON.parse(fs.readFileSync(fixture.remotePath, 'utf8'));
 }
 
-function installFakeAdapter(fixture, tracePath) {
+function installFakeAdapter(fixture, tracePath, { recordRemoteEffects = false } = {}) {
   const adapterPath = path.join(fixture.root, 'fake-adapter.js');
   writeFile(path.join(fixture.root, 'package.json'), JSON.stringify({ name: 'fake-enterprise-fixture', version: '4.0.0' }, null, 2));
   writeFile(path.join(fixture.root, 'surfaces.json'), JSON.stringify({
@@ -263,11 +300,15 @@ function installFakeAdapter(fixture, tracePath) {
     release: { major: 4 },
     roles: { 'test/enterprise': { kind: 'enterprise', includes: ['fake-adapter.js'] } },
   }, null, 2));
+  const remoteMutation = recordRemoteEffects ? `const { execFileSync } = require('node:child_process');
+const body = '<!-- lifecycle-revision -->\\nrevision=' + event.revision;
+execFileSync('gh', ['api', 'repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments', '-f', 'body=' + body], { stdio: 'ignore' });
+` : '';
   writeFile(adapterPath, `#!/usr/bin/env node
 'use strict';
 const fs = require('node:fs');
 const event = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-fs.appendFileSync(process.env.FAKE_ADAPTER_TRACE, JSON.stringify({ event_id: event.event_id }) + '\\n');
+${remoteMutation}fs.appendFileSync(process.env.FAKE_ADAPTER_TRACE, JSON.stringify({ event_id: event.event_id, revision: event.revision }) + '\\n');
 process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded', proof_ref: 'test:proof', proof_hash: '${'a'.repeat(64)}' }) + '\\n');
 `);
   fs.chmodSync(adapterPath, 0o755);
@@ -323,6 +364,79 @@ function writeGapDocument(fixture) {
   };
   writeFile(path.join(fixture.specDir, 'lifecycle.json'), JSON.stringify(lifecycle, null, 2));
   return lifecycle;
+}
+
+function appendOrderedPendingRevisions(fixture) {
+  const lifecycle = readLifecycle(fixture);
+  const existingRevisions = lifecycle.events.map((event) => event.revision);
+  assert.deepEqual(existingRevisions, [1, 2], 'the public emitters must create the initial ordered revisions');
+  assert.ok(lifecycle.events.every((event) => event.delivery.status === 'succeeded'));
+
+  for (const revision of [3, 4, 5]) {
+    const phaseNumber = revision - 1;
+    const artifactPath = `execution-plan/phase-${phaseNumber}.md`;
+    const contents = `# Phase ${phaseNumber} evidence\\n\\nCompleted lifecycle revision ${revision}.\\n`;
+    writeFile(path.join(fixture.planDir, artifactPath), contents);
+    const artifactRef = {
+      root: 'plan',
+      kind: 'phase-evidence',
+      path: artifactPath,
+      sha256: sha256(contents),
+      revision: 1,
+    };
+    const payload = {
+      plan_id: PLAN_ID,
+      type: 'phase-complete',
+      artifact_refs: [artifactRef],
+      proof_ref: null,
+      proof_hash: null,
+    };
+    lifecycle.events.push({
+      event_id: `${PLAN_ID}:phase-complete:r${revision}`,
+      plan_id: PLAN_ID,
+      type: 'phase-complete',
+      revision,
+      occurred_at: new Date(Date.parse(FIXED_NOW) + revision * 1000).toISOString(),
+      artifact_refs: [artifactRef],
+      payload_hash: hashCanonicalPayload(payload),
+      proof_ref: null,
+      proof_hash: null,
+      delivery: { status: 'pending', attempts: 0 },
+    });
+    lifecycle.plan.state.phase_status[`phase-${phaseNumber}`] = 'COMPLETE';
+  }
+
+  lifecycle.plan.revision = 5;
+  writeFile(path.join(fixture.specDir, 'lifecycle.json'), JSON.stringify(lifecycle, null, 2));
+  return lifecycle;
+}
+
+function installStaleCandidateGate(fixture) {
+  const hookPath = path.join(fixture.root, 'stale-candidate-gate.js');
+  const readyPath = path.join(fixture.root, 'stale-candidate.ready');
+  const releasePath = path.join(fixture.root, 'stale-candidate.release');
+  writeFile(hookPath, `const fs = require('node:fs');
+const Module = require('node:module');
+const originalLoad = Module._load;
+let paused = false;
+Module._load = function(request, parent, isMain) {
+  const loaded = originalLoad.apply(this, arguments);
+  if (request !== './lifecycle-claims' || !parent || !parent.filename.endsWith('/cli/lib/lifecycle-drain.js')) return loaded;
+  return {
+    ...loaded,
+    acquireEventClaim(specDir, planId, eventId) {
+      if (!paused && eventId === process.env.STALE_QUEUE_EVENT_ID) {
+        paused = true;
+        fs.writeFileSync(process.env.STALE_QUEUE_READY_FILE, eventId);
+        const signal = new Int32Array(new SharedArrayBuffer(4));
+        while (!fs.existsSync(process.env.STALE_QUEUE_RELEASE_FILE)) Atomics.wait(signal, 0, 0, 10);
+      }
+      return loaded.acquireEventClaim(specDir, planId, eventId);
+    },
+  };
+};
+`);
+  return { hookPath, readyPath, releasePath };
 }
 
 test('public Core emitters deliver lifecycle events to exactly one canonical Enterprise proof', (t) => {
@@ -465,4 +579,101 @@ test('revision gaps remain pending with an actionable predecessor diagnostic', (
   assert.deepEqual(readRemote(fixture).calls, [], 'the fake GitHub runner must remain untouched across a gap');
   assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false,
     'a gap must be detected before a worker claim is acquired');
+});
+
+test('a stale lower revision is a no-op after a later revision has succeeded', async (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const approved = runCore(fixture, [
+    'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+    '--artifact', `spec:approved-spec:approved-spec.md:${sha256(fixture.approvedSpec)}`,
+    '--json', '--contract', '3',
+  ]);
+  assert.equal(assertCliOk(approved, 'public spec-approved transition').event_id, `${PLAN_ID}:spec-approved:r1`);
+  const review = runCore(fixture, [
+    'log', 'update', fixture.planDir, PHASE_PATH, 'REVIEW', '--json', '--contract', '3',
+  ]);
+  assert.equal(assertCliOk(review, 'public log update REVIEW').event.event_id, `${PLAN_ID}:phase-complete:r2`);
+
+  const adapterTrace = path.join(fixture.root, 'fake-adapter.jsonl');
+  fs.writeFileSync(adapterTrace, '');
+  const env = installFakeAdapter(fixture, adapterTrace, { recordRemoteEffects: true });
+  const initialDrain = runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], env);
+  assert.deepEqual(assertCliOk(initialDrain, 'public initial lifecycle drain').deliveries.map(({ revision, status }) => ({ revision, status })), [
+    { revision: 1, status: 'succeeded' },
+    { revision: 2, status: 'succeeded' },
+  ]);
+
+  const lifecycle = appendOrderedPendingRevisions(fixture);
+  assert.deepEqual(lifecycle.events.map((event) => event.revision), [1, 2, 3, 4, 5],
+    'the append-only journal must retain monotonically increasing revision order');
+  assert.deepEqual(lifecycle.events.map((event) => event.delivery.status), [
+    'succeeded', 'succeeded', 'pending', 'pending', 'pending',
+  ]);
+
+  const gate = installStaleCandidateGate(fixture);
+  const staleEventId = `${PLAN_ID}:phase-complete:r3`;
+  const gatedEnv = {
+    ...env,
+    NODE_OPTIONS: [env.NODE_OPTIONS, `--require=${gate.hookPath}`].filter(Boolean).join(' '),
+    STALE_QUEUE_EVENT_ID: staleEventId,
+    STALE_QUEUE_READY_FILE: gate.readyPath,
+    STALE_QUEUE_RELEASE_FILE: gate.releasePath,
+  };
+  const staleWorker = startProcess(process.execPath, [
+    CORE_CLI, 'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], { cwd: fixture.root, env: gatedEnv });
+
+  try {
+    await waitForFile(gate.readyPath, staleWorker.child);
+    assert.equal(fs.readFileSync(gate.readyPath, 'utf8'), staleEventId,
+      'the delayed worker must have queued revision 3 before attempting its real claim');
+    assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false,
+      'the delayed worker must not hold revision 3 while another worker advances the ledger');
+
+    const orderedDrain = await runCoreAsync(fixture, [
+      'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+    ], env);
+    assert.deepEqual(assertCliOk(orderedDrain, 'public ordered lifecycle drain').deliveries.map(({ revision, status }) => ({ revision, status })), [
+      { revision: 3, status: 'succeeded' },
+      { revision: 4, status: 'succeeded' },
+      { revision: 5, status: 'succeeded' },
+    ]);
+
+    const afterRevisionFive = readLifecycle(fixture);
+    assert.equal(afterRevisionFive.events.find((event) => event.revision === 5).delivery.status, 'succeeded');
+    assert.ok(afterRevisionFive.events.slice(2).every((event) => event.delivery.status === 'succeeded'));
+    const remoteAtRevisionFive = readRemote(fixture);
+    const traceAtRevisionFive = fs.readFileSync(adapterTrace, 'utf8');
+    const appliedRevisions = (remoteAtRevisionFive.comments[String(ISSUE_NUMBER)] || [])
+      .map(({ body }) => Number(body.match(/revision=(\d+)/)?.[1]));
+    assert.deepEqual(appliedRevisions, [1, 2, 3, 4, 5], 'the fake GitHub state must advance monotonically through revision 5');
+    assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false,
+      'the advancing worker must release its real claim before the delayed worker resumes');
+
+    const ledgerAtRevisionFive = fs.readFileSync(path.join(fixture.specDir, 'lifecycle.json'));
+    assert.equal(afterRevisionFive.events.find((event) => event.revision === 3).delivery.status, 'succeeded',
+      'revision 3 must already be complete when its queued candidate is resumed');
+    writeFile(gate.releasePath, 'resume');
+    const staleOutput = await staleWorker.done;
+    let staleJson = null;
+    try { staleJson = JSON.parse(staleOutput.stdout); } catch { /* Preserve raw output for the assertion. */ }
+    const staleData = assertCliOk({ ...staleOutput, json: staleJson }, 'delayed public drain with a stale revision-3 candidate');
+    assert.equal(staleData.plan_id, PLAN_ID);
+    assert.deepEqual(staleData.deliveries, [], 'the stale queued candidate must be a no-op after revision 5 succeeds');
+    assert.deepEqual(staleData.gaps, []);
+    assert.equal(fs.readFileSync(path.join(fixture.specDir, 'lifecycle.json')).toString(), ledgerAtRevisionFive.toString(),
+      'the delayed stale candidate must not mutate the authoritative lifecycle ledger');
+    assert.equal(fs.readFileSync(adapterTrace, 'utf8'), traceAtRevisionFive,
+      'the delayed stale candidate must not invoke the registered adapter');
+    assert.deepEqual(readRemote(fixture), remoteAtRevisionFive,
+      'the delayed stale candidate must not regress remote state or create another effect');
+    assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false,
+      'the delayed worker must release its real claim after rechecking the ledger');
+  } finally {
+    writeFile(gate.releasePath, 'resume');
+    await staleWorker.done.catch(() => {});
+  }
 });
