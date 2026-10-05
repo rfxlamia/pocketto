@@ -13,8 +13,12 @@ const { runProcess } = require('./support/process');
 const { sha256, writeFile } = require('./support/files');
 const { commitTransition } = require('../../cli/lib/lifecycle-store');
 const { validateEvent } = require('../../cli/lib/lifecycle-contract');
-const { installLifecycleWatermarkWriteFaultGate } = require('./support/failure-gates');
+const {
+  installLifecycleWatermarkWriteFaultGate,
+  installLifecycleHandlerCallTraceGate,
+} = require('./support/failure-gates');
 const enterpriseMeta = require('../../enterprise/meta');
+const { responseDeliveryPatch } = require('../../cli/lib/lifecycle-retry');
 
 test('the registered Enterprise adapter defers an out-of-order revision until its predecessor is applied', (t) => {
   const fixture = createFixture(t);
@@ -47,10 +51,15 @@ test('the registered Enterprise adapter defers an out-of-order revision until it
 
   const event4 = readLifecycle(fixture).events.find((event) => event.revision === 4);
   const event5 = readLifecycle(fixture).events.find((event) => event.revision === 5);
+  assert.equal(event4.event_id, `${PLAN_ID}:phase-complete:r4`);
+  assert.equal(event5.event_id, `${PLAN_ID}:phase-complete:r5`);
+  assert.match(event4.payload_hash, /^[0-9a-f]{64}$/);
+  assert.match(event5.payload_hash, /^[0-9a-f]{64}$/);
+  const handlerTrace = installLifecycleHandlerCallTraceGate(fixture);
   const metadataBeforeGap = readMetadataBytes(fixture);
   const remoteBeforeGap = readRemote(fixture);
 
-  const blocked = deliverRegisteredEvent(fixture, event5);
+  const blocked = deliverRegisteredEvent(fixture, event5, { handlerTrace });
   assert.equal(blocked.event_id, event5.event_id);
   assert.equal(blocked.status, 'retryable');
   assert.deepEqual(blocked.error && {
@@ -71,13 +80,19 @@ test('the registered Enterprise adapter defers an out-of-order revision until it
     'a gap must invoke no handler and must not write proof or metadata');
   assert.deepEqual(readRemote(fixture), remoteBeforeGap,
     'a gap must perform zero fake GitHub operations or mutations');
+  assert.deepEqual(readHandlerCalls(handlerTrace), [], 'a gap must invoke no Enterprise phase handler');
   assert.deepEqual(fs.readFileSync(lifecyclePath), journalBeforeDelivery,
     'reordered adapter delivery must not mutate Core’s authoritative append-ordered journal');
 
   const watermarkFault = installLifecycleWatermarkWriteFaultGate(fixture);
-  const reconciling4 = deliverRegisteredEvent(fixture, event4, {
+  const claimedEvent4 = {
+    ...event4,
+    delivery: { ...event4.delivery, status: 'claimed', attempts: event4.delivery.attempts + 1 },
+  };
+  const reconciling4 = deliverRegisteredEvent(fixture, claimedEvent4, {
     faultGate: watermarkFault,
     failWatermarkRevision: 4,
+    handlerTrace,
   });
   assert.equal(reconciling4.status, 'reconciling');
   assert.deepEqual(reconciling4.error && {
@@ -97,6 +112,17 @@ test('the registered Enterprise adapter defers an out-of-order revision until it
     last_applied_revision: 3,
   }, 'a failed watermark write must preserve the previous contiguous revision');
   assertCanonicalPersistedProof(fixture, event4, reconciling4);
+  assert.deepEqual(readWatermark(fixture), {
+    schema: 1,
+    plan_id: PLAN_ID,
+    last_applied_revision: 3,
+  }, 'the contiguous watermark must stay at 3 after proof persistence but before recovery');
+  assert.deepEqual(readHandlerCalls(handlerTrace), [{
+    event_id: event4.event_id,
+    revision: 4,
+    status: 'claimed',
+  }], 'the initial r4 attempt must invoke its handler exactly once');
+  const metadataAfterProof = readMetadata(fixture);
   const remoteAfterProof = readRemote(fixture);
   assert.deepEqual(remoteAfterProof.effects.slice(remoteBeforeGap.effects.length), [{
     kind: 'phase-summary-create',
@@ -104,23 +130,64 @@ test('the registered Enterprise adapter defers an out-of-order revision until it
     marker: '<!-- pocket-phase-3-summary -->',
   }], 'the event proof and remote effect must be durable before the injected watermark write failure');
 
-  const applied4 = deliverRegisteredEvent(fixture, event4);
+  const reconcilingEvent4 = {
+    ...claimedEvent4,
+    delivery: {
+      ...claimedEvent4.delivery,
+      ...responseDeliveryPatch(reconciling4, claimedEvent4.delivery.attempts, Date.parse(FIXED_NOW)),
+    },
+  };
+  assert.equal(reconcilingEvent4.delivery.status, 'reconciling',
+    'replay must use the actual reconciling delivery state returned after the failed watermark write');
+  assert.equal(reconcilingEvent4.event_id, event4.event_id);
+  assert.equal(reconcilingEvent4.revision, event4.revision);
+  assert.equal(reconcilingEvent4.payload_hash, event4.payload_hash,
+    'reconciling delivery must retain the exact canonical payload hash');
+  assert.equal(reconcilingEvent4.delivery.proof_ref, reconciling4.proof_ref,
+    'the replay event must retain the proof reference returned by the failed attempt');
+  assert.equal(reconcilingEvent4.delivery.proof_hash, reconciling4.proof_hash,
+    'the replay event must retain the proof hash returned by the failed attempt');
+  assert.deepEqual(reconcilingEvent4.artifact_refs, event4.artifact_refs);
+  assert.deepEqual(validateEvent(reconcilingEvent4), { ok: true, code: null, message: null });
+
+  const applied4 = deliverRegisteredEvent(fixture, reconcilingEvent4, { handlerTrace });
   assertSuccessfulProof(applied4, event4);
-  assert.deepEqual(readRemote(fixture).effects, remoteAfterProof.effects,
-    'replay must reconcile the persisted event proof without repeating the remote effect');
+  assert.equal(applied4.event_id, reconciling4.event_id);
+  assert.equal(applied4.proof_ref, reconciling4.proof_ref,
+    'proof-first replay must return the exact persisted proof reference');
+  assert.equal(applied4.proof_hash, reconciling4.proof_hash,
+    'proof-first replay must return the exact persisted proof hash');
+  const remoteAfterReplay = readRemote(fixture);
+  assert.deepEqual(remoteAfterReplay.calls, remoteAfterProof.calls,
+    'proof-first replay must not make another fake GitHub transport call');
+  assert.deepEqual(remoteAfterReplay.effects, remoteAfterProof.effects,
+    'proof-first replay must not repeat any remote effect');
+  assert.deepEqual(readHandlerCalls(handlerTrace), [{
+    event_id: event4.event_id,
+    revision: 4,
+    status: 'claimed',
+  }], 'proof-first replay must not invoke the phase handler a second time');
+  assert.deepEqual(withoutLifecycleWatermark(readMetadata(fixture)), withoutLifecycleWatermark(metadataAfterProof),
+    'proof-first recovery may only mutate the watermark, not handler-owned proof metadata');
   assert.deepEqual(readWatermark(fixture), {
     schema: 1,
     plan_id: PLAN_ID,
     last_applied_revision: 4,
   }, 'replaying the missing predecessor must repair and advance the watermark exactly once');
 
-  const applied5 = deliverRegisteredEvent(fixture, event5);
+  const applied5 = deliverRegisteredEvent(fixture, event5, { handlerTrace });
   assertSuccessfulProof(applied5, event5);
+  assert.deepEqual(readHandlerCalls(handlerTrace).map(({ event_id, revision }) => ({ event_id, revision })), [
+    { event_id: event4.event_id, revision: 4 },
+    { event_id: event5.event_id, revision: 5 },
+  ], 'r5 must invoke its handler once after proof-first recovery applies r4');
   assert.deepEqual(readWatermark(fixture), {
     schema: 1,
     plan_id: PLAN_ID,
     last_applied_revision: 5,
   }, 'retrying revision 5 after revision 4 must advance the contiguous watermark');
+  assert.ok(readRemote(fixture).calls.length > remoteAfterReplay.calls.length,
+    'applying r5 must invoke its remote reconciliation path after the no-call proof-first replay');
   assertCanonicalPhaseProof(fixture, 3, event4, applied4);
   assertCanonicalPhaseProof(fixture, 4, event5, applied5);
   assertOrderedRemoteEffects(fixture, remoteBeforeGap, [3, 4]);
@@ -195,7 +262,7 @@ function assertValidOrderedJournal(fixture) {
   }
 }
 
-function deliverRegisteredEvent(fixture, event, { faultGate, failWatermarkRevision } = {}) {
+function deliverRegisteredEvent(fixture, event, { faultGate, failWatermarkRevision, handlerTrace } = {}) {
   const registrationPath = path.join(fixture.root, '.pocket', 'lifecycle-adapter.json');
   const registration = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
   const eventDir = path.join(fixture.root, 'adapter-deliveries');
@@ -204,11 +271,20 @@ function deliverRegisteredEvent(fixture, event, { faultGate, failWatermarkRevisi
   fs.writeFileSync(eventFile, `${JSON.stringify(event, null, 2)}\n`);
   const [executable, ...registeredArgs] = registration.argv;
   const env = { ...fixture.env };
+  const preloadHooks = [];
   if (faultGate) {
-    env.NODE_OPTIONS = [env.NODE_OPTIONS, `--require=${faultGate.hookPath}`].filter(Boolean).join(' ');
+    preloadHooks.push(faultGate.hookPath);
     env.LIFECYCLE_WATERMARK_FAULT_META_PATH = path.join(fixture.specDir, '.pocket-meta.json');
     env.LIFECYCLE_WATERMARK_FAULT_REVISION = String(failWatermarkRevision);
     env.LIFECYCLE_WATERMARK_FAULT_HIT_FILE = faultGate.hitPath;
+  }
+  if (handlerTrace) {
+    preloadHooks.push(handlerTrace.hookPath);
+    env.LIFECYCLE_HANDLER_TRACE_FILE = handlerTrace.tracePath;
+  }
+  if (preloadHooks.length > 0) {
+    env.NODE_OPTIONS = [env.NODE_OPTIONS, ...preloadHooks.map((hookPath) => `--require=${hookPath}`)]
+      .filter(Boolean).join(' ');
   }
   const result = runProcess(executable, [
     ...registeredArgs,
@@ -239,10 +315,15 @@ function assertCanonicalPersistedProof(fixture, event, response) {
   assert.equal(proof.event_id, event.event_id);
   assert.equal(proof.plan_id, PLAN_ID);
   assert.equal(proof.phase_key, 'phase-3');
+  assert.equal(proof.phase_number, 3);
   assert.deepEqual(proof.artifact_refs, event.artifact_refs);
+  assert.equal(proof.marker, '<!-- pocket-phase-3-summary -->');
   assert.equal(proof.proof_ref, response.proof_ref);
   assert.equal(proof.proof_hash, response.proof_hash);
   assert.match(proof.proof_hash, /^[0-9a-f]{64}$/);
+  const { proof_hash: storedHash, ...proofRecord } = proof;
+  assert.equal(storedHash, sha256(JSON.stringify(proofRecord)),
+    'the persisted event-bound proof hash must be canonical, not merely a metadata hash match');
 }
 
 function assertCanonicalPhaseProof(fixture, phaseNumber, event, response) {
@@ -251,9 +332,14 @@ function assertCanonicalPhaseProof(fixture, phaseNumber, event, response) {
   assert.equal(proof.event_id, event.event_id);
   assert.equal(proof.plan_id, PLAN_ID);
   assert.equal(proof.phase_key, `phase-${phaseNumber}`);
+  assert.equal(proof.phase_number, phaseNumber);
   assert.deepEqual(proof.artifact_refs, event.artifact_refs);
+  assert.equal(proof.marker, `<!-- pocket-phase-${phaseNumber}-summary -->`);
   assert.equal(proof.proof_ref, response.proof_ref);
   assert.equal(proof.proof_hash, response.proof_hash);
+  const { proof_hash: storedHash, ...proofRecord } = proof;
+  assert.equal(storedHash, sha256(JSON.stringify(proofRecord)),
+    `phase ${phaseNumber} proof hash must match its canonical record`);
 }
 
 function assertOrderedRemoteEffects(fixture, remoteBefore, phaseNumbers) {
@@ -283,4 +369,15 @@ function readMetadataBytes(fixture) {
 
 function readWatermark(fixture) {
   return readMetadata(fixture).lifecycle_delivery;
+}
+
+function readHandlerCalls(handlerTrace) {
+  if (!fs.existsSync(handlerTrace.tracePath)) return [];
+  return fs.readFileSync(handlerTrace.tracePath, 'utf8').trim().split(/\r?\n/)
+    .filter(Boolean).map((line) => JSON.parse(line));
+}
+
+function withoutLifecycleWatermark(metadata) {
+  const { lifecycle_delivery: _lifecycleDelivery, ...handlerMetadata } = metadata;
+  return handlerMetadata;
 }

@@ -35,6 +35,17 @@ function lifecycleDeliveryContext(projectRoot, planId) {
   return { projectRoot: root, specDir: physicalSpecDir };
 }
 
+const WATERMARK_WRITE_FAILURE_MESSAGE = 'Canonical event proof is durable but the Enterprise lifecycle watermark could not be saved. Retry delivery; the existing proof will be reconciled before remote mutation.';
+
+function lifecycleDeliverySuccess(event, proof) {
+  return serializeResponse({
+    event_id: event.event_id,
+    status: 'succeeded',
+    proof_ref: proof.proof_ref,
+    proof_hash: proof.proof_hash,
+  }, event.event_id);
+}
+
 function lifecycleDeliveryResponse(event, status, code, retryable, message, proof) {
   const response = {
     event_id: event.event_id,
@@ -101,6 +112,28 @@ function createLifecycleDelivery(projectRoot) {
         };
       }
 
+      if (event.delivery.status === 'reconciling'
+          && event.revision === delivery.last_applied_revision + 1) {
+        let recovery;
+        try {
+          recovery = enterpriseMeta.recoverLifecycleDelivery(context.specDir, event, context);
+        } catch {
+          return {
+            response: lifecycleDeliveryResponse(event, 'retryable', 'ADAPTER_LIFECYCLE_PROOF_UNAVAILABLE', true,
+              'The persisted proof for this reconciling lifecycle event could not be read; retry after metadata is available.'),
+          };
+        }
+        if (recovery && recovery.proof) {
+          if (recovery.error) {
+            return {
+              response: lifecycleDeliveryResponse(event, 'reconciling', 'LIFECYCLE_WATERMARK_WRITE_FAILED', true,
+                WATERMARK_WRITE_FAILURE_MESSAGE, recovery.proof),
+            };
+          }
+          return { response: lifecycleDeliverySuccess(event, recovery.proof) };
+        }
+      }
+
       return { event, state: { context, replay: false } };
     },
 
@@ -132,7 +165,7 @@ function createLifecycleDelivery(projectRoot) {
         );
       } catch {
         return lifecycleDeliveryResponse(event, 'reconciling', 'LIFECYCLE_WATERMARK_WRITE_FAILED', true,
-          'Canonical event proof is durable but the Enterprise lifecycle watermark could not be saved. Retry delivery; the existing proof will be reconciled before remote mutation.', response);
+          WATERMARK_WRITE_FAILURE_MESSAGE, response);
       }
       return response;
     },
