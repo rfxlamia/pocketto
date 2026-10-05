@@ -1,16 +1,13 @@
 'use strict';
 
-const fs = require('node:fs');
-const path = require('node:path');
 const { CliError } = require('./envelope');
 const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
 const { acquireEventClaim, releaseEventClaim } = require('./lifecycle-claims');
-const { invokeAdapter, readAdapterRegistration } = require('./lifecycle-adapter');
+const { invokeAdapter } = require('./lifecycle-adapter');
+const { preflightAdapter } = require('./lifecycle-adapter-compatibility');
 const { failureDeliveryPatch, protocolFailure, responseDeliveryPatch } = require('./lifecycle-retry');
-const { CLI_VERSION, SURFACE_MANIFEST } = require('./version');
 
 const ACTIVE_DELIVERY_STATUSES = new Set(['pending', 'retryable', 'claimed', 'reconciling']);
-const SUPPORTED_RELEASE_MAJORS = new Set([3, 4]);
 
 function highestContiguousSucceededRevision(doc) {
   const byRevision = new Map(doc.events.map((event) => [event.revision, event]));
@@ -23,113 +20,6 @@ function currentTimeMs() {
   const now = new Date(process.env.POCKETTO_LIFECYCLE_NOW || Date.now()).getTime();
   if (!Number.isFinite(now)) throw new CliError('LIFECYCLE_BAD_CLOCK', 'lifecycle clock must be a valid timestamp');
   return now;
-}
-
-function majorFromVersion(version) {
-  const match = typeof version === 'string' ? /^(\d+)\./.exec(version) : null;
-  return match ? Number(match[1]) : null;
-}
-
-function surfaceManifestAt(manifestPath) {
-  try {
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
-      || manifest.schema !== SURFACE_MANIFEST
-      || !Number.isInteger(manifest.release && manifest.release.major)) return null;
-    return manifest;
-  } catch {
-    return null;
-  }
-}
-
-function installedCoreMajor() {
-  const manifest = surfaceManifestAt(path.resolve(__dirname, '..', '..', 'surfaces.json'));
-  return manifest && manifest.release.major === majorFromVersion(CLI_VERSION) ? manifest.release.major : null;
-}
-
-function resolveEntrypointPath(projectRoot, target, script = false) {
-  if (typeof target !== 'string' || target.startsWith('-')) return null;
-  const pathLike = path.isAbsolute(target) || target.includes(path.sep) || target.includes('/') || (script && /\.(?:cjs|mjs|js)$/i.test(target));
-  if (!pathLike) return null;
-  try { const resolved = fs.realpathSync(path.isAbsolute(target) ? target : path.resolve(projectRoot, target));
-    return fs.statSync(resolved).isFile() ? resolved : null;
-  } catch { return null; }
-}
-
-function adapterMajorForEntrypoint(entrypointPath) {
-  let packageRoot = path.dirname(entrypointPath), packageManifest;
-  while (true) {
-    try { packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')); break; }
-    catch (err) {
-      if (err.code !== 'ENOENT' || path.dirname(packageRoot) === packageRoot) return null;
-      packageRoot = path.dirname(packageRoot);
-    }
-  }
-  if (!packageManifest || typeof packageManifest !== 'object' || Array.isArray(packageManifest)) return null;
-  const surface = surfaceManifestAt(path.join(packageRoot, 'surfaces.json'));
-  const relative = path.relative(packageRoot, entrypointPath);
-  const roles = surface && surface.roles;
-  const owned = roles && typeof roles === 'object' && !Array.isArray(roles)
-    && Object.values(roles).some((role) => role && typeof role === 'object' && role.kind === 'enterprise'
-      && Array.isArray(role.includes) && role.includes.includes(relative.split(path.sep).join('/')));
-  const packageMajor = majorFromVersion(packageManifest.version);
-  return surface && relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && owned
-    && packageMajor === surface.release.major ? packageMajor : null;
-}
-
-function installedAdapterMajor(projectRoot, registration) {
-  const argv = registration && Array.isArray(registration.argv) ? registration.argv : [];
-  const executablePath = resolveEntrypointPath(projectRoot, argv[0]);
-  if (!executablePath) return null;
-  let entrypointPath = executablePath;
-  try {
-    fs.accessSync(executablePath, fs.constants.X_OK);
-    if (executablePath === fs.realpathSync(process.execPath)) {
-      entrypointPath = resolveEntrypointPath(projectRoot, argv[1], true);
-    }
-  } catch {
-    return null;
-  }
-  return entrypointPath ? adapterMajorForEntrypoint(entrypointPath) : null;
-}
-
-function preflightAdapter(projectRoot) {
-  const loaded = readAdapterRegistration(projectRoot);
-  if (loaded.error || !loaded.registration) return loaded;
-
-  const coreMajor = installedCoreMajor();
-  const adapterMajor = installedAdapterMajor(projectRoot, loaded.registration);
-  if (!Number.isInteger(coreMajor) || !Number.isInteger(adapterMajor)) {
-    return {
-      registration: null,
-      error: protocolFailure(
-        'ADAPTER_MAJOR_UNVERIFIED',
-        'Core or installed Enterprise adapter release major cannot be verified; adapter dispatch is disabled and the event remains pending.',
-      ),
-    };
-  }
-  if (!SUPPORTED_RELEASE_MAJORS.has(coreMajor) || !SUPPORTED_RELEASE_MAJORS.has(adapterMajor)) {
-    return {
-      registration: null,
-      error: protocolFailure(
-        'ADAPTER_MAJOR_UNSUPPORTED',
-        `Core v${coreMajor} or Enterprise adapter v${adapterMajor} is unsupported; install a supported release pair and keep the event pending.`,
-      ),
-    };
-  }
-  if (coreMajor !== adapterMajor) {
-    let guidance = 'Install matching Core and Enterprise v4 releases';
-    if (coreMajor === 3) guidance = 'Upgrade Core to v4';
-    else if (adapterMajor === 3) guidance = 'Upgrade Enterprise to v4';
-    return {
-      registration: null,
-      error: protocolFailure(
-        'ADAPTER_MAJOR_MISMATCH',
-        `Core v${coreMajor} cannot dispatch to Enterprise v${adapterMajor}. ${guidance}; the event remains pending and no remote call was made.`,
-      ),
-    };
-  }
-  return loaded;
 }
 
 function recordGap(doc, event, expectedRevision, deliveries, gaps) {

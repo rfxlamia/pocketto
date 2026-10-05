@@ -125,80 +125,108 @@ function drainFixture(fixture) {
   assertRetryableLocalState(fixture, lifecyclePath, before, unchangedFiles);
 }
 
-test('Core does not dispatch to an adapter with an unknown or malformed installed major', (t) => {
+function writeMalformedAdapterReleaseMetadata(tempRoot) {
+  fs.writeFileSync(path.join(tempRoot, 'package.json'), '{"name":"test-enterprise-adapter","version":"4.0.0"}\n');
+  fs.writeFileSync(path.join(tempRoot, 'surfaces.json'), '{"schema":1,"release":{"major":"4"},"roles":{"pi/enterprise":{"kind":"enterprise","includes":["recording-adapter.js"]}}}\n');
+}
+
+function createUnknownMajorEvent(projectRoot) {
   const { createHash } = require('node:crypto');
   const lifecycleStore = require('../../cli/lib/lifecycle-store');
+  const artifact = 'approved-spec.md';
+  const bytes = Buffer.from('Unknown adapter major compatibility fixture.\n');
+  fs.writeFileSync(path.join(projectRoot, artifact), bytes);
+  fs.writeFileSync(path.join(projectRoot, '.pocket-meta.json'), '{"preserve":"metadata"}\n');
+  fs.writeFileSync(path.join(projectRoot, 'log.json'), '{"preserve":"task projection"}\n');
+  fs.writeFileSync(path.join(projectRoot, 'remote-marker.md'), '<!-- pocket-plan:compatibility-plan -->\n');
+  return lifecycleStore.commitTransition({
+    specDir: projectRoot,
+    planId: 'compatibility-plan',
+    planDir: null,
+    type: 'spec-approved',
+    artifacts: [{
+      root: 'spec',
+      kind: 'spec-doc',
+      path: artifact,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      revision: 1,
+    }],
+    deps: { now: () => '2026-09-20T12:00:00.000Z' },
+  });
+}
 
+function createUnknownMajorFixture(t, scenario) {
+  const tempRoot = tempDirectory(t, 'pocket-compat-unknown-adapter-');
+  const projectRoot = path.join(tempRoot, 'project');
+  fs.mkdirSync(projectRoot, { recursive: true });
+  const remote = installRecordingRemoteBoundary(projectRoot, tempRoot);
+  if (scenario.malformed) writeMalformedAdapterReleaseMetadata(tempRoot);
+  const committed = createUnknownMajorEvent(projectRoot);
+  assert.equal(committed.ok, true, `${scenario.name}: fixture event should commit locally`);
+  return { tempRoot, projectRoot, remote, eventId: committed.event.event_id };
+}
+
+function snapshotUnknownMajorFixture(fixture) {
+  const lifecyclePath = path.join(fixture.projectRoot, 'lifecycle.json');
+  const before = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+  const unchangedFiles = Object.fromEntries(['.pocket-meta.json', 'log.json', 'remote-marker.md'].map((name) => [
+    name,
+    fs.readFileSync(path.join(fixture.projectRoot, name)),
+  ]));
+  return { lifecyclePath, before, unchangedFiles };
+}
+
+function drainUnknownMajorFixture(fixture) {
+  return runCli(['lifecycle', 'drain', fixture.projectRoot, '--json', '--contract', '3'], {
+    cwd: fixture.projectRoot,
+    env: {
+      ...process.env,
+      PATH: `${fixture.remote.binDir}${path.delimiter}${process.env.PATH || ''}`,
+      REMOTE_CALLS: fixture.remote.remoteCalls,
+      GH_CALLS: fixture.remote.ghCalls,
+      POCKETTO_LIFECYCLE_NOW: '2026-09-20T12:00:00.000Z',
+    },
+  });
+}
+
+function assertUnknownMajorDelivery(fixture, scenario, result) {
+  assert.equal(result.status, 0, `${scenario.name}: Core local drain must remain successful: ${result.stdout}${result.stderr}`);
+  assert.equal(result.json.ok, true);
+  assert.equal(result.json.data.deliveries[0].event_id, fixture.eventId);
+  assert.equal(result.json.data.deliveries[0].status, 'retryable');
+  assert.equal(result.json.data.deliveries[0].error.code, 'ADAPTER_MAJOR_UNVERIFIED');
+  assert.equal(fs.readFileSync(fixture.remote.remoteCalls, 'utf8'), '', `${scenario.name}: unknown-major adapter must not be invoked`);
+  assert.equal(fs.readFileSync(fixture.remote.ghCalls, 'utf8'), '', `${scenario.name}: Core must not invoke GitHub`);
+}
+
+function assertUnknownMajorRollback(fixture, scenario, snapshot) {
+  const after = JSON.parse(fs.readFileSync(snapshot.lifecyclePath, 'utf8'));
+  assert.deepEqual(after.plan, snapshot.before.plan, `${scenario.name}: local plan state must remain intact`);
+  assert.equal(after.events.length, 1);
+  assert.equal(after.events[0].event_id, fixture.eventId, `${scenario.name}: pending event identity must survive`);
+  assert.equal(after.events[0].delivery.status, 'retryable', `${scenario.name}: the event must remain pending for replay`);
+  assertRetryableLocalState(fixture, snapshot.lifecyclePath, snapshot.before, snapshot.unchangedFiles);
+  for (const [name, contents] of Object.entries(snapshot.unchangedFiles)) {
+    assert.deepEqual(fs.readFileSync(path.join(fixture.projectRoot, name)), contents, `${scenario.name}: ${name} must remain unchanged`);
+  }
+}
+
+function runUnknownMajorScenario(t, scenario) {
+  const fixture = createUnknownMajorFixture(t, scenario);
+  const snapshot = snapshotUnknownMajorFixture(fixture);
+  const result = drainUnknownMajorFixture(fixture);
+  assertUnknownMajorDelivery(fixture, scenario, result);
+  assertUnknownMajorRollback(fixture, scenario, snapshot);
+}
+
+test('Core does not dispatch to an adapter with an unknown or malformed installed major', async (t) => {
   for (const scenario of [
     { name: 'missing adapter manifest' },
     { name: 'non-integer adapter release major', malformed: true },
   ]) {
-    const tempRoot = tempDirectory(t, 'pocket-compat-unknown-adapter-');
-    const projectRoot = path.join(tempRoot, 'project');
-    fs.mkdirSync(projectRoot, { recursive: true });
-    const remote = installRecordingRemoteBoundary(projectRoot, tempRoot);
-    if (scenario.malformed) {
-      fs.writeFileSync(path.join(tempRoot, 'package.json'), '{"name":"test-enterprise-adapter","version":"4.0.0"}\n');
-      fs.writeFileSync(path.join(tempRoot, 'surfaces.json'), '{"schema":1,"release":{"major":"4"},"roles":{"pi/enterprise":{"kind":"enterprise","includes":["recording-adapter.js"]}}}\n');
-    }
-
-    const artifact = 'approved-spec.md';
-    const bytes = Buffer.from('Unknown adapter major compatibility fixture.\n');
-    fs.writeFileSync(path.join(projectRoot, artifact), bytes);
-    fs.writeFileSync(path.join(projectRoot, '.pocket-meta.json'), '{"preserve":"metadata"}\n');
-    fs.writeFileSync(path.join(projectRoot, 'log.json'), '{"preserve":"task projection"}\n');
-    fs.writeFileSync(path.join(projectRoot, 'remote-marker.md'), '<!-- pocket-plan:compatibility-plan -->\n');
-    const committed = lifecycleStore.commitTransition({
-      specDir: projectRoot,
-      planId: 'compatibility-plan',
-      planDir: null,
-      type: 'spec-approved',
-      artifacts: [{
-        root: 'spec',
-        kind: 'spec-doc',
-        path: artifact,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-        revision: 1,
-      }],
-      deps: { now: () => '2026-09-20T12:00:00.000Z' },
-    });
-    assert.equal(committed.ok, true, `${scenario.name}: fixture event should commit locally`);
-    const eventId = committed.event.event_id;
-    const planBefore = JSON.parse(fs.readFileSync(path.join(projectRoot, 'lifecycle.json'), 'utf8')).plan;
-    const unchangedFiles = Object.fromEntries(['.pocket-meta.json', 'log.json', 'remote-marker.md'].map((name) => [
-      name,
-      fs.readFileSync(path.join(projectRoot, name)),
-    ]));
-
-    const result = runCli(['lifecycle', 'drain', projectRoot, '--json', '--contract', '3'], {
-      cwd: projectRoot,
-      env: {
-        ...process.env,
-        PATH: `${remote.binDir}${path.delimiter}${process.env.PATH || ''}`,
-        REMOTE_CALLS: remote.remoteCalls,
-        GH_CALLS: remote.ghCalls,
-        POCKETTO_LIFECYCLE_NOW: '2026-09-20T12:00:00.000Z',
-      },
-    });
-    assert.equal(result.status, 0, `${scenario.name}: Core local drain must remain successful: ${result.stdout}${result.stderr}`);
-    assert.equal(result.json.ok, true);
-    assert.equal(result.json.data.deliveries[0].event_id, eventId);
-    assert.equal(result.json.data.deliveries[0].status, 'retryable');
-    assert.equal(result.json.data.deliveries[0].error.code, 'ADAPTER_MAJOR_UNVERIFIED');
-    assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', `${scenario.name}: unknown-major adapter must not be invoked`);
-    assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', `${scenario.name}: Core must not invoke GitHub`);
-
-    const after = JSON.parse(fs.readFileSync(path.join(projectRoot, 'lifecycle.json'), 'utf8'));
-    assert.deepEqual(after.plan, planBefore, `${scenario.name}: local plan state must remain intact`);
-    assert.equal(after.events.length, 1);
-    assert.equal(after.events[0].event_id, eventId, `${scenario.name}: pending event identity must survive`);
-    assert.equal(after.events[0].delivery.status, 'retryable', `${scenario.name}: the event must remain pending for replay`);
-    for (const [name, contents] of Object.entries(unchangedFiles)) {
-      assert.deepEqual(fs.readFileSync(path.join(projectRoot, name)), contents, `${scenario.name}: ${name} must remain unchanged`);
-    }
+    await t.test(scenario.name, (scenarioTest) => runUnknownMajorScenario(scenarioTest, scenario));
   }
 });
-
 test('a Core ancestor manifest does not verify an unversioned registered adapter', (t) => {
   const fixture = createAdapterDrainFixture(t);
   const rootManifest = JSON.parse(fs.readFileSync(path.join(fixture.projectRoot, 'surfaces.json'), 'utf8'));

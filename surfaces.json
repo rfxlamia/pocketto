@@ -10,6 +10,7 @@
       "includes": [
         "cli/lib/lifecycle-dispatch.js",
         "cli/lib/lifecycle-drain.js",
+        "cli/lib/lifecycle-adapter-compatibility.js",
         "cli/lib/lifecycle-projection.js",
         "cli/lib/lifecycle-claims.js",
         "cli/lib/lifecycle-adapter.js",
@@ -139,6 +140,7 @@
       "includes": [
         "cli/lib/lifecycle-dispatch.js",
         "cli/lib/lifecycle-drain.js",
+        "cli/lib/lifecycle-adapter-compatibility.js",
         "cli/lib/lifecycle-projection.js",
         "cli/lib/lifecycle-claims.js",
         "cli/lib/lifecycle-adapter.js",
@@ -284,6 +286,7 @@
     "cli/lib/lifecycle-artifact-validation.js": "core",
     "cli/lib/lifecycle-delivery-store.js": "core",
     "cli/lib/lifecycle-delivery-validation.js": "core",
+    "cli/lib/lifecycle-adapter-compatibility.js": "core",
     "cli/lib/lifecycle-store.js": "core",
     "cli/lib/lifecycle-transition.js": "core",
     "cli/lib/logjson.js": "core",

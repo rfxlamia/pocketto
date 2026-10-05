@@ -11,6 +11,7 @@ const EXPECTED_ROLES = ['pi/core', 'pi/enterprise', 'claude/core', 'claude/enter
 const LIFECYCLE_CORE_MODULES = [
   'cli/lib/lifecycle-dispatch.js',
   'cli/lib/lifecycle-drain.js',
+  'cli/lib/lifecycle-adapter-compatibility.js',
   'cli/lib/lifecycle-projection.js',
   'cli/lib/lifecycle-claims.js',
   'cli/lib/lifecycle-adapter.js',
