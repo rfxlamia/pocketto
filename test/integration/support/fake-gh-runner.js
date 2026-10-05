@@ -9,7 +9,6 @@ state.calls.push(args);
 const repository = process.env.FAKE_GH_REPOSITORY;
 const repositoryUrl = process.env.FAKE_GH_REPOSITORY_URL;
 const issueNumber = Number(process.env.FAKE_GH_ISSUE_NUMBER);
-const prNumber = Number(process.env.FAKE_GH_PR_NUMBER);
 const repo = { owner: { login: 'acme' }, name: 'pocketto', nameWithOwner: repository, url: repositoryUrl };
 const json = (value) => {
   fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
@@ -102,7 +101,8 @@ function handleComments(endpoint) {
 function createComment(number, comments) {
   const comment = { id: state.nextCommentId++, body: field('body') || '' };
   comments.push(comment);
-  const kind = number === prNumber ? 'phase-summary-create' : 'tasklist-create';
+  const isPullRequest = state.pullRequests.some((pullRequest) => pullRequest.number === number);
+  const kind = isPullRequest ? 'phase-summary-create' : 'tasklist-create';
   state.effects.push({ kind, number, marker: comment.body.split(/\r?\n/, 1)[0] });
   json(comment);
 }

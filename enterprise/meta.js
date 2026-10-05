@@ -105,6 +105,89 @@ function writeMetaFor(specDir, meta, context) {
   return meta;
 }
 
+const LIFECYCLE_DELIVERY_SCHEMA = 1;
+const LIFECYCLE_DELIVERY_FIELDS = ['schema', 'plan_id', 'last_applied_revision'];
+const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
+
+function lifecycleDeliveryError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function validateLifecycleDelivery(metadata, planId) {
+  const delivery = metadata.lifecycle_delivery;
+  if (delivery === undefined) {
+    return { schema: LIFECYCLE_DELIVERY_SCHEMA, plan_id: planId, last_applied_revision: 0 };
+  }
+  if (!delivery || typeof delivery !== 'object' || Array.isArray(delivery)
+      || Object.keys(delivery).some((key) => !LIFECYCLE_DELIVERY_FIELDS.includes(key))
+      || LIFECYCLE_DELIVERY_FIELDS.some((key) => !(key in delivery))
+      || delivery.schema !== LIFECYCLE_DELIVERY_SCHEMA
+      || delivery.plan_id !== planId
+      || !Number.isInteger(delivery.last_applied_revision)
+      || delivery.last_applied_revision < 0) {
+    throw lifecycleDeliveryError('LIFECYCLE_DELIVERY_INVALID', 'Enterprise lifecycle delivery watermark is malformed or belongs to a different plan. Resolve metadata before retrying.');
+  }
+  return delivery;
+}
+
+function readLifecycleDelivery(specDir, planId, context) {
+  return validateLifecycleDelivery(readMetaFor(specDir, context), planId);
+}
+
+function lifecycleEventProof(specDir, event, context) {
+  const metadata = readMetaFor(specDir, context);
+  let proofRef;
+  let proof;
+  if (event.type === 'spec-approved') {
+    proof = metadata.github_issue && metadata.github_issue.ownership;
+    proofRef = issueProofRef();
+    if (!proof || proof.event_id !== event.event_id || proof.plan_id !== event.plan_id
+        || !PROOF_HASH_PATTERN.test(proof.proof_hash || '')) return null;
+    return { proof_ref: proofRef, proof_hash: proof.proof_hash };
+  }
+  if (event.type === 'phase-complete') {
+    const ref = event.artifact_refs.find((artifact) => artifact.root === 'plan' && artifact.kind === 'phase-evidence');
+    const match = ref && typeof ref.path === 'string' ? /phase[-_](\d+)/i.exec(ref.path) : null;
+    if (!match) return null;
+    const phaseKey = `phase-${Number(match[1])}`;
+    proof = metadata.phases && metadata.phases[phaseKey]
+      && metadata.phases[phaseKey].review && metadata.phases[phaseKey].review.proof;
+    proofRef = `meta:phases.${phaseKey}.github_pr+meta:phases.${phaseKey}.review.fingerprints`;
+    if (!proof || proof.event_id !== event.event_id || proof.plan_id !== event.plan_id
+        || proof.phase_key !== phaseKey || proof.proof_ref !== proofRef
+        || !PROOF_HASH_PATTERN.test(proof.proof_hash || '')) return null;
+    return { proof_ref: proofRef, proof_hash: proof.proof_hash };
+  }
+  if (event.type === 'plan-closed') {
+    proof = metadata.github_issue && metadata.github_issue.tasklist;
+    proofRef = 'meta:github_issue|marker:issue-tasklist';
+    if (!proof || proof.event_id !== event.event_id || proof.plan_id !== event.plan_id
+        || proof.revision !== event.revision || proof.proof_ref !== proofRef
+        || !PROOF_HASH_PATTERN.test(proof.proof_hash || '')) return null;
+    return { proof_ref: proofRef, proof_hash: proof.proof_hash };
+  }
+  return null;
+}
+
+function advanceLifecycleDelivery(specDir, planId, revision, context) {
+  const metadata = readMetaFor(specDir, context);
+  const current = validateLifecycleDelivery(metadata, planId);
+  if (revision <= current.last_applied_revision) return current;
+  if (revision !== current.last_applied_revision + 1) {
+    throw lifecycleDeliveryError('REVISION_GAP', `Lifecycle revision ${revision} cannot advance the watermark from ${current.last_applied_revision}.`);
+  }
+  const delivery = {
+    schema: LIFECYCLE_DELIVERY_SCHEMA,
+    plan_id: planId,
+    last_applied_revision: revision,
+  };
+  metadata.lifecycle_delivery = delivery;
+  writeMetaFor(specDir, metadata, context);
+  return delivery;
+}
+
 // --- Issue identity (Enterprise-owned GitHub IDs) ---
 
 function getIssueIdentity(specDir) {
@@ -190,6 +273,10 @@ module.exports = {
   preflightMetaFor,
   readMetaFor,
   writeMetaFor,
+  LIFECYCLE_DELIVERY_SCHEMA,
+  readLifecycleDelivery,
+  lifecycleEventProof,
+  advanceLifecycleDelivery,
   getIssueIdentity,
   setIssueIdentity,
   getPrIdentity,

@@ -12,7 +12,7 @@ const { redactSecrets } = require('./retry');
 let CORE_VERSION = null;
 try {
   CORE_VERSION = require('../cli/lib/version');
-} catch (_) {
+} catch {
   CORE_VERSION = null;
 }
 
@@ -184,9 +184,19 @@ function dispatchEvent(event, opts = {}) {
     );
   }
 
+  const lifecycleDelivery = opts.lifecycleDelivery;
+  let handlerEvent = event;
+  let deliveryState = null;
+  if (lifecycleDelivery && typeof lifecycleDelivery.prepare === 'function') {
+    const prepared = lifecycleDelivery.prepare(event);
+    if (prepared && prepared.response) return prepared.response;
+    if (prepared && prepared.event) handlerEvent = prepared.event;
+    deliveryState = prepared && prepared.state;
+  }
+
   let produced;
   try {
-    produced = handler(event, { projectRoot, record, ghRunner: opts.ghRunner });
+    produced = handler(handlerEvent, { projectRoot, record, ghRunner: opts.ghRunner });
   } catch (err) {
     return protocolError(
       'ADAPTER_PROTOCOL_HANDLER_FAILED',
@@ -196,7 +206,12 @@ function dispatchEvent(event, opts = {}) {
   // Serialize through the response boundary: malformed handler output can
   // never leak as success — it throws, which the caller treats as retryable.
   try {
-    return serializeResponse(produced, eventId);
+    const response = serializeResponse(produced, eventId);
+    if (lifecycleDelivery && typeof lifecycleDelivery.complete === 'function') {
+      const completed = lifecycleDelivery.complete(event, response, deliveryState);
+      return serializeResponse(completed || response, eventId);
+    }
+    return response;
   } catch (err) {
     return protocolError(
       'ADAPTER_PROTOCOL_MALFORMED_RESPONSE',

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { hashCanonicalPayload } = require('../../../cli/lib/lifecycle-contract');
-const { FIXED_NOW, PHASE_PATH, PLAN_ID } = require('./constants');
+const { FIXED_NOW, PLAN_ID } = require('./constants');
 const { sha256, writeFile } = require('./files');
 
 function readLifecycle(fixture) {
@@ -13,49 +13,6 @@ function readLifecycle(fixture) {
 
 function readRemote(fixture) {
   return JSON.parse(fs.readFileSync(fixture.remotePath, 'utf8'));
-}
-
-function writeGapDocument(fixture) {
-  const ref = {
-    root: 'plan', kind: 'phase-evidence', path: PHASE_PATH,
-    sha256: sha256(fixture.phaseEvidence), revision: 1,
-  };
-  const lifecycle = {
-    schema: 1,
-    plan: {
-      plan_id: PLAN_ID,
-      spec_dir: fixture.specDir,
-      plan_dir: fixture.planDir,
-      branch: `feature/${PLAN_ID}`,
-      state: { approval: 'APPROVED', phase_status: { 'phase-1': 'COMPLETE' }, status: 'IN_PROGRESS' },
-      revision: 5,
-    },
-    events: [
-      gapEvent(ref, 'spec-approved', 1, 'succeeded'),
-      gapEvent(ref, 'phase-complete', 2, 'succeeded'),
-      gapEvent(ref, 'phase-complete', 3, 'succeeded'),
-      gapEvent(ref, 'phase-complete', 5, 'pending'),
-    ],
-  };
-  writeFile(path.join(fixture.specDir, 'lifecycle.json'), JSON.stringify(lifecycle, null, 2));
-  return lifecycle;
-}
-
-function gapEvent(ref, type, revision, status) {
-  return {
-    event_id: `${PLAN_ID}:${type}:r${revision}`,
-    plan_id: PLAN_ID,
-    type,
-    revision,
-    occurred_at: FIXED_NOW,
-    artifact_refs: [ref],
-    payload_hash: String(revision).padStart(64, 'a'),
-    proof_ref: null,
-    proof_hash: null,
-    delivery: status === 'succeeded'
-      ? { status, attempts: 1, proof_ref: 'test:proof', proof_hash: 'b'.repeat(64) }
-      : { status, attempts: 0 },
-  };
 }
 
 function appendOrderedPendingRevisions(fixture) {
@@ -100,4 +57,4 @@ function appendPendingRevision(fixture, lifecycle, revision) {
   lifecycle.plan.state.phase_status[`phase-${phaseNumber}`] = 'COMPLETE';
 }
 
-module.exports = { readLifecycle, readRemote, writeGapDocument, appendOrderedPendingRevisions };
+module.exports = { readLifecycle, readRemote, appendOrderedPendingRevisions };
