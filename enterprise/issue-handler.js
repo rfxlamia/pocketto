@@ -39,6 +39,9 @@ function handleSpecApproved(event, opts = {}) {
     return resultError(event, 'ISSUE_NO_PROJECT', 'A project root is required to resolve the approved specification.');
   }
   const spec = specContext(event, projectRoot);
+  if (spec.error === 'approved spec artifact is unavailable (read failed)') {
+    return resultError(event, 'ARTIFACT_READ_FAILED', 'Approved spec artifact could not be read because of a temporary I/O failure; retry delivery.', true);
+  }
   if (spec.error) return resultError(event, 'STALE_ARTIFACT', `${spec.error}; verify the committed spec artifact before retrying.`);
   if (event.delivery.status === 'succeeded') {
     const metadataError = preflightIssueMetadata(event, spec, false);

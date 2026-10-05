@@ -451,6 +451,30 @@ Module._load = function(request, parent, isMain) {
   return { hookPath, hitPath };
 }
 
+function installArtifactReadFaultGate(fixture) {
+  const hookPath = path.join(fixture.root, 'artifact-read-fault-gate.js');
+  const hitPath = path.join(fixture.root, 'artifact-read-fault.hit');
+  writeFile(hookPath, `const fs = require('node:fs');
+const path = require('node:path');
+const originalReadFileSync = fs.readFileSync;
+const expectedPath = path.resolve(process.env.LIFECYCLE_ARTIFACT_READ_FAILURE_PATH);
+const realExpectedPath = fs.realpathSync(expectedPath);
+let injected = false;
+fs.readFileSync = function(target, ...args) {
+  if (!injected && typeof target === 'string'
+      && (path.resolve(target) === expectedPath || fs.realpathSync(target) === realExpectedPath)) {
+    injected = true;
+    fs.writeFileSync(process.env.LIFECYCLE_ARTIFACT_READ_FAILURE_HIT_FILE, 'EIO');
+    const error = new Error('injected temporary artifact read failure');
+    error.code = 'EIO';
+    throw error;
+  }
+  return originalReadFileSync.call(this, target, ...args);
+};
+`);
+  return { hookPath, hitPath };
+}
+
 function installStaleCandidateGate(fixture, workerId = 'stale-candidate') {
   const hookPath = path.join(fixture.root, 'stale-candidate-gate.js');
   const readyPath = path.join(fixture.root, `${workerId}.ready`);
@@ -779,6 +803,57 @@ test('expired event claims are reclaimed without overlapping the prior worker or
   assert.equal(readRemote(fixture).issues.length, 1);
   assert.deepEqual(readRemote(fixture).effects, effectsBeforeRecovery);
   assert.equal(fs.existsSync(claimPath), false, 'the reclaimed worker must release the real lock after success');
+});
+
+test('temporary artifact read failures stay retryable and recover without premature remote mutation', (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const transition = runCore(fixture, [
+    'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+    '--artifact', `spec:approved-spec:approved-spec.md:${sha256(fixture.approvedSpec)}`,
+    '--json', '--contract', '3',
+  ]);
+  const eventId = assertCliOk(transition, 'public spec-approved transition').event_id;
+  const faultGate = installArtifactReadFaultGate(fixture);
+  const failedAttempt = runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], {
+    ...fixture.env,
+    NODE_OPTIONS: [fixture.env.NODE_OPTIONS, `--require=${faultGate.hookPath}`].filter(Boolean).join(' '),
+    LIFECYCLE_ARTIFACT_READ_FAILURE_PATH: path.join(fixture.specDir, 'approved-spec.md'),
+    LIFECYCLE_ARTIFACT_READ_FAILURE_HIT_FILE: faultGate.hitPath,
+  });
+  const failedData = assertCliOk(failedAttempt, 'public drain with a temporary artifact read failure');
+  assert.equal(fs.existsSync(faultGate.hitPath), true,
+    `the real artifact reader fault must be injected during delivery: ${failedAttempt.stdout}${failedAttempt.stderr}`);
+  assert.equal(fs.readFileSync(faultGate.hitPath, 'utf8'), 'EIO');
+  assert.deepEqual(failedData.deliveries.map(({ event_id, revision, status, error }) => ({
+    event_id,
+    revision,
+    status,
+    code: error && error.code,
+  })), [{ event_id: eventId, revision: 1, status: 'retryable', code: 'ARTIFACT_READ_FAILED' }]);
+  const afterFailure = readLifecycle(fixture).events[0];
+  assert.equal(afterFailure.delivery.status, 'retryable');
+  assert.equal(afterFailure.delivery.attempts, 1);
+  assert.equal(afterFailure.delivery.next_attempt_at, new Date(Date.parse(FIXED_NOW) + 1000).toISOString());
+  assert.deepEqual(readRemote(fixture).calls, [], 'temporary artifact I/O must not reach GitHub');
+  assert.deepEqual(readRemote(fixture).effects, []);
+  assert.deepEqual(readRemote(fixture).issues, []);
+
+  const retryNow = new Date(Date.parse(FIXED_NOW) + 1001).toISOString();
+  const recovered = runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], { ...fixture.env, POCKETTO_LIFECYCLE_NOW: retryNow });
+  assert.deepEqual(assertCliOk(recovered, 'public retry after transient artifact I/O').deliveries.map(({ event_id, revision, status }) => ({ event_id, revision, status })), [
+    { event_id: eventId, revision: 1, status: 'succeeded' },
+  ]);
+  const finalEvent = readLifecycle(fixture).events[0];
+  assert.equal(finalEvent.delivery.status, 'succeeded');
+  assert.equal(finalEvent.delivery.attempts, 2);
+  assert.equal(readRemote(fixture).effects.length, 1);
+  assert.equal(readRemote(fixture).issues.length, 1);
+  assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false);
 });
 
 test('committed artifacts that are missing or changed become terminal without GitHub mutation', async (t) => {
