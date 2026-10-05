@@ -41,11 +41,16 @@ function handlePhaseComplete(event, options = {}) {
     const pr = selectedPr.pr;
     const marker = identity.markerFor(phase.number);
     const commentEndpoint = `repos/${repo.nameWithOwner}/issues/${pr.number}/comments`;
-    github.upsertSummary(commentEndpoint, selectedPr.comments, marker, summaryBody({
+    const summary = summaryBody({
       phase: phase.number,
       verdicts: phase.verdicts,
       prLinked: true,
-    }), options);
+    });
+    const existingSummaries = selectedPr.comments.filter((comment) =>
+      typeof comment.body === 'string' && comment.body.split(/\r?\n/, 1)[0] === marker);
+    if (existingSummaries.length !== 1 || existingSummaries[0].body !== summary) {
+      github.upsertSummary(commentEndpoint, selectedPr.comments, marker, summary, options);
+    }
 
     const threads = github.listReviewThreads(repo, pr.number, options);
     const fingerprints = reconcileFindings({

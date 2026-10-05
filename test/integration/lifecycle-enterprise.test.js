@@ -781,6 +781,83 @@ test('expired event claims are reclaimed without overlapping the prior worker or
   assert.equal(fs.existsSync(claimPath), false, 'the reclaimed worker must release the real lock after success');
 });
 
+test('remote phase proof survives a local ledger timeout without another remote effect', async (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const approved = runCore(fixture, [
+    'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+    '--artifact', `spec:approved-spec:approved-spec.md:${sha256(fixture.approvedSpec)}`,
+    '--json', '--contract', '3',
+  ]);
+  assert.equal(assertCliOk(approved, 'public spec-approved transition').event_id, `${PLAN_ID}:spec-approved:r1`);
+  const initialDrain = runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]);
+  assert.equal(assertCliOk(initialDrain, 'public initial lifecycle drain').deliveries[0].status, 'succeeded');
+  const review = runCore(fixture, [
+    'log', 'update', fixture.planDir, PHASE_PATH, 'REVIEW', '--json', '--contract', '3',
+  ]);
+  const eventId = assertCliOk(review, 'public log update REVIEW').event.event_id;
+  assert.equal(eventId, `${PLAN_ID}:phase-complete:r2`);
+
+  const faultGate = installLedgerFaultGate(fixture);
+  const timedOutWorker = startProcess(process.execPath, [
+    CORE_CLI, 'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], {
+    cwd: fixture.root,
+    env: {
+      ...fixture.env,
+      NODE_OPTIONS: [fixture.env.NODE_OPTIONS, `--require=${faultGate.hookPath}`].filter(Boolean).join(' '),
+      LIFECYCLE_LEDGER_FAULT_EVENT_ID: eventId,
+      LIFECYCLE_LEDGER_FAULT_HIT_FILE: faultGate.hitPath,
+      LIFECYCLE_LEDGER_FAULT_MODE: 'timeout-before-success-write',
+    },
+  });
+  const timeoutOutput = await timedOutWorker.done;
+  assert.equal(timeoutOutput.exit, 1, 'the injected local ledger timeout must fail the first delivery attempt');
+  assert.equal(fs.readFileSync(faultGate.hitPath, 'utf8'), 'timeout-before-success-write');
+  const timeoutEnvelope = JSON.parse(timeoutOutput.stdout);
+  assert.equal(timeoutEnvelope.error.code, 'TEST_LEDGER_TIMEOUT');
+  const lifecycleAfterTimeout = readLifecycle(fixture);
+  assert.equal(lifecycleAfterTimeout.events[1].event_id, eventId);
+  assert.equal(lifecycleAfterTimeout.events[1].delivery.status, 'claimed',
+    'the local ledger must remain at the pre-success claim state after its writer times out');
+  assert.equal(lifecycleAfterTimeout.events[1].delivery.attempts, 1);
+  const claimPath = path.join(fixture.specDir, '.lifecycle.lock');
+  const timedOutClaim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  assert.equal(timedOutClaim.event_id, eventId);
+  assert.equal(timedOutClaim.owner_pid, timedOutWorker.child.pid);
+
+  const remoteAfterTimeout = readRemote(fixture);
+  const phaseMarkersAfterTimeout = (remoteAfterTimeout.comments[String(PR_NUMBER)] || [])
+    .filter(({ body }) => body.startsWith(PHASE_MARKER));
+  assert.equal(phaseMarkersAfterTimeout.length, 1, 'the real Enterprise phase handler must write one canonical marker before the local timeout');
+  const metadataAfterTimeout = JSON.parse(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json'), 'utf8'));
+  assert.equal(metadataAfterTimeout.phases['phase-1'].review.proof.event_id, eventId,
+    'the adapter must have persisted event-bound proof before Core reports the ledger timeout');
+  const effectsBeforeReplay = remoteAfterTimeout.effects;
+
+  const recoveryNow = new Date(Date.parse(FIXED_NOW) + 60_001).toISOString();
+  const replay = runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], { ...fixture.env, POCKETTO_LIFECYCLE_NOW: recoveryNow });
+  assert.deepEqual(assertCliOk(replay, 'public phase-event replay after local ledger timeout').deliveries.map(({ event_id, status }) => ({ event_id, status })), [
+    { event_id: eventId, status: 'succeeded' },
+  ]);
+
+  const finalEvent = readLifecycle(fixture).events[1];
+  assert.equal(finalEvent.delivery.status, 'succeeded');
+  assert.equal(finalEvent.delivery.attempts, 2);
+  assert.equal(finalEvent.delivery.proof_ref, 'meta:phases.phase-1.github_pr+meta:phases.phase-1.review.fingerprints');
+  const remoteAfterReplay = readRemote(fixture);
+  assert.deepEqual(remoteAfterReplay.effects, effectsBeforeReplay,
+    'replay must find the canonical remote marker before mutation and must not duplicate its effect');
+  assert.equal((remoteAfterReplay.comments[String(PR_NUMBER)] || []).filter(({ body }) => body.startsWith(PHASE_MARKER)).length, 1);
+  const metadataAfterReplay = JSON.parse(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json'), 'utf8'));
+  assert.equal(metadataAfterReplay.phases['phase-1'].review.proof.event_id, eventId);
+  assert.equal(fs.existsSync(claimPath), false, 'successful proof reconciliation must release the recovered claim');
+});
+
 test('concurrent public drains produce one claim and one remote effect', async (t) => {
   const fixture = createFixture(t);
   initializePlan(fixture);
