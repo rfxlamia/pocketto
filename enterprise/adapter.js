@@ -7,6 +7,7 @@
 // opaque proof refs plus redacted diagnostics.
 
 const { validateEvent, validateAdapterResponse } = require('../cli/lib/lifecycle-contract');
+const { PhaseHandlerError } = require('./phase-handler-errors');
 const { redactSecrets } = require('./retry');
 
 let CORE_VERSION = null;
@@ -198,6 +199,22 @@ function dispatchEvent(event, opts = {}) {
   try {
     produced = handler(handlerEvent, { projectRoot, record, ghRunner: opts.ghRunner });
   } catch (err) {
+    const hasValidTypedClassification = err instanceof PhaseHandlerError
+      && typeof err.code === 'string'
+      && err.code.length > 0
+      && ((err.status === 'terminal' && err.retryable === false)
+        || (err.status === 'retryable' && err.retryable === true));
+    if (hasValidTypedClassification) {
+      return serializeResponse({
+        event_id: eventId,
+        status: err.status,
+        error: {
+          code: err.code,
+          retryable: err.retryable,
+          message: `Enterprise context validation failed before remote mutation: ${redactSecrets(err.message)}`,
+        },
+      }, eventId);
+    }
     return protocolError(
       'ADAPTER_PROTOCOL_HANDLER_FAILED',
       `Enterprise handler failed before remote mutation completed: ${redactSecrets(err && err.message ? err.message : String(err))}`
