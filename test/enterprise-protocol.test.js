@@ -146,7 +146,7 @@ test('CYCLE 1: preflight fails closed on missing or incompatible Core', () => {
 
   for (const [name, coreInfo] of [
     ['missing Core', { present: false, contract: null, lifecycleSchema: null, adapterContract: null }],
-    ['incompatible Core contract', { present: true, contract: 2, lifecycleSchema: 1, adapterContract: 1 }],
+    ['incompatible Core contract', { present: true, packageMajor: 4, releaseMajor: 4, contract: 2, lifecycleSchema: 1, adapterContract: 1 }],
   ]) {
     let ghCalls = 0;
     const res = registration.preflight(root, {
