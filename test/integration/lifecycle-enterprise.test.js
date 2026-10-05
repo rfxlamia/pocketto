@@ -47,8 +47,9 @@ function startProcess(command, args, { cwd, env = process.env } = {}) {
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   const done = new Promise((resolve, reject) => {
     child.on('error', reject);
-    child.on('close', (status) => resolve({
+    child.on('close', (status, signal) => resolve({
       exit: typeof status === 'number' ? status : 1,
+      signal,
       stdout,
       stderr,
     }));
@@ -421,6 +422,35 @@ function appendOrderedPendingRevisions(fixture) {
   return lifecycle;
 }
 
+function installLedgerFaultGate(fixture) {
+  const hookPath = path.join(fixture.root, 'ledger-fault-gate.js');
+  const hitPath = path.join(fixture.root, 'ledger-fault.hit');
+  writeFile(hookPath, `const fs = require('node:fs');
+const Module = require('node:module');
+const originalLoad = Module._load;
+let injected = false;
+Module._load = function(request, parent, isMain) {
+  const loaded = originalLoad.apply(this, arguments);
+  if (request !== './lifecycle-store' || !parent || !parent.filename.endsWith('/cli/lib/lifecycle-drain.js')) return loaded;
+  return {
+    ...loaded,
+    updateEventDelivery(specDir, eventId, patch) {
+      if (!injected && eventId === process.env.LIFECYCLE_LEDGER_FAULT_EVENT_ID && patch.status === 'succeeded') {
+        injected = true;
+        fs.writeFileSync(process.env.LIFECYCLE_LEDGER_FAULT_HIT_FILE, process.env.LIFECYCLE_LEDGER_FAULT_MODE);
+        if (process.env.LIFECYCLE_LEDGER_FAULT_MODE === 'crash-before-success-write') process.kill(process.pid, 'SIGKILL');
+        if (process.env.LIFECYCLE_LEDGER_FAULT_MODE === 'timeout-before-success-write') {
+          return { ok: false, code: 'TEST_LEDGER_TIMEOUT', message: 'injected lifecycle ledger timeout' };
+        }
+      }
+      return loaded.updateEventDelivery(specDir, eventId, patch);
+    },
+  };
+};
+`);
+  return { hookPath, hitPath };
+}
+
 function installStaleCandidateGate(fixture, workerId = 'stale-candidate') {
   const hookPath = path.join(fixture.root, 'stale-candidate-gate.js');
   const readyPath = path.join(fixture.root, `${workerId}.ready`);
@@ -686,6 +716,69 @@ test('a stale lower revision is a no-op after a later revision has succeeded', a
     writeFile(gate.releasePath, 'resume');
     await staleWorker.done.catch(() => {});
   }
+});
+
+test('expired event claims are reclaimed without overlapping the prior worker or duplicating remote proof', async (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const approved = runCore(fixture, [
+    'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+    '--artifact', `spec:approved-spec:approved-spec.md:${sha256(fixture.approvedSpec)}`,
+    '--json', '--contract', '3',
+  ]);
+  const eventId = assertCliOk(approved, 'public spec-approved transition').event_id;
+  const faultGate = installLedgerFaultGate(fixture);
+  const crashedWorker = startProcess(process.execPath, [
+    CORE_CLI, 'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], {
+    cwd: fixture.root,
+    env: {
+      ...fixture.env,
+      NODE_OPTIONS: [fixture.env.NODE_OPTIONS, `--require=${faultGate.hookPath}`].filter(Boolean).join(' '),
+      LIFECYCLE_LEDGER_FAULT_EVENT_ID: eventId,
+      LIFECYCLE_LEDGER_FAULT_HIT_FILE: faultGate.hitPath,
+      LIFECYCLE_LEDGER_FAULT_MODE: 'crash-before-success-write',
+    },
+  });
+  const crashedOutput = await crashedWorker.done;
+  assert.equal(crashedOutput.signal, 'SIGKILL',
+    'the first worker must terminate after the real Enterprise handler writes remote proof but before local success persists');
+  assert.equal(fs.readFileSync(faultGate.hitPath, 'utf8'), 'crash-before-success-write');
+  assert.throws(() => process.kill(crashedWorker.child.pid, 0), (error) => error.code === 'ESRCH',
+    'the expired claim owner must be dead before the later worker starts');
+
+  const claimedEvent = readLifecycle(fixture).events[0];
+  assert.equal(claimedEvent.event_id, eventId);
+  assert.equal(claimedEvent.delivery.status, 'claimed');
+  assert.equal(claimedEvent.delivery.attempts, 1);
+  const claimPath = path.join(fixture.specDir, '.lifecycle.lock');
+  const expiredOwnerClaim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  assert.equal(expiredOwnerClaim.event_id, eventId);
+  assert.equal(expiredOwnerClaim.owner_pid, crashedWorker.child.pid);
+  const effectsBeforeRecovery = readRemote(fixture).effects;
+  assert.equal(effectsBeforeRecovery.length, 1, 'the real issue handler must have committed one remote proof before the worker died');
+  assert.equal(readRemote(fixture).issues.length, 1);
+  const metadataBeforeRecovery = JSON.parse(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json'), 'utf8'));
+  assert.equal(metadataBeforeRecovery.github_issue.ownership.event_id, eventId);
+
+  const recoveryNow = new Date(Date.parse(FIXED_NOW) + 60_001).toISOString();
+  assert.ok(Date.parse(expiredOwnerClaim.lease_expires_at) < Date.parse(recoveryNow),
+    'the deterministic recovery clock must be beyond the original lease expiry');
+  const recovered = runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], { ...fixture.env, POCKETTO_LIFECYCLE_NOW: recoveryNow });
+  assert.deepEqual(assertCliOk(recovered, 'public drain after event-claim lease expiry').deliveries.map(({ event_id, revision, status }) => ({ event_id, revision, status })), [
+    { event_id: eventId, revision: 1, status: 'succeeded' },
+  ]);
+
+  const finalEvent = readLifecycle(fixture).events[0];
+  assert.equal(finalEvent.delivery.status, 'succeeded');
+  assert.equal(finalEvent.delivery.attempts, 2, 'the recovered worker must record exactly one later invocation');
+  assert.equal(finalEvent.delivery.proof_ref, 'meta:github_issue');
+  assert.equal(readRemote(fixture).effects.length, 1, 'recovery must reuse the existing issue proof without a duplicate remote effect');
+  assert.equal(readRemote(fixture).issues.length, 1);
+  assert.deepEqual(readRemote(fixture).effects, effectsBeforeRecovery);
+  assert.equal(fs.existsSync(claimPath), false, 'the reclaimed worker must release the real lock after success');
 });
 
 test('concurrent public drains produce one claim and one remote effect', async (t) => {
