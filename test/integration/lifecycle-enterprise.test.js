@@ -255,6 +255,76 @@ function readRemote(fixture) {
   return JSON.parse(fs.readFileSync(fixture.remotePath, 'utf8'));
 }
 
+function installFakeAdapter(fixture, tracePath) {
+  const adapterPath = path.join(fixture.root, 'fake-adapter.js');
+  writeFile(path.join(fixture.root, 'package.json'), JSON.stringify({ name: 'fake-enterprise-fixture', version: '4.0.0' }, null, 2));
+  writeFile(path.join(fixture.root, 'surfaces.json'), JSON.stringify({
+    schema: 1,
+    release: { major: 4 },
+    roles: { 'test/enterprise': { kind: 'enterprise', includes: ['fake-adapter.js'] } },
+  }, null, 2));
+  writeFile(adapterPath, `#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const event = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+fs.appendFileSync(process.env.FAKE_ADAPTER_TRACE, JSON.stringify({ event_id: event.event_id }) + '\\n');
+process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeeded', proof_ref: 'test:proof', proof_hash: '${'a'.repeat(64)}' }) + '\\n');
+`);
+  fs.chmodSync(adapterPath, 0o755);
+  const env = { ...fixture.env, FAKE_ADAPTER_TRACE: tracePath };
+  const installed = runProcess(process.execPath, [
+    ENTERPRISE_CLI, 'install', fixture.root, '--argv', adapterPath, '--json',
+  ], { cwd: path.resolve(__dirname, '../..'), env });
+  let json = null;
+  try { json = JSON.parse(installed.stdout); } catch { /* Assert below with raw output. */ }
+  assert.equal(installed.exit, 0, `fake adapter registration must succeed: ${installed.stdout}${installed.stderr}`);
+  assert.ok(json && json.ok, `fake adapter registration must return success: ${installed.stdout}`);
+  return env;
+}
+
+function writeGapDocument(fixture) {
+  const ref = {
+    root: 'plan',
+    kind: 'phase-evidence',
+    path: PHASE_PATH,
+    sha256: sha256(fixture.phaseEvidence),
+    revision: 1,
+  };
+  const event = (type, revision, status) => ({
+    event_id: `${PLAN_ID}:${type}:r${revision}`,
+    plan_id: PLAN_ID,
+    type,
+    revision,
+    occurred_at: FIXED_NOW,
+    artifact_refs: [ref],
+    payload_hash: String(revision).padStart(64, 'a'),
+    proof_ref: null,
+    proof_hash: null,
+    delivery: status === 'succeeded'
+      ? { status, attempts: 1, proof_ref: 'test:proof', proof_hash: 'b'.repeat(64) }
+      : { status, attempts: 0 },
+  });
+  const lifecycle = {
+    schema: 1,
+    plan: {
+      plan_id: PLAN_ID,
+      spec_dir: fixture.specDir,
+      plan_dir: fixture.planDir,
+      branch: `feature/${PLAN_ID}`,
+      state: { approval: 'APPROVED', phase_status: { 'phase-1': 'COMPLETE' }, status: 'IN_PROGRESS' },
+      revision: 5,
+    },
+    events: [
+      event('spec-approved', 1, 'succeeded'),
+      event('phase-complete', 2, 'succeeded'),
+      event('phase-complete', 3, 'succeeded'),
+      event('phase-complete', 5, 'pending'),
+    ],
+  };
+  writeFile(path.join(fixture.specDir, 'lifecycle.json'), JSON.stringify(lifecycle, null, 2));
+  return lifecycle;
+}
+
 test('public Core emitters deliver lifecycle events to exactly one canonical Enterprise proof', (t) => {
   const fixture = createFixture(t);
   initializePlan(fixture);
@@ -360,4 +430,39 @@ test('public Core emitters deliver lifecycle events to exactly one canonical Ent
   const afterReplay = readRemote(fixture);
   assert.equal(afterReplay.effects.length, effectsBeforeReplay, 'repeated drain must not create another remote effect');
   assert.equal(afterReplay.calls.length, callsBeforeReplay, 'repeated drain must not call the remote transport');
+});
+
+test('revision gaps remain pending with an actionable predecessor diagnostic', (t) => {
+  const fixture = createFixture(t);
+  const adapterTrace = path.join(fixture.root, 'fake-adapter.jsonl');
+  fs.writeFileSync(adapterTrace, '');
+  const env = installFakeAdapter(fixture, adapterTrace);
+  writeGapDocument(fixture);
+  const lifecycleBefore = fs.readFileSync(path.join(fixture.specDir, 'lifecycle.json'));
+
+  const drain = runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], env);
+  const data = assertCliOk(drain, 'public drain with revision gap');
+  assert.equal(data.plan_id, PLAN_ID);
+  assert.equal(data.revision, 5);
+  assert.deepEqual(data.deliveries, [{
+    event_id: `${PLAN_ID}:phase-complete:r5`,
+    revision: 5,
+    status: 'pending',
+    deferred: true,
+    blocked_by_gap: true,
+  }]);
+  assert.deepEqual(data.gaps, [{
+    plan_id: PLAN_ID,
+    blocked_revision: 5,
+    missing_predecessor: 4,
+    next_step: `Restore or replay lifecycle revision 4 for plan ${PLAN_ID}, then rerun lifecycle drain.`,
+  }], 'the gap diagnostic must identify the plan, missing predecessor, and recovery action');
+  assert.equal(fs.readFileSync(path.join(fixture.specDir, 'lifecycle.json')).toString(), lifecycleBefore.toString(),
+    'a blocked gap must not mutate the event ledger or increment attempts');
+  assert.equal(fs.readFileSync(adapterTrace, 'utf8'), '', 'the registered adapter must not be invoked across a revision gap');
+  assert.deepEqual(readRemote(fixture).calls, [], 'the fake GitHub runner must remain untouched across a gap');
+  assert.equal(fs.existsSync(path.join(fixture.specDir, '.lifecycle.lock')), false,
+    'a gap must be detected before a worker claim is acquired');
 });
