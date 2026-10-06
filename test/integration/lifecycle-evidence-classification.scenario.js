@@ -127,6 +127,27 @@ test('phase-complete retries EIO while reading an existing review report and app
   assertWatermark(fixture, 2);
 });
 
+test('phase-complete keeps malformed review report JSON terminal before remote reconciliation', (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  deliverApprovedSpec(fixture);
+  const eventId = emitPhaseComplete(fixture);
+  const metadataBefore = readMetadata(fixture);
+  const remoteBefore = readRemote(fixture);
+  fs.writeFileSync(path.join(fixture.planDir, REVIEW_REPORT_PATH), '{');
+
+  const result = assertCliOk(drain(fixture), 'phase-complete with malformed review report JSON');
+
+  assertTerminalFailure(result, eventId, 'PHASE_REVIEW_EVIDENCE_INVALID');
+  assertEventAttempt(fixture, eventId, 'terminal', 1);
+  assert.deepEqual(readRemote(fixture), remoteBefore,
+    'malformed review evidence must not call or mutate the fake GitHub transport');
+  assert.deepEqual(readMetadata(fixture), metadataBefore,
+    'malformed review evidence must not write proof or advance lifecycle metadata');
+  assert.equal(readPhaseProof(fixture), undefined);
+  assertWatermark(fixture, 1);
+});
+
 test('phase-complete retries EIO from plan artifact realpath/stat and recovers after one failed delivery', async (t) => {
   for (const method of ['realpathSync', 'statSync']) {
     await t.test(method, (t) => {

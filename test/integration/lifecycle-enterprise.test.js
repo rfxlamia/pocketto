@@ -11,3 +11,4 @@ require('./lifecycle-stale-artifact.scenario');
 require('./lifecycle-artifact-retry.scenario');
 require('./lifecycle-enterprise-read-retry.scenario');
 require('./lifecycle-evidence-classification.scenario');
+require('./lifecycle-error-taxonomy.scenario');

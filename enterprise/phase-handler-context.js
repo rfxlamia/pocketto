@@ -18,6 +18,14 @@ function invalidPlanArtifactPath(label) {
   return new PhaseHandlerError('PHASE_ARTIFACT_PATH_INVALID', `Lifecycle ${label} must resolve inside the selected plan root.`);
 }
 
+function transientLifecycleIo(label, error) {
+  return new PhaseHandlerError('PHASE_LIFECYCLE_UNAVAILABLE',
+    `Lifecycle ${label} could not be resolved because of a temporary I/O failure: ${safeMessage(error)}`, {
+      status: 'retryable',
+      retryable: true,
+    });
+}
+
 function resolvePlanArtifactPath(planDir, relative, label, { allowMissing = false } = {}) {
   if (typeof relative !== 'string' || relative.length === 0 || path.isAbsolute(relative)) {
     throw invalidPlanArtifactPath(label);
@@ -85,7 +93,8 @@ function resolveLifecyclePath(root, registeredRoot, value, label) {
   let physical;
   try {
     physical = fs.realpathSync(resolved);
-  } catch {
+  } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo(label, error);
     throw invalidLifecyclePath(label);
   }
   if (!isInside(root, physical)) throw invalidLifecyclePath(label);
@@ -96,11 +105,14 @@ function resolveLifecycleFile(root, candidate) {
   let physical;
   try {
     physical = fs.realpathSync(candidate);
-  } catch {
-    // Keep the normal unavailable-evidence response for a missing lifecycle file.
-    return candidate;
+  } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('lifecycle document', error);
+    throw invalidLifecyclePath('lifecycle document');
   }
-  if (!isInside(root, physical)) throw invalidLifecyclePath('lifecycle document');
+  const specDir = path.dirname(candidate);
+  if (!isInside(root, physical) || !isInside(specDir, physical)) {
+    throw invalidLifecyclePath('lifecycle document');
+  }
   return physical;
 }
 
@@ -116,7 +128,8 @@ function loadContext(event, options = {}) {
   try {
     root = fs.realpathSync(registeredRoot);
     if (!fs.statSync(root).isDirectory()) throw new Error('registered root is not a directory');
-  } catch {
+  } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('registered project root', error);
     throw new PhaseHandlerError('PHASE_PROJECT_ROOT_INVALID', 'Registered project root must resolve to an accessible directory.');
   }
 
@@ -132,10 +145,8 @@ function loadContext(event, options = {}) {
   try {
     lifecycle = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
   } catch (error) {
-    throw new PhaseHandlerError('PHASE_LIFECYCLE_UNAVAILABLE', `Cannot read phase lifecycle evidence: ${safeMessage(error)}`, {
-      status: 'retryable',
-      retryable: true,
-    });
+    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('lifecycle evidence', error);
+    throw new PhaseHandlerError('PHASE_LIFECYCLE_INVALID', `Lifecycle evidence is missing or malformed: ${safeMessage(error)}`);
   }
   if (!lifecycle || lifecycle.schema !== 1 || !lifecycle.plan || lifecycle.plan.plan_id !== event.plan_id) {
     throw new PhaseHandlerError('PHASE_PLAN_IDENTITY_MISMATCH', 'Lifecycle metadata does not identify this event plan.');
