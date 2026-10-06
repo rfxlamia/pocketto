@@ -145,6 +145,7 @@ function issueProofRef() {
 }
 
 module.exports = {
+  canonicalArtifactRefs,
   lifecycleEventProofFromMetadata,
   issueProofRef,
 };

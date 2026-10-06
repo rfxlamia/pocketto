@@ -28,6 +28,7 @@ const {
   listTasklistComments,
   upsertTasklist,
 } = require('./closure-tasklist');
+const { canonicalArtifactRefs } = require('./lifecycle-proof');
 
 const RECONCILABLE_DELIVERY_STATUSES = new Set(['claimed', 'pending', 'retryable', 'reconciling']);
 const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
@@ -269,16 +270,6 @@ function persistClosureProof(eventId, event, context, comment, tasklist, closeou
   const closeoutFailure = persistCloseout(eventId, opts, closeout, proofHash, context.closeoutRoot);
   if (closeoutFailure) return closeoutFailure;
   return { event_id: eventId, status: 'succeeded', proof_ref: PROOF_REF, proof_hash: proofHash };
-}
-
-function canonicalArtifactRefs(event) {
-  return event.artifact_refs.map((ref) => ({
-    root: ref.root,
-    kind: ref.kind,
-    path: ref.path,
-    sha256: ref.sha256,
-    revision: ref.revision,
-  }));
 }
 
 function replayClosureProof(event, opts, eventId) {

@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { validateEvent } = require('../cli/lib/lifecycle-contract');
+const { canonicalArtifactRefs } = require('./lifecycle-proof');
 const { summaryBody } = require('../cli/lib/bodies');
 const identity = require('../cli/lib/identity');
 const enterpriseMeta = require('./meta');
@@ -168,16 +169,6 @@ function persistPhaseProof(event, context, issue, phase, pr, marker, fingerprint
     });
   }
   return proofHash;
-}
-
-function canonicalArtifactRefs(event) {
-  return event.artifact_refs.map((ref) => ({
-    root: ref.root,
-    kind: ref.kind,
-    path: ref.path,
-    sha256: ref.sha256,
-    revision: ref.revision,
-  }));
 }
 
 function validFingerprintRecords(value) {
