@@ -10,12 +10,9 @@ const enterpriseMeta = require('./meta');
 const { PhaseHandlerError } = require('./phase-handler-errors');
 const { resolvePlanArtifactPath } = require('./phase-handler-context');
 
-// The registered lifecycle context stores plan/spec roots as siblings under docs/pocket.
-function closureArtifactRoot(planDir, rootName) {
-  const physicalPlanRoot = fs.realpathSync(planDir);
-  if (rootName === 'plan') return physicalPlanRoot;
-  const physicalSpecRoot = path.resolve(physicalPlanRoot, '..', '..', 'spec', path.basename(physicalPlanRoot));
-  return fs.realpathSync(physicalSpecRoot);
+// Resolve each artifact from the selected root supplied by the registered lifecycle context.
+function closureArtifactRoot(planDir, specDir, rootName) {
+  return fs.realpathSync(rootName === 'plan' ? planDir : specDir);
 }
 
 function isInsideRoot(root, candidate) {
@@ -23,7 +20,7 @@ function isInsideRoot(root, candidate) {
   return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-function validateClosureArtifactRefs(planDir, artifactRefs) {
+function validateClosureArtifactRefs(planDir, specDir, artifactRefs) {
   const refs = Array.isArray(artifactRefs) ? artifactRefs : [];
   for (const ref of refs) {
     try {
@@ -33,7 +30,7 @@ function validateClosureArtifactRefs(planDir, artifactRefs) {
         throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence must use a contained root-relative path.');
       }
 
-      const root = closureArtifactRoot(planDir, ref.root);
+      const root = closureArtifactRoot(planDir, specDir, ref.root);
       if (!fs.statSync(root).isDirectory()) {
         throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence root must be a directory.');
       }
@@ -70,8 +67,8 @@ function validateClosureArtifactRefs(planDir, artifactRefs) {
   }
 }
 
-function readPlan(planDir, artifactRefs) {
-  validateClosureArtifactRefs(planDir, artifactRefs);
+function readPlan(planDir, specDir, artifactRefs) {
+  validateClosureArtifactRefs(planDir, specDir, artifactRefs);
   let log;
   try {
     const logPath = resolvePlanArtifactPath(planDir, 'log.json', 'plan log');

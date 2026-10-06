@@ -85,7 +85,7 @@ function loadClosureContext(event, opts, eventId, log) {
 function prepareClosure(event, opts, eventId) {
   const invalid = validateEventAndPaths(event, opts, eventId);
   if (invalid) return { ok: false, result: invalid };
-  const plan = readPlan(opts.planDir, event.artifact_refs);
+  const plan = readPlan(opts.planDir, opts.specDir, event.artifact_refs);
   if (!plan.ok) return { ok: false, result: adapterResult(eventId, 'terminal', plan.code, plan.message, false) };
 
   let closeoutTarget;

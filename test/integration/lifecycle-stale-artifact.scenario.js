@@ -108,6 +108,101 @@ test('plan-closed validates a changed second spec-root ref before closure mutati
   }, 'every accepted plan-closed artifact ref must be validated before remote or local closure effects');
 });
 
+test('plan-closed resolves intact spec refs against selected roots in noncanonical plan directories', (t) => {
+  const fixture = createFixture(t);
+  const committedEvent = commitPlanClosedEventWithNoncanonicalPlanDirectory(fixture);
+  const specRef = committedEvent.artifact_refs.find((ref) => ref.root === 'spec');
+  const inferredSpecDir = path.join(fixture.root, 'spec', PLAN_ID);
+
+  assert.equal(path.basename(fixture.planDir), PLAN_ID,
+    'the selected plan directory keeps the logical plan identity');
+  assert.notEqual(path.resolve(inferredSpecDir), path.resolve(fixture.specDir),
+    'the old sibling inference must not identify the selected spec root');
+  assert.equal(sha256(fs.readFileSync(path.join(fixture.specDir, specRef.path))), specRef.sha256,
+    'the selected spec-root artifact remains intact at delivery');
+
+  const drain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'public drain with intact selected-root evidence and noncanonical plan directory');
+  assert.deepEqual(deliverySummary(drain, committedEvent.event_id), {
+    event_id: committedEvent.event_id,
+    revision: 3,
+    status: 'succeeded',
+  });
+  const metadata = readMetadata(fixture);
+  assert.equal(metadata.github_issue.tasklist.event_id, committedEvent.event_id);
+  assert.equal(metadata.lifecycle_delivery.last_applied_revision, 3);
+  assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), true);
+});
+
+test('plan-closed rejects stale selected spec refs despite a matching-hash inferred sibling decoy', (t) => {
+  const fixture = createFixture(t);
+  const committedEvent = commitPlanClosedEventWithNoncanonicalPlanDirectory(fixture);
+  const specRef = committedEvent.artifact_refs.find((ref) => ref.root === 'spec');
+  const decoyPath = path.join(fixture.root, 'spec', PLAN_ID, specRef.path);
+  const selectedArtifactPath = path.join(fixture.specDir, specRef.path);
+  const metadataBefore = readMetadata(fixture);
+  const remoteBefore = readRemote(fixture);
+  const closeoutPath = path.join(fixture.planDir, 'closeout.md');
+
+  writeFile(decoyPath, fixture.approvedSpec);
+  assert.equal(sha256(fs.readFileSync(decoyPath)), specRef.sha256,
+    'the decoy at the old inferred sibling must match the committed digest');
+  writeFile(selectedArtifactPath, `${fixture.approvedSpec}Changed after closure commit.\n`);
+  assert.notEqual(sha256(fs.readFileSync(selectedArtifactPath)), specRef.sha256,
+    'the selected spec-root ref must be stale at delivery');
+  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 2);
+  assert.equal(metadataBefore.github_issue.tasklist, undefined);
+  assert.equal(fs.existsSync(closeoutPath), false);
+
+  const drain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'public drain with a stale selected-root ref and matching-hash sibling decoy');
+  const delivery = drain.deliveries.find(({ event_id }) => event_id === committedEvent.event_id);
+  const journalEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
+  const metadataAfter = readMetadata(fixture);
+
+  assert.deepEqual({
+    delivery: delivery && {
+      event_id: delivery.event_id,
+      revision: delivery.revision,
+      status: delivery.status,
+      code: delivery.error && delivery.error.code,
+      retryable: delivery.error && delivery.error.retryable,
+    },
+    journalEventId: journalEvent && journalEvent.event_id,
+    refsUnchanged: journalEvent && isDeepStrictEqual(journalEvent.artifact_refs, committedEvent.artifact_refs),
+    journalStatus: journalEvent && journalEvent.delivery.status,
+    journalCode: journalEvent && journalEvent.delivery.error && journalEvent.delivery.error.code,
+    journalRetryable: journalEvent && journalEvent.delivery.error && journalEvent.delivery.error.retryable,
+    metadataUnchanged: isDeepStrictEqual(metadataAfter, metadataBefore),
+    remoteUnchanged: isDeepStrictEqual(readRemote(fixture), remoteBefore),
+    watermarkBefore: metadataBefore.lifecycle_delivery.last_applied_revision,
+    watermarkAfter: metadataAfter.lifecycle_delivery.last_applied_revision,
+    closureProofWritten: metadataAfter.github_issue.tasklist !== undefined,
+    closeoutExists: fs.existsSync(closeoutPath),
+  }, {
+    delivery: {
+      event_id: committedEvent.event_id,
+      revision: committedEvent.revision,
+      status: 'terminal',
+      code: 'STALE_ARTIFACT',
+      retryable: false,
+    },
+    journalEventId: committedEvent.event_id,
+    refsUnchanged: true,
+    journalStatus: 'terminal',
+    journalCode: 'STALE_ARTIFACT',
+    journalRetryable: false,
+    metadataUnchanged: true,
+    remoteUnchanged: true,
+    watermarkBefore: 2,
+    watermarkAfter: 2,
+    closureProofWritten: false,
+    closeoutExists: false,
+  }, 'the selected root, not a matching decoy, must validate every committed spec ref before effects');
+});
+
 test('plan-closed accepts an in-root symlink to identical committed evidence', (t) => {
   const fixture = createFixture(t);
   const committedEvent = commitPlanClosedEvent(fixture);
@@ -539,6 +634,44 @@ function prepareClosureReadyPlan(fixture) {
     'log', 'update', fixture.planDir, PHASE_PATH, 'DONE', '--json', '--contract', '3',
   ]);
   assertCliOk(done, 'public log update DONE');
+}
+
+function commitPlanClosedEventWithNoncanonicalPlanDirectory(fixture) {
+  prepareClosureReadyPlan(fixture);
+  const noncanonicalPlanDir = path.join(fixture.root, 'noncanonical-plans', PLAN_ID);
+  fs.mkdirSync(path.dirname(noncanonicalPlanDir), { recursive: true });
+  fs.renameSync(fixture.planDir, noncanonicalPlanDir);
+  fixture.planDir = noncanonicalPlanDir;
+
+  const lifecycle = readLifecycle(fixture);
+  lifecycle.plan.plan_dir = path.relative(fixture.root, fixture.planDir);
+  writeFile(path.join(fixture.specDir, 'lifecycle.json'), `${JSON.stringify(lifecycle, null, 2)}\n`);
+
+  const logPath = path.join(fixture.planDir, 'log.json');
+  const log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+  log.header.status = 'DONE';
+  log.header.date_completed = FIXED_NOW.slice(0, 10);
+  writeFile(logPath, `${JSON.stringify(log, null, 2)}\n`);
+
+  const refs = [
+    { root: 'plan', kind: 'phase-evidence', path: PHASE_PATH, sha256: sha256(fixture.phaseEvidence), revision: 1 },
+    { root: 'spec', kind: 'approved-spec', path: 'approved-spec.md', sha256: sha256(fixture.approvedSpec), revision: 1 },
+  ];
+  const result = commitTransition({
+    specDir: fixture.specDir,
+    planDir: fixture.planDir,
+    planId: PLAN_ID,
+    type: 'plan-closed',
+    artifacts: refs,
+    deps: { now: () => FIXED_NOW },
+  });
+  assert.equal(result.ok, true,
+    `the real Core commitTransition/store must accept closure refs for the selected roots: ${JSON.stringify(result)}`);
+  const event = readLifecycle(fixture).events.find(({ event_id }) => event_id === result.event.event_id);
+  assert.deepEqual(event, result.event, 'the real lifecycle store must persist the multi-root closure event');
+  assert.equal(event.event_id, `${PLAN_ID}:plan-closed:r3`);
+  assert.deepEqual(event.artifact_refs, refs);
+  return event;
 }
 
 function commitPlanClosedEventWithBothRoots(fixture) {
