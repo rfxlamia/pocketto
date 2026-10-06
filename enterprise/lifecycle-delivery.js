@@ -1,9 +1,11 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { serializeResponse } = require('./adapter');
 const enterpriseMeta = require('./meta');
+const { loadContext } = require('./phase-handler-context');
 
 const METADATA_ERROR_CODES = {
   'spec-approved': {
@@ -30,14 +32,15 @@ function lifecycleDeliveryContext(projectRoot, planId) {
       || typeof planId !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(planId)) {
     throw new Error('invalid lifecycle delivery identity');
   }
-  const root = fs.realpathSync(projectRoot);
+  const registeredProjectRoot = path.resolve(projectRoot);
+  const root = fs.realpathSync(registeredProjectRoot);
   const specDir = path.resolve(root, 'docs', 'pocket', 'spec', planId);
   const physicalSpecDir = fs.realpathSync(specDir);
   if (!fs.statSync(root).isDirectory() || !fs.statSync(physicalSpecDir).isDirectory()
       || physicalSpecDir !== specDir || physicalSpecDir === root || !isInside(root, physicalSpecDir)) {
     throw new Error('invalid lifecycle delivery metadata directory');
   }
-  return { projectRoot: root, specDir: physicalSpecDir };
+  return { projectRoot: root, registeredProjectRoot, specDir: physicalSpecDir };
 }
 
 const WATERMARK_WRITE_FAILURE_MESSAGE = 'Canonical event proof is durable but the Enterprise lifecycle watermark could not be saved. Retry delivery; the existing proof will be reconciled before remote mutation.';
@@ -145,9 +148,61 @@ function prepareAlreadyAppliedEvent(event, context) {
   };
 }
 
+function staleArtifactError() {
+  const error = new Error('Committed lifecycle artifact is missing, unsafe, or no longer matches its SHA-256.');
+  error.code = 'STALE_ARTIFACT';
+  return error;
+}
+
+function validateCommittedArtifacts(event, selectedContext) {
+  if (!Array.isArray(event.artifact_refs) || event.artifact_refs.length === 0) throw staleArtifactError();
+
+  for (const ref of event.artifact_refs) {
+    if (!ref || (ref.root !== 'spec' && ref.root !== 'plan')
+        || typeof ref.path !== 'string' || ref.path.length === 0 || path.isAbsolute(ref.path)
+        || ref.path.split(/[\\/]/).includes('..')) {
+      throw staleArtifactError();
+    }
+
+    const selectedRoot = ref.root === 'spec' ? selectedContext.specDir : selectedContext.planDir;
+    if (typeof selectedRoot !== 'string' || !path.isAbsolute(selectedRoot)) throw staleArtifactError();
+    const root = fs.realpathSync(selectedRoot);
+    if (root !== selectedRoot || !fs.statSync(root).isDirectory()) throw staleArtifactError();
+
+    const candidate = path.resolve(root, ref.path);
+    if (candidate === root || !isInside(root, candidate)) throw staleArtifactError();
+    const physicalArtifact = fs.realpathSync(candidate);
+    if (physicalArtifact === root || !isInside(root, physicalArtifact)) throw staleArtifactError();
+    if (!fs.lstatSync(physicalArtifact).isFile()) throw staleArtifactError();
+
+    const bytes = fs.readFileSync(physicalArtifact);
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    if (digest !== ref.sha256) throw staleArtifactError();
+  }
+}
+
+function lifecycleArtifactFailure(event, error) {
+  const retryable = enterpriseMeta.isTransientIoError(error)
+    || Boolean(error && error.status === 'retryable' && error.retryable === true);
+  return {
+    response: lifecycleDeliveryResponse(event, retryable ? 'retryable' : 'terminal',
+      retryable ? 'ARTIFACT_READ_FAILED' : 'STALE_ARTIFACT', retryable,
+      retryable
+        ? 'A committed lifecycle artifact could not be validated because of a temporary I/O failure; retry delivery. No handler or GitHub call ran.'
+        : 'A committed lifecycle artifact is missing, changed, or unsafe for the selected root. No handler or GitHub call ran.'),
+  };
+}
+
 function recoverReconcilingEvent(event, context, delivery) {
   if (event.delivery.status !== 'reconciling'
       || event.revision !== delivery.last_applied_revision + 1) return null;
+
+  try {
+    const selectedContext = loadContext(event, { projectRoot: context.registeredProjectRoot });
+    validateCommittedArtifacts(event, selectedContext);
+  } catch (error) {
+    return lifecycleArtifactFailure(event, error);
+  }
 
   let recovery;
   try {

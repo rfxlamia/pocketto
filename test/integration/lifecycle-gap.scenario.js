@@ -12,6 +12,7 @@ const { runCore, assertCliOk } = require('./support/core-cli');
 const {
   installLifecycleWatermarkWriteFaultGate,
   installLifecycleHandlerCallTraceGate,
+  installRegisteredEnterpriseReadFaultGate,
 } = require('./support/failure-gates');
 const { validateEvent } = require('../../cli/lib/lifecycle-contract');
 const { responseDeliveryPatch } = require('../../cli/lib/lifecycle-retry');
@@ -23,6 +24,13 @@ test('the registered Enterprise adapter defers an out-of-order revision until it
   const failedAttempt = failWatermarkWriteAfterProof(scenario);
   const recovered = replayCanonicalProofBeforeMutation(scenario, failedAttempt);
   completeNextRevision(scenario, recovered);
+});
+
+test('proof-first recovery rejects a changed second artifact before advancing the watermark', (t) => {
+  const scenario = prepareGapScenario(createFixture(t));
+  assertGapHasNoMutation(scenario);
+  const failedAttempt = failWatermarkWriteAfterProof(scenario);
+  rejectChangedSecondArtifactDuringReplay(scenario, failedAttempt);
 });
 
 function prepareGapScenario(fixture) {
@@ -43,7 +51,8 @@ function prepareGapScenario(fixture) {
   assert.deepEqual(scenarioHelpers.readWatermark(fixture), { schema: 1, plan_id: PLAN_ID, last_applied_revision: 3 },
     'the real registered adapter must persist the contiguous watermark after r1-r3 proofs');
 
-  assert.equal(scenarioHelpers.appendPhaseEvent(fixture, 3).event_id, `${PLAN_ID}:phase-complete:r4`);
+  assert.equal(scenarioHelpers.appendPhaseEvent(fixture, 3, [{ root: 'spec', path: 'approved-spec.md' }]).event_id,
+    `${PLAN_ID}:phase-complete:r4`);
   assert.equal(scenarioHelpers.appendPhaseEvent(fixture, 4).event_id, `${PLAN_ID}:phase-complete:r5`);
   const lifecyclePath = path.join(fixture.specDir, 'lifecycle.json');
   const journalBeforeDelivery = fs.readFileSync(lifecyclePath);
@@ -124,11 +133,46 @@ function failWatermarkWriteAfterProof(scenario) {
     status: 'claimed',
   }], 'the initial r4 attempt must invoke its handler exactly once');
   const metadataAfterProof = scenarioHelpers.readMetadata(fixture);
+  const metadataAfterProofBytes = scenarioHelpers.readMetadataBytes(fixture);
   const remoteAfterProof = readRemote(fixture);
   assert.deepEqual(remoteAfterProof.effects.slice(remoteBeforeGap.effects.length), [{
     kind: 'phase-summary-create', number: PR_NUMBER + 2, marker: '<!-- pocket-phase-3-summary -->',
   }], 'the event proof and remote effect must be durable before the injected watermark write failure');
-  return { claimedEvent4, reconciling4, metadataAfterProof, remoteAfterProof };
+  return { claimedEvent4, reconciling4, metadataAfterProof, metadataAfterProofBytes, remoteAfterProof };
+}
+
+function rejectChangedSecondArtifactDuringReplay(scenario, failedAttempt) {
+  const { fixture, event4, handlerTrace } = scenario;
+  const { claimedEvent4, reconciling4, metadataAfterProof, metadataAfterProofBytes, remoteAfterProof } = failedAttempt;
+  const reconcilingEvent4 = buildReconcilingReplayEvent(event4, claimedEvent4, reconciling4);
+  assert.equal(reconcilingEvent4.artifact_refs.length, 2,
+    'the proof-first regression must exercise a second committed artifact ref');
+  const secondRef = reconcilingEvent4.artifact_refs[1];
+  assert.equal(secondRef.root, 'spec', 'the recovery regression must cover the selected spec-root artifact');
+  const secondArtifactPath = path.join(fixture.specDir, secondRef.path);
+  const secondArtifactBytes = fs.readFileSync(secondArtifactPath);
+  fs.writeFileSync(secondArtifactPath, Buffer.concat([secondArtifactBytes, Buffer.from('\nchanged after proof persistence\n')]));
+  assert.notDeepEqual(fs.readFileSync(secondArtifactPath), secondArtifactBytes,
+    'the second committed artifact must be changed after canonical proof persistence');
+
+  const stale = scenarioHelpers.deliverRegisteredEvent(fixture, reconcilingEvent4, { handlerTrace });
+  assert.equal(stale.event_id, event4.event_id, 'recovery must preserve the original event identity');
+  assert.equal(stale.status, 'terminal');
+  assert.deepEqual(stale.error && { code: stale.error.code, retryable: stale.error.retryable },
+    { code: 'STALE_ARTIFACT', retryable: false });
+  assert.deepEqual(scenarioHelpers.readWatermark(fixture),
+    { schema: 1, plan_id: PLAN_ID, last_applied_revision: 3 },
+    'a stale second ref must not advance the contiguous watermark');
+  assert.deepEqual(scenarioHelpers.readMetadataBytes(fixture), metadataAfterProofBytes,
+    'stale replay must leave proof and watermark metadata byte-identical');
+  assert.deepEqual(scenarioHelpers.readMetadata(fixture).phases['phase-3'].review.proof,
+    metadataAfterProof.phases['phase-3'].review.proof,
+    'stale replay must not mutate the canonical proof contents');
+  assert.deepEqual(readRemote(fixture), remoteAfterProof,
+    'stale proof-first recovery must perform zero additional fake GitHub calls or effects');
+  assert.deepEqual(scenarioHelpers.readHandlerCalls(handlerTrace), [{
+    event_id: event4.event_id, revision: 4, status: 'claimed',
+  }], 'stale proof-first recovery must not rerun the phase handler');
 }
 
 function buildReconcilingReplayEvent(event4, claimedEvent4, reconciling4) {
@@ -156,8 +200,48 @@ function buildReconcilingReplayEvent(event4, claimedEvent4, reconciling4) {
 
 function replayCanonicalProofBeforeMutation(scenario, failedAttempt) {
   const { fixture, event4, event5, handlerTrace, lifecyclePath, journalBeforeDelivery } = scenario;
-  const { claimedEvent4, reconciling4, metadataAfterProof, remoteAfterProof } = failedAttempt;
+  const {
+    claimedEvent4, reconciling4, metadataAfterProof, metadataAfterProofBytes, remoteAfterProof,
+  } = failedAttempt;
   const reconcilingEvent4 = buildReconcilingReplayEvent(event4, claimedEvent4, reconciling4);
+  const secondRef = event4.artifact_refs[1];
+  const secondRoot = secondRef.root === 'spec' ? fixture.specDir : fixture.planDir;
+  const secondArtifactPath = path.join(secondRoot, secondRef.path);
+  const secondArtifactBytes = fs.readFileSync(secondArtifactPath);
+  const safeTargetPath = `${secondArtifactPath}.matching-content`;
+  fs.writeFileSync(safeTargetPath, secondArtifactBytes);
+  fs.unlinkSync(secondArtifactPath);
+  fs.symlinkSync(path.basename(safeTargetPath), secondArtifactPath);
+  assert.equal(fs.lstatSync(secondArtifactPath).isSymbolicLink(), true);
+  assert.deepEqual(fs.readFileSync(secondArtifactPath), secondArtifactBytes,
+    'a safe in-root symlink must still resolve to the exact committed bytes');
+
+  const readFaultGate = installRegisteredEnterpriseReadFaultGate(fixture);
+  const transient = scenarioHelpers.deliverRegisteredEvent(fixture, reconcilingEvent4, {
+    handlerTrace,
+    readFaultGate,
+    readArtifactPath: secondArtifactPath,
+  });
+  assert.equal(transient.event_id, event4.event_id);
+  assert.equal(transient.status, 'retryable');
+  assert.deepEqual(transient.error && { code: transient.error.code, retryable: transient.error.retryable },
+    { code: 'ARTIFACT_READ_FAILED', retryable: true });
+  assert.equal(fs.existsSync(readFaultGate.hitPath), true,
+    'proof-first recovery must read the committed artifact through the registered Enterprise process');
+  const injected = JSON.parse(fs.readFileSync(readFaultGate.hitPath, 'utf8'));
+  assert.equal(injected.code, 'EIO');
+  assert.equal(injected.target, fs.realpathSync(secondArtifactPath));
+  assert.deepEqual(scenarioHelpers.readWatermark(fixture),
+    { schema: 1, plan_id: PLAN_ID, last_applied_revision: 3 },
+    'transient artifact I/O must not advance the watermark');
+  assert.deepEqual(scenarioHelpers.readMetadataBytes(fixture), metadataAfterProofBytes,
+    'transient artifact I/O must not mutate proof or metadata');
+  assert.deepEqual(readRemote(fixture), remoteAfterProof,
+    'transient artifact I/O must perform zero additional fake GitHub calls or effects');
+  assert.deepEqual(scenarioHelpers.readHandlerCalls(handlerTrace), [{
+    event_id: event4.event_id, revision: 4, status: 'claimed',
+  }], 'transient proof-first recovery must not rerun the phase handler');
+
   const applied4 = scenarioHelpers.deliverRegisteredEvent(fixture, reconcilingEvent4, { handlerTrace });
   scenarioHelpers.assertSuccessfulProof(applied4, event4);
   assert.equal(applied4.event_id, reconciling4.event_id);

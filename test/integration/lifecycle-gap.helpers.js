@@ -48,21 +48,27 @@ function seedPhasePullRequests(fixture) {
   fs.writeFileSync(fixture.remotePath, `${JSON.stringify(remote, null, 2)}\n`);
 }
 
-function appendPhaseEvent(fixture, phaseNumber) {
-  const artifactPath = `execution-plan/phase-${phaseNumber}.md`;
-  const contents = fs.readFileSync(path.join(fixture.planDir, artifactPath), 'utf8');
+function appendPhaseEvent(fixture, phaseNumber, additionalArtifacts = []) {
+  const artifactRefs = [
+    { root: 'plan', path: `execution-plan/phase-${phaseNumber}.md` },
+    ...additionalArtifacts,
+  ];
+  const artifacts = artifactRefs.map(({ root, path: artifactPath }) => {
+    const artifactRoot = root === 'spec' ? fixture.specDir : fixture.planDir;
+    return {
+      root,
+      kind: 'phase-evidence',
+      path: artifactPath,
+      sha256: sha256(fs.readFileSync(path.join(artifactRoot, artifactPath), 'utf8')),
+      revision: 1,
+    };
+  });
   const result = commitTransition({
     specDir: fixture.specDir,
     planDir: fixture.planDir,
     planId: PLAN_ID,
     type: 'phase-complete',
-    artifacts: [{
-      root: 'plan',
-      kind: 'phase-evidence',
-      path: artifactPath,
-      sha256: sha256(contents),
-      revision: 1,
-    }],
+    artifacts,
     branch: `feature/${PLAN_ID}`,
     deps: { now: () => new Date(Date.parse(FIXED_NOW) + phaseNumber * 1000).toISOString() },
   });
@@ -87,7 +93,9 @@ function assertValidOrderedJournal(fixture) {
   }
 }
 
-function deliverRegisteredEvent(fixture, event, { faultGate, failWatermarkRevision, handlerTrace } = {}) {
+function deliverRegisteredEvent(fixture, event, {
+  faultGate, failWatermarkRevision, handlerTrace, readFaultGate, readArtifactPath,
+} = {}) {
   const registrationPath = path.join(fixture.root, '.pocket', 'lifecycle-adapter.json');
   const registration = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
   const eventDir = path.join(fixture.root, 'adapter-deliveries');
@@ -106,6 +114,12 @@ function deliverRegisteredEvent(fixture, event, { faultGate, failWatermarkRevisi
   if (handlerTrace) {
     preloadHooks.push(handlerTrace.hookPath);
     env.LIFECYCLE_HANDLER_TRACE_FILE = handlerTrace.tracePath;
+  }
+  if (readFaultGate) {
+    preloadHooks.push(readFaultGate.hookPath);
+    env.LIFECYCLE_ENTERPRISE_READ_FAILURE_PATH = path.resolve(readArtifactPath);
+    env.LIFECYCLE_ENTERPRISE_DISPATCH_PATH = readFaultGate.dispatchPath;
+    env.LIFECYCLE_ENTERPRISE_READ_FAILURE_HIT_FILE = readFaultGate.hitPath;
   }
   if (preloadHooks.length > 0) {
     env.NODE_OPTIONS = [env.NODE_OPTIONS, ...preloadHooks.map((hookPath) => `--require=${hookPath}`)]
@@ -131,7 +145,7 @@ function deliverRegisteredEvent(fixture, event, { faultGate, failWatermarkRevisi
 }
 
 function assertSuccessfulProof(response, event) {
-  assertEqual(response.status, 'succeeded', `${event.event_id} must be applied successfully`);
+  assertEqual(response.status, 'succeeded', `${event.event_id} must be applied successfully: ${JSON.stringify(response)}`);
   assertEqual(typeof response.proof_ref, 'string');
   assertMatch(response.proof_hash, /^[0-9a-f]{64}$/);
 }
