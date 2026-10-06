@@ -10,8 +10,10 @@ const { resolvePlanArtifactPath } = require('./phase-handler-context');
 
 function readPhaseEvidence(event, context) {
   const ref = findPhaseEvidenceRef(event);
-  const contents = readPhaseArtifact(ref, context.planDir);
-  verifyPhaseArtifact(ref, contents);
+  for (const artifactRef of event.artifact_refs) {
+    const rootDir = artifactRef.root === 'spec' ? context.specDir : context.planDir;
+    readPhaseArtifact(artifactRef, rootDir);
+  }
   const number = phaseNumberFromArtifact(ref);
   const phaseLog = readPhaseLog(context.planDir, ref.path);
   return collectPhaseEvidence(number, phaseLog, context.planDir);
@@ -25,12 +27,27 @@ function findPhaseEvidenceRef(event) {
   return ref;
 }
 
-function readPhaseArtifact(ref, planDir) {
+function readPhaseArtifact(ref, rootDir) {
   try {
-    const filePath = resolvePlanArtifactPath(planDir, ref.path, 'phase evidence');
-    return fs.readFileSync(filePath, 'utf8');
+    if (typeof ref.path !== 'string' || !ref.path.length || path.isAbsolute(ref.path)
+        || ref.path.split(/[\\/]/).includes('..')) {
+      throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed phase artifact must use a contained root-relative path.');
+    }
+    const filePath = resolvePlanArtifactPath(rootDir, ref.path, 'phase evidence');
+    const artifactStat = fs.lstatSync(filePath);
+    if (artifactStat.isSymbolicLink() || !artifactStat.isFile()) {
+      throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed phase artifact must resolve to a regular file.');
+    }
+    const contents = fs.readFileSync(filePath);
+    verifyPhaseArtifact(ref, contents);
+    return contents;
   } catch (error) {
-    if (error instanceof PhaseHandlerError) throw error;
+    if (error instanceof PhaseHandlerError) {
+      if (error.code === 'PHASE_ARTIFACT_PATH_INVALID') {
+        throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed phase artifact path is unavailable or unsafe.');
+      }
+      throw error;
+    }
     if (enterpriseMeta.isTransientIoError(error)) {
       throw new PhaseHandlerError('PHASE_EVIDENCE_UNAVAILABLE',
         `Phase evidence could not be read because of a temporary I/O failure: ${safeMessage(error)}`, {

@@ -70,26 +70,37 @@ function preflightArtifactRefs(refs, realSpecDir) {
     if (realArtifact === realSpecDir || !isInside(realSpecDir, realArtifact)) {
       return contextFailure('STALE_ARTIFACT', 'Approved spec artifact escapes the current plan directory.');
     }
+
+    let artifactStat;
+    try {
+      artifactStat = fs.lstatSync(realArtifact);
+    } catch (error) {
+      return filesystemFailure(error, 'Approved spec artifact could not be resolved.');
+    }
+    if (artifactStat.isSymbolicLink() || !artifactStat.isFile()) {
+      return contextFailure('STALE_ARTIFACT', 'Approved spec artifact is not a regular file.');
+    }
     targets.push({ ref, realArtifact });
   }
   return { targets };
 }
 
 function readSelectedArtifact({ ref, realArtifact }) {
-  let markdown;
+  let bytes;
   try {
-    if (!fs.statSync(realArtifact).isFile()) {
+    const artifactStat = fs.lstatSync(realArtifact);
+    if (artifactStat.isSymbolicLink() || !artifactStat.isFile()) {
       return contextFailure('STALE_ARTIFACT', 'Approved spec artifact is not a regular file.');
     }
-    markdown = fs.readFileSync(realArtifact, 'utf8');
+    bytes = fs.readFileSync(realArtifact);
   } catch (error) {
     return filesystemFailure(error, 'Approved spec artifact could not be read.');
   }
-  const actualHash = crypto.createHash('sha256').update(markdown).digest('hex');
+  const actualHash = crypto.createHash('sha256').update(bytes).digest('hex');
   if (actualHash !== ref.sha256) {
     return contextFailure('STALE_ARTIFACT', 'Approved spec artifact hash does not match the event.');
   }
-  return { markdown };
+  return { markdown: bytes.toString('utf8') };
 }
 
 function specContext(event, projectRoot) {
@@ -106,9 +117,14 @@ function specContext(event, projectRoot) {
   const preflight = preflightArtifactRefs(refs, physical.specDir);
   if (preflight.error) return preflight;
 
-  const selected = readSelectedArtifact(preflight.targets[0]);
-  if (selected.error) return selected;
-  const { ref } = preflight.targets[0];
+  const verifiedArtifacts = [];
+  for (const target of preflight.targets) {
+    const artifact = readSelectedArtifact(target);
+    if (artifact.error) return artifact;
+    verifiedArtifacts.push({ ref: target.ref, markdown: artifact.markdown });
+  }
+  const selected = verifiedArtifacts[0];
+  const { ref } = selected;
   const specPath = `docs/pocket/spec/${event.plan_id}/${ref.path.split(path.sep).join('/')}`;
   const metaContext = { projectRoot: physical.projectRoot, specDir: physical.specDir };
   return {

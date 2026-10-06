@@ -4,12 +4,13 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { PLAN_ID, PHASE_PATH } = require('./support/constants');
+const { FIXED_NOW, PLAN_ID, PHASE_PATH } = require('./support/constants');
 const { createFixture } = require('./support/fixture');
 const { initializePlan, transitionApprovedSpec } = require('./support/plan-commands');
 const { runCore, assertCliOk } = require('./support/core-cli');
 const { readRemote, readLifecycle } = require('./support/lifecycle-state');
-const { sha256 } = require('./support/files');
+const { sha256, writeFile } = require('./support/files');
+const { commitTransition } = require('../../cli/lib/lifecycle-store');
 const { isDeepStrictEqual } = require('node:util');
 
 test('committed artifacts that are missing or changed become terminal without GitHub mutation', async (t) => {
@@ -32,6 +33,226 @@ test('plan-closed delivery rejects committed phase artifacts missing or changed 
       assertClosureArtifactStateIsTerminal(subtest, artifactState));
   }
 });
+
+test('spec-approved rejects a changed second committed spec ref before remote reconciliation', (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const secondPath = 'supporting-spec.md';
+  const secondContents = '# Supporting approved evidence\n';
+  writeFile(path.join(fixture.specDir, secondPath), secondContents);
+  const refs = [
+    { root: 'spec', kind: 'approved-spec', path: 'approved-spec.md', sha256: sha256(fixture.approvedSpec), revision: 1 },
+    { root: 'spec', kind: 'approved-spec', path: secondPath, sha256: sha256(secondContents), revision: 1 },
+  ];
+  const transition = runCore(fixture, [
+    'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+    ...refs.flatMap((ref) => ['--artifact', artifactFlag(ref)]),
+    '--json', '--contract', '3',
+  ]);
+  const committed = assertCliOk(transition, 'public multi-ref spec-approved transition');
+  const committedEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committed.event_id);
+  assert.ok(committedEvent, 'the real Core store must commit the multi-ref event before mutation');
+  assert.deepEqual(committedEvent.artifact_refs, refs);
+  const metadataBefore = readMetadata(fixture);
+  const remoteBefore = readRemote(fixture);
+
+  writeFile(path.join(fixture.specDir, secondPath), `${secondContents}Changed after commit.\n`);
+  assert.equal(sha256(fs.readFileSync(path.join(fixture.specDir, refs[0].path))), refs[0].sha256,
+    'ref 1 must remain intact after commit');
+  assert.notEqual(sha256(fs.readFileSync(path.join(fixture.specDir, refs[1].path))), refs[1].sha256,
+    'only ref 2 must change after commit');
+
+  const drain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'public drain of stale multi-ref spec-approved event');
+  assertTerminalStaleDelivery(fixture, drain, committedEvent);
+
+  const metadataAfter = readMetadata(fixture);
+  assert.deepEqual(metadataAfter, metadataBefore,
+    'stale second spec ref must not write issue/phase proof or advance the Enterprise watermark');
+  assert.equal(metadataAfter.github_issue && metadataAfter.github_issue.ownership, undefined);
+  assert.equal(metadataAfter.lifecycle_delivery, undefined);
+  assertRemoteUnchanged(remoteBefore, fixture, 'stale second spec ref');
+});
+
+test('spec-approved still delivers when every committed spec ref remains intact', (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const secondPath = 'supporting-spec.md';
+  const secondContents = '# Supporting approved evidence\n';
+  writeFile(path.join(fixture.specDir, secondPath), secondContents);
+  const refs = [
+    { root: 'spec', kind: 'approved-spec', path: 'approved-spec.md', sha256: sha256(fixture.approvedSpec), revision: 1 },
+    { root: 'spec', kind: 'approved-spec', path: secondPath, sha256: sha256(secondContents), revision: 1 },
+  ];
+  const committed = assertCliOk(runCore(fixture, [
+    'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+    ...refs.flatMap((ref) => ['--artifact', artifactFlag(ref)]),
+    '--json', '--contract', '3',
+  ]), 'public multi-ref spec-approved transition with intact artifacts');
+
+  const drain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'public drain of intact multi-ref spec-approved event');
+  assert.deepEqual(deliverySummary(drain, committed.event_id), {
+    event_id: committed.event_id,
+    revision: 1,
+    status: 'succeeded',
+  });
+  assert.equal(readMetadata(fixture).github_issue.ownership.event_id, committed.event_id);
+  assert.equal(readMetadata(fixture).lifecycle_delivery.last_applied_revision, 1);
+});
+
+test('phase-complete rejects a changed second committed phase-evidence ref before remote reconciliation', (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const approved = transitionApprovedSpec(fixture);
+  const initialDrain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'registered Enterprise spec-approved delivery before phase event');
+  assert.deepEqual(deliverySummary(initialDrain, approved.event_id), {
+    event_id: approved.event_id,
+    revision: 1,
+    status: 'succeeded',
+  });
+
+  const secondPath = 'execution-plan/phase-evidence-support.md';
+  const secondContents = '# Phase 1 supporting evidence\n';
+  writeFile(path.join(fixture.planDir, secondPath), secondContents);
+  const refs = [
+    { root: 'plan', kind: 'phase-evidence', path: PHASE_PATH, sha256: sha256(fs.readFileSync(path.join(fixture.planDir, PHASE_PATH))), revision: 1 },
+    { root: 'plan', kind: 'phase-evidence', path: secondPath, sha256: sha256(secondContents), revision: 1 },
+  ];
+  const committedEvent = commitPhaseComplete(fixture, refs);
+  assert.equal(committedEvent.event_id, `${PLAN_ID}:phase-complete:r2`);
+  assert.deepEqual(committedEvent.artifact_refs, refs,
+    'the real Core contract/store must accept and commit both phase-evidence refs');
+  const metadataBefore = readMetadata(fixture);
+  const remoteBefore = readRemote(fixture);
+  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 1);
+
+  writeFile(path.join(fixture.planDir, secondPath), `${secondContents}Changed after commit.\n`);
+  assert.equal(sha256(fs.readFileSync(path.join(fixture.planDir, refs[0].path))), refs[0].sha256,
+    'ref 1 must remain intact after commit');
+  assert.notEqual(sha256(fs.readFileSync(path.join(fixture.planDir, refs[1].path))), refs[1].sha256,
+    'only ref 2 must change after commit');
+
+  const drain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'public drain of stale multi-ref phase-complete event');
+  assertTerminalStaleDelivery(fixture, drain, committedEvent);
+
+  const metadataAfter = readMetadata(fixture);
+  assert.deepEqual(metadataAfter, metadataBefore,
+    'stale second phase ref must not write issue/phase proof or advance the Enterprise watermark');
+  assert.equal(metadataAfter.github_issue.ownership.event_id, approved.event_id,
+    'existing issue proof must not be changed by the failed phase event');
+  assert.equal(metadataAfter.phases['phase-1'].review && metadataAfter.phases['phase-1'].review.proof, undefined,
+    'failed phase delivery must not persist a phase proof');
+  assert.equal(metadataAfter.lifecycle_delivery.last_applied_revision, 1,
+    'failed phase delivery must not advance its applied-revision watermark');
+  assertRemoteUnchanged(remoteBefore, fixture, 'stale second phase ref');
+});
+
+test('phase-complete still delivers when every committed phase-evidence ref remains intact', (t) => {
+  const fixture = createFixture(t);
+  initializePlan(fixture);
+  const approved = transitionApprovedSpec(fixture);
+  const initialDrain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'registered Enterprise spec-approved delivery before intact multi-ref phase event');
+  assert.deepEqual(deliverySummary(initialDrain, approved.event_id), {
+    event_id: approved.event_id,
+    revision: 1,
+    status: 'succeeded',
+  });
+
+  const secondPath = 'execution-plan/phase-evidence-support.md';
+  const secondContents = '# Phase 1 supporting evidence\n';
+  writeFile(path.join(fixture.planDir, secondPath), secondContents);
+  const refs = [
+    { root: 'plan', kind: 'phase-evidence', path: PHASE_PATH, sha256: sha256(fs.readFileSync(path.join(fixture.planDir, PHASE_PATH))), revision: 1 },
+    { root: 'plan', kind: 'phase-evidence', path: secondPath, sha256: sha256(secondContents), revision: 1 },
+  ];
+  const committedEvent = commitPhaseComplete(fixture, refs);
+  const remoteBefore = readRemote(fixture);
+
+  const drain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'public drain of intact multi-ref phase-complete event');
+  assert.deepEqual(deliverySummary(drain, committedEvent.event_id), {
+    event_id: committedEvent.event_id,
+    revision: 2,
+    status: 'succeeded',
+  });
+  const metadata = readMetadata(fixture);
+  assert.equal(metadata.phases['phase-1'].review.proof.event_id, committedEvent.event_id);
+  assert.equal(metadata.lifecycle_delivery.last_applied_revision, 2);
+  const remoteAfter = readRemote(fixture);
+  assert.deepEqual(remoteAfter.effects.slice(remoteBefore.effects.length).map(({ kind }) => kind), ['phase-summary-create']);
+});
+
+function commitPhaseComplete(fixture, refs) {
+  const result = commitTransition({
+    specDir: fixture.specDir,
+    planDir: fixture.planDir,
+    planId: PLAN_ID,
+    type: 'phase-complete',
+    artifacts: refs,
+    branch: `feature/${PLAN_ID}`,
+    deps: { now: () => FIXED_NOW },
+  });
+  assert.equal(result.ok, true, `real Core commitTransition must accept valid multi-ref phase evidence: ${JSON.stringify(result)}`);
+  const committed = readLifecycle(fixture).events.find(({ event_id }) => event_id === result.event.event_id);
+  assert.deepEqual(committed, result.event, 'the real lifecycle store must persist the committed event');
+  return committed;
+}
+
+function artifactFlag(ref) {
+  return `${ref.root}:${ref.kind}:${ref.path}:${ref.sha256}`;
+}
+
+function deliverySummary(result, eventId) {
+  const delivery = result.deliveries.find(({ event_id }) => event_id === eventId);
+  return delivery && { event_id: delivery.event_id, revision: delivery.revision, status: delivery.status };
+}
+
+function assertTerminalStaleDelivery(fixture, result, committedEvent) {
+  const delivery = result.deliveries.find(({ event_id }) => event_id === committedEvent.event_id);
+  assert.ok(delivery, `public drain must preserve event ID ${committedEvent.event_id}`);
+  assert.deepEqual({
+    event_id: delivery.event_id,
+    revision: delivery.revision,
+    status: delivery.status,
+    code: delivery.error && delivery.error.code,
+    retryable: delivery.error && delivery.error.retryable,
+  }, {
+    event_id: committedEvent.event_id,
+    revision: committedEvent.revision,
+    status: 'terminal',
+    code: 'STALE_ARTIFACT',
+    retryable: false,
+  }, 'a changed second ref must produce terminal STALE_ARTIFACT at registered Enterprise delivery');
+  const persistedEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
+  assert.ok(persistedEvent, `Core journal must retain event ID ${committedEvent.event_id}`);
+  assert.equal(persistedEvent.event_id, committedEvent.event_id);
+  assert.deepEqual(persistedEvent.artifact_refs, committedEvent.artifact_refs,
+    'delivery must not replace or reorder committed refs');
+  assert.equal(persistedEvent.delivery.status, 'terminal');
+  assert.equal(persistedEvent.delivery.error.code, 'STALE_ARTIFACT');
+  assert.equal(persistedEvent.delivery.error.retryable, false);
+}
+
+function assertRemoteUnchanged(remoteBefore, fixture, label) {
+  const remoteAfter = readRemote(fixture);
+  assert.equal(remoteAfter.calls.length - remoteBefore.calls.length, 0, `${label} must make zero fake GitHub calls`);
+  assert.equal(remoteAfter.effects.length - remoteBefore.effects.length, 0, `${label} must create zero fake GitHub effects`);
+  assert.deepEqual(remoteAfter, remoteBefore, `${label} must leave the fake GitHub state unchanged`);
+}
+
+function readMetadata(fixture) {
+  return JSON.parse(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json'), 'utf8'));
+}
 
 function assertClosureArtifactStateIsTerminal(t, artifactState) {
   const fixture = createFixture(t);

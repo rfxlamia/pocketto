@@ -220,7 +220,7 @@ test('phase-complete keeps missing roots and sibling/outside artifact symlinks t
       fs.symlinkSync(targetPath, evidencePath, 'file');
 
       const result = assertCliOk(drain(fixture), `phase-complete with ${targetKind} phase evidence symlink`);
-      assertTerminalFailure(result, eventId, 'PHASE_ARTIFACT_PATH_INVALID');
+      assertTerminalFailure(result, eventId, 'STALE_ARTIFACT');
       assertEventAttempt(fixture, eventId, 'terminal', 1);
       assert.deepEqual(readRemote(fixture), remoteBefore,
         'an escaping phase-evidence symlink must not call or mutate the fake GitHub transport');
