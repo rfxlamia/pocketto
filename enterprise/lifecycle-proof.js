@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const path = require('node:path');
 const { markerFor } = require('../cli/lib/identity');
 const { TASKLIST_MARKER } = require('../cli/lib/bodies');
@@ -25,6 +26,44 @@ function canonicalArtifactRefs(event) {
     sha256: ref.sha256,
     revision: ref.revision,
   }));
+}
+
+function isInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function staleArtifactError() {
+  const error = new Error('Committed lifecycle artifact is missing, unsafe, or no longer matches its SHA-256.');
+  error.code = 'STALE_ARTIFACT';
+  return error;
+}
+
+function validateCommittedArtifacts(event, selectedContext) {
+  if (!Array.isArray(event.artifact_refs) || event.artifact_refs.length === 0) throw staleArtifactError();
+
+  for (const ref of event.artifact_refs) {
+    if (!ref || (ref.root !== 'spec' && ref.root !== 'plan')
+        || typeof ref.path !== 'string' || ref.path.length === 0 || path.isAbsolute(ref.path)
+        || ref.path.split(/[\\/]/).includes('..')) {
+      throw staleArtifactError();
+    }
+
+    const selectedRoot = ref.root === 'spec' ? selectedContext.specDir : selectedContext.planDir;
+    if (typeof selectedRoot !== 'string' || !path.isAbsolute(selectedRoot)) throw staleArtifactError();
+    const root = fs.realpathSync(selectedRoot);
+    if (root !== selectedRoot || !fs.statSync(root).isDirectory()) throw staleArtifactError();
+
+    const candidate = path.resolve(root, ref.path);
+    if (candidate === root || !isInside(root, candidate)) throw staleArtifactError();
+    const physicalArtifact = fs.realpathSync(candidate);
+    if (physicalArtifact === root || !isInside(root, physicalArtifact)) throw staleArtifactError();
+    if (!fs.lstatSync(physicalArtifact).isFile()) throw staleArtifactError();
+
+    const bytes = fs.readFileSync(physicalArtifact);
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    if (digest !== ref.sha256) throw staleArtifactError();
+  }
 }
 
 function canonicalProofHash(proof) {
@@ -146,6 +185,9 @@ function issueProofRef() {
 
 module.exports = {
   canonicalArtifactRefs,
+  isInside,
+  staleArtifactError,
+  validateCommittedArtifacts,
   lifecycleEventProofFromMetadata,
   issueProofRef,
 };
