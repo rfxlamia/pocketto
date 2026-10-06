@@ -10,28 +10,44 @@ const enterpriseMeta = require('./meta');
 const { PhaseHandlerError } = require('./phase-handler-errors');
 const { resolvePlanArtifactPath } = require('./phase-handler-context');
 
+// The registered lifecycle context stores plan/spec roots as siblings under docs/pocket.
+function closureArtifactRoot(planDir, rootName) {
+  const physicalPlanRoot = fs.realpathSync(planDir);
+  if (rootName === 'plan') return physicalPlanRoot;
+  const physicalSpecRoot = path.resolve(physicalPlanRoot, '..', '..', 'spec', path.basename(physicalPlanRoot));
+  return fs.realpathSync(physicalSpecRoot);
+}
+
+function isInsideRoot(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 function validateClosureArtifactRefs(planDir, artifactRefs) {
-  const refs = Array.isArray(artifactRefs) ? artifactRefs.filter((ref) => ref.root === 'plan') : [];
+  const refs = Array.isArray(artifactRefs) ? artifactRefs : [];
   for (const ref of refs) {
     try {
-      if (typeof ref.path !== 'string' || !ref.path.length || path.isAbsolute(ref.path)
+      if (!ref || (ref.root !== 'plan' && ref.root !== 'spec')
+          || typeof ref.path !== 'string' || !ref.path.length || path.isAbsolute(ref.path)
           || ref.path.split(/[\\/]/).includes('..')) {
-        throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence must use a contained plan-root path.');
+        throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence must use a contained root-relative path.');
       }
 
-      const root = fs.realpathSync(planDir);
-      const filePath = resolvePlanArtifactPath(root, ref.path, 'plan closure evidence');
-      let candidate = root;
-      let artifactStat;
-      for (const component of path.normalize(ref.path).split(path.sep).filter((part) => part && part !== '.')) {
-        candidate = path.join(candidate, component);
-        artifactStat = fs.lstatSync(candidate);
-        if (artifactStat.isSymbolicLink()) {
-          throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence must not traverse symbolic links.');
-        }
+      const root = closureArtifactRoot(planDir, ref.root);
+      if (!fs.statSync(root).isDirectory()) {
+        throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence root must be a directory.');
       }
-      if (!artifactStat || !artifactStat.isFile()) {
-        throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence must be a regular file.');
+      const candidate = path.resolve(root, ref.path);
+      if (!isInsideRoot(root, candidate)) {
+        throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence path must remain inside its declared root.');
+      }
+      const filePath = fs.realpathSync(candidate);
+      if (!isInsideRoot(root, filePath)) {
+        throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence target must remain inside its declared root.');
+      }
+      const artifactStat = fs.lstatSync(filePath);
+      if (artifactStat.isSymbolicLink() || !artifactStat.isFile()) {
+        throw new PhaseHandlerError('STALE_ARTIFACT', 'Committed plan closure evidence must resolve to a regular file.');
       }
 
       const contents = fs.readFileSync(filePath);
