@@ -1,10 +1,10 @@
 {
   "name": "pocketto",
-  "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows for Claude Code.",
+  "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, code review workflows, and an opt-in education mentor mode for Claude Code.",
   "author": {
     "name": "rfxlamia",
     "url": "https://github.com/rfxlamia"
   },
   "repository": "https://github.com/rfxlamia/pocketto",
-  "keywords": ["pocket", "development", "delegation", "bug-hunting", "planning", "workflow", "structured-research"]
+  "keywords": ["pocket", "development", "delegation", "bug-hunting", "planning", "workflow", "structured-research", "education"]
 }

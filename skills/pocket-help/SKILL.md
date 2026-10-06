@@ -62,9 +62,9 @@ Recommended (with `--all`): `@juicesharp/rpiv-ask-user-question`, `@tintinweb/pi
 | Kind | Skills | Use for |
 |------|--------|---------|
 | **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-closing | Real features, non-trivial work. Each stage hands off to the next, carrying spec/plan/criteria forward. |
-| **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · structured-research · pocket-help · pocket-init · create-pr | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
+| **Standalone** (lighter, daily use) | bug-hunting · hotfix · brand-design · structured-research · pocket-help · pocket-init · pocket-education · create-pr | Everyday work that does NOT need the full pipeline. Single-purpose, no handoff chain. |
 
-The `pocket-*` prefix marks a skill as part of the chained pipeline (`pocket-init` and `pocket-help` are the exceptions — standalone setup/routing helpers). `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks. `create-pr` is the Pocket Enterprise PR recorder (see below).
+The `pocket-*` prefix marks a skill as part of the chained pipeline (`pocket-init`, `pocket-help`, and `pocket-education` are the exceptions — standalone setup, routing, and mentor-mode helpers). `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are deliberately *not* prefixed — they stand alone and are the right, lighter choice for most day-to-day tasks. `create-pr` is the Pocket Enterprise PR recorder (see below).
 
 ## Router — Which Skill Right Now?
 
@@ -83,7 +83,8 @@ Match your situation to one skill. Open only that skill.
 | Design system / brand identity / UI tokens | `brand-design` | standalone |
 | An assumption to validate before it enters planning | `structured-research` | standalone |
 | "What is Pocket / which skill / how does this flow?" | `pocket-help` (you are here) | standalone |
-| New/existing repo needs Pocket set up (CLAUDE.md, enterprise) | `pocket-init` | standalone |
+| New/existing repo needs Pocket set up (CLAUDE.md, enterprise, education) | `pocket-init` | standalone |
+| Learner wants to do the task themselves, with guidance and review | `pocket-education` | standalone (education) |
 | Enterprise phase done — open the linked PR | `create-pr` | standalone (enterprise) |
 
 **Routing rules of thumb:**
@@ -93,6 +94,7 @@ Match your situation to one skill. Open only that skill.
 - Something is broken? → `bug-hunting` (not the pipeline).
 - Holding an unverified assumption? → `structured-research` (validate it before it enters planning).
 - Already have an approved spec? → skip pitching/grinding, start at `pocket-planning`.
+- Repo has Pocket Education on, or the user says "teach me / I want to do it myself"? → `pocket-education` (the human implements).
 
 ## The End-to-End Flow (chained pipeline)
 
@@ -143,6 +145,19 @@ The pipeline above is local-first. With **Pocket Enterprise** enabled (`/pockett
 - `pocket-closing` → posts the closeout comment to the issue; with `require_approval: true` it blocks the close until the PR is APPROVED. Pocket never merges PRs or closes issues — humans do.
 
 Detection is fail-closed: without a valid `## Pocket Enterprise` block in `AGENTS.md`/`CLAUDE.md`, every skill behaves exactly as local mode with **zero** GitHub calls.
+
+## Pocket Education (opt-in mentor mode)
+
+```text
+Pocket Core        AI works with you.
+Pocket Enterprise  AI works with your organization.
+Pocket Education   AI teaches you how to work.
+```
+
+With **Pocket Education** enabled (`/pocketto:pocket-init` Education Gate), the human writes the code and the agent teaches, reviews, and guides with progressive hints (`pocket-education`). A skill-specific learner profile (`foundation` / `guided` / `independent` per skill) is calibrated once and kept in a `## Pocket Education` block in `AGENTS.md`/`CLAUDE.md`, so later sessions reuse it instead of recalibrating. The agent may recommend a level change; only the learner decides (`pocketto-pi edu set`).
+
+- `hotfix`, `bug-hunting` (fixes), and `pocket-development` ask once before implementing in an Education repo — guide the learner, or explicitly hand the task over.
+- Education is independent of Enterprise; any combination works. Without the block, nothing changes and no `edu` call is made.
 
 ## When Pocket Beats a Lighter Flow
 

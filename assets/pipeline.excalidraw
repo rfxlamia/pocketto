@@ -952,7 +952,7 @@
     {
       "id": "el29",
       "type": "rectangle",
-      "x": 146,
+      "x": 20,
       "y": 358,
       "width": 232,
       "height": 68,
@@ -970,7 +970,7 @@
         "type": 3
       },
       "seed": 5736,
-      "version": 1,
+      "version": 2,
       "versionNonce": 5833,
       "isDeleted": false,
       "boundElements": [
@@ -986,7 +986,7 @@
     {
       "id": "el30",
       "type": "text",
-      "x": 157,
+      "x": 31,
       "y": 374.5,
       "width": 210,
       "height": 35,
@@ -1002,7 +1002,7 @@
       "frameId": null,
       "roundness": null,
       "seed": 5930,
-      "version": 1,
+      "version": 2,
       "versionNonce": 6027,
       "isDeleted": false,
       "boundElements": [],
@@ -1044,13 +1044,13 @@
       "updated": 1,
       "link": null,
       "locked": false,
-      "text": "13 skills total — works in Claude Code and Pi",
+      "text": "14 skills total — works in Claude Code and Pi",
       "fontSize": 14,
       "fontFamily": 1,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "13 skills total — works in Claude Code and Pi",
+      "originalText": "14 skills total — works in Claude Code and Pi",
       "lineHeight": 1.25
     },
     {
@@ -1125,7 +1125,7 @@
     {
       "id": "standalone-structured-research-box",
       "type": "rectangle",
-      "x": 398,
+      "x": 272,
       "y": 358,
       "width": 232,
       "height": 68,
@@ -1143,7 +1143,7 @@
         "type": 3
       },
       "seed": 7060,
-      "version": 1,
+      "version": 2,
       "versionNonce": 7061,
       "isDeleted": false,
       "boundElements": [
@@ -1159,7 +1159,7 @@
     {
       "id": "standalone-structured-research-text",
       "type": "text",
-      "x": 409,
+      "x": 283,
       "y": 374.5,
       "width": 210,
       "height": 35,
@@ -1175,7 +1175,7 @@
       "frameId": null,
       "roundness": null,
       "seed": 7062,
-      "version": 1,
+      "version": 2,
       "versionNonce": 7063,
       "isDeleted": false,
       "boundElements": [],
@@ -1194,7 +1194,7 @@
     {
       "id": "standalone-create-pr-box",
       "type": "rectangle",
-      "x": 650,
+      "x": 524,
       "y": 358,
       "width": 232,
       "height": 68,
@@ -1212,7 +1212,7 @@
         "type": 3
       },
       "seed": 7070,
-      "version": 1,
+      "version": 2,
       "versionNonce": 7071,
       "isDeleted": false,
       "boundElements": [
@@ -1228,7 +1228,7 @@
     {
       "id": "standalone-create-pr-text",
       "type": "text",
-      "x": 661,
+      "x": 535,
       "y": 374.5,
       "width": 210,
       "height": 35,
@@ -1244,7 +1244,7 @@
       "frameId": null,
       "roundness": null,
       "seed": 7072,
-      "version": 1,
+      "version": 2,
       "versionNonce": 7073,
       "isDeleted": false,
       "boundElements": [],
@@ -1258,6 +1258,75 @@
       "verticalAlign": "middle",
       "containerId": "standalone-create-pr-box",
       "originalText": "create-pr\nenterprise PR recorder",
+      "lineHeight": 1.25
+    },
+    {
+      "id": "standalone-pocket-education-box",
+      "type": "rectangle",
+      "x": 776,
+      "y": 358,
+      "width": 232,
+      "height": 68,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#f1f3f5",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "seed": 550550,
+      "version": 1,
+      "versionNonce": 550557,
+      "isDeleted": false,
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "standalone-pocket-education-text"
+        }
+      ],
+      "updated": 1,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "standalone-pocket-education-text",
+      "type": "text",
+      "x": 787,
+      "y": 374.5,
+      "width": 210,
+      "height": 35,
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 550551,
+      "version": 1,
+      "versionNonce": 550558,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1,
+      "link": null,
+      "locked": false,
+      "text": "pocket-education\nyou code, it mentors",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "containerId": "standalone-pocket-education-box",
+      "originalText": "pocket-education\nyou code, it mentors",
       "lineHeight": 1.25
     }
   ],

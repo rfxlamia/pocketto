@@ -78,17 +78,21 @@
   <text class="lbl" x="850" y="270">hotfix</text>
   <text class="sub" x="850" y="291">small change, reviewed</text>
 
-  <rect class="box" x="140" y="324" width="220" height="64" fill="#f1f3f5"/>
-  <text class="lbl" x="250" y="350">brand-design</text>
-  <text class="sub" x="250" y="371">design system + brief</text>
+  <rect class="box" x="20" y="324" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="130" y="350">brand-design</text>
+  <text class="sub" x="130" y="371">design system + brief</text>
 
-  <rect class="box" x="380" y="324" width="220" height="64" fill="#f1f3f5"/>
-  <text class="lbl" x="490" y="350">structured-research</text>
-  <text class="sub" x="490" y="371">validate an assumption</text>
+  <rect class="box" x="260" y="324" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="370" y="350">structured-research</text>
+  <text class="sub" x="370" y="371">validate an assumption</text>
 
-  <rect class="box" x="620" y="324" width="220" height="64" fill="#f1f3f5"/>
-  <text class="lbl" x="730" y="350">create-pr</text>
-  <text class="sub" x="730" y="371">enterprise PR recorder</text>
+  <rect class="box" x="500" y="324" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="610" y="350">create-pr</text>
+  <text class="sub" x="610" y="371">enterprise PR recorder</text>
 
-  <text class="caption" x="490" y="428">13 skills total · works in Claude Code and Pi</text>
+  <rect class="box" x="740" y="324" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="850" y="350">pocket-education</text>
+  <text class="sub" x="850" y="371">you code, it mentors</text>
+
+  <text class="caption" x="490" y="428">14 skills total · works in Claude Code and Pi</text>
 </svg>

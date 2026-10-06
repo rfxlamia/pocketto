@@ -25,6 +25,8 @@ No install step, PATH setup, or shell-specific guard — `npx` resolves the cros
 
 Full command reference and update/close commands: see **Execution Log** section below.
 
+**Pocket Education guard.** If the memory file in your context (`CLAUDE.md` / `AGENTS.md`) has **no** `## Pocket Education` heading, skip this paragraph — execution is unchanged. If it has one, confirm with `npx -y pocketto-pi edu --json --contract 2`. When `data.education` is `true` (or the command errors), ask before dispatching any implementer: "Pocket Education is on here. Do you want to implement these tasks yourself, one at a time with guidance (→ `pocket-education`), or should subagents implement this plan?" Dispatch nothing until the user explicitly chooses. An explicit handover already given in `pocket-education` counts as the answer.
+
 ---
 
 ## When to Use

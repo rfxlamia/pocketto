@@ -5,7 +5,7 @@ One block per skill: what it does, what it consumes, what it produces, and when 
 Two kinds of skills:
 
 - **Chained** (`pocket-*`) — pipeline stages that hand off to one another.
-- **Standalone** — `bug-hunting`, `hotfix`, `brand-design`, `structured-research`, `pocket-help`, `pocket-init`, `create-pr`. Lighter, single-purpose, no handoff chain. The right choice for most everyday work.
+- **Standalone** — `bug-hunting`, `hotfix`, `brand-design`, `structured-research`, `pocket-help`, `pocket-init`, `pocket-education`, `create-pr`. Lighter, single-purpose, no handoff chain. The right choice for most everyday work.
 
 **Pocket Enterprise (opt-in):** with a `## Pocket Enterprise` block in `AGENTS.md`/`CLAUDE.md` (set up via `pocket-init` or `pocketto-pi mode init`), three pipeline stages gain a GitHub trace — grinding creates the issue from the approved spec, development offers `create-pr`, posts its phase-level pass's verdicts to the PR, and syncs a task checklist to the issue, and closing posts the closeout comment (optionally gated on PR approval). Detection is fail-closed: without the block, every stage is byte-identical to local mode and makes zero GitHub calls.
 
@@ -94,11 +94,18 @@ Two kinds of skills:
 - **Skip when:** You already know which stage you're in — open that skill directly.
 
 ### pocket-init
-- **What:** Brownfield onboarding. Scans the repo (stack, real build/test/lint commands, layout, conventions), writes an evidence-based project guide into a merge-safe managed section of the memory file (`CLAUDE.md` on Claude Code, `AGENTS.md` on Pi), then — only on explicit opt-in — enables Pocket Enterprise (`mode init`) and scaffolds `.github/` issue + PR templates (`scaffold github`).
+- **What:** Brownfield onboarding. Scans the repo (stack, real build/test/lint commands, layout, conventions), writes an evidence-based project guide into a merge-safe managed section of the memory file (`CLAUDE.md` on Claude Code, `AGENTS.md` on Pi), then — only on explicit opt-in — enables Pocket Enterprise (`mode init`) and scaffolds `.github/` issue + PR templates (`scaffold github`), and — independently, also opt-in — enables Pocket Education with a lightweight learner calibration (`edu init`).
 - **Input:** An existing project directory (defaults to the repo root).
-- **Output:** Created/merged memory file; optionally the enterprise config block, `.gitattributes`, and GitHub templates.
+- **Output:** Created/merged memory file; optionally the enterprise config block, `.gitattributes`, and GitHub templates; optionally the `## Pocket Education` learner profile.
 - **Use when:** Adopting Pocket in an existing repo, regenerating a stale project guide, or enabling enterprise mode for a team.
 - **Skip when:** The memory file is current and enterprise is already configured.
+
+### pocket-education
+- **What:** Opt-in mentor mode — the human implements, the agent teaches. Loads the persisted learner profile (`pocketto-pi edu`), maps the task to skill dimensions, then runs Understand → Investigate → learner plans → learner implements → review → guided correction → re-review → learning summary. Hints climb a ladder one rung at a time; review findings are phrased as traces that let the learner discover the failure mode. Never edits application code or tests. Recommends level changes from journal evidence; applies them only with the learner's explicit consent.
+- **Input:** A task in a repo with Pocket Education enabled (or a learner who wants to work this way).
+- **Output:** The learner's own, reviewed change; a learning summary (optionally `docs/pocket/learning/<date>-<slug>.md`); learner-approved profile updates.
+- **Use when:** "teach me", "guide me through this", "I want to do it myself", "review my change", "explain testing more slowly", "recalibrate my level".
+- **Skip when:** The user explicitly wants the agent to implement (→ hotfix / bug-hunting / pocket-development).
 
 ### create-pr
 - **What:** Pocket Enterprise PR recorder. Opens (or reuses — idempotent by meta and branch) the GitHub PR for a completed development phase on the **current branch**; never manages branches. Commits traveling state (`log.json`, plan + spec docs) first, formats a What/Why/How-to-Test body linked to the Pocket issue (`refs #N` mid-plan, `closes #N` on the final phase), and records the PR in `.pocket-meta.json`.

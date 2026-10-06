@@ -1,11 +1,12 @@
 # Pocketto
 
-> Structured AI coding workflows for Claude Code and Pi. 13 skills take work
+> Structured AI coding workflows for Claude Code and Pi. 14 skills take work
 > from a rough idea to reviewed, shipped code without the agent skipping steps:
-> a 6-stage chained pipeline plus 7 standalone skills, backed by one
+> a 6-stage chained pipeline plus 8 standalone skills, backed by one
 > cross-platform Node CLI. Skills use the `pocketto:` namespace. An opt-in
 > Pocket Enterprise mode mirrors the pipeline to GitHub (issues, PRs, review
-> verdicts) for teams.
+> verdicts) for teams; an opt-in Pocket Education mode turns the agent into a
+> repository-aware mentor — the human implements, the agent teaches and reviews.
 
 Core ideas: plan before code (specs + acceptance criteria + TDD plans),
 delegate with contracts (every subagent gets a "Pocket Packet" — objective,
@@ -24,7 +25,8 @@ verification, stop conditions; no packet, no spawn), and gate before done
 ## Standalone skills (no pipeline needed)
 
 - [pocket-help](skills/pocket-help/SKILL.md): Compact onboarding + routing — what Pocket is and which skill to use, without loading every skill.
-- [pocket-init](skills/pocket-init/SKILL.md): Brownfield onboarding — scans the repo, writes a merge-safe CLAUDE.md/AGENTS.md project guide, optionally enables Pocket Enterprise and scaffolds GitHub templates.
+- [pocket-init](skills/pocket-init/SKILL.md): Brownfield onboarding — scans the repo, writes a merge-safe CLAUDE.md/AGENTS.md project guide, optionally enables Pocket Enterprise and scaffolds GitHub templates, and optionally enables Pocket Education with a lightweight learner calibration.
+- [pocket-education](skills/pocket-education/SKILL.md): Mentor mode — the human writes the code; the agent explains, reviews, and coaches with progressive hints at a per-skill depth (foundation/guided/independent) read from a persisted learner profile. Recommends level changes; the learner decides.
 - [create-pr](skills/create-pr/SKILL.md): Pocket Enterprise recorder — opens/reuses the phase PR on the current branch, linked to the Pocket issue; commits traveling state first.
 - [bug-hunting](skills/bug-hunting/SKILL.md): Systematic debugging with confirmed root cause before any fix; reactive and proactive modes.
 - [hotfix](skills/hotfix/SKILL.md): Fast iteration for small-to-medium changes with brief-plan + subagent-review gates.
@@ -40,6 +42,7 @@ verification, stop conditions; no packet, no spawn), and gate before done
 - `npx pocketto-pi doctor [--strict]`: check which required/recommended Pi extensions are installed.
 - `npx pocketto-pi setup-extensions [--all]`: install the required Pi extensions (and recommended with `--all`) via `pi install`.
 - `npx pocketto-pi mode [<dir>]` / `mode init [--file CLAUDE.md] …`: read / write the Pocket Enterprise config block.
+- `npx pocketto-pi edu [<dir>]` / `edu init --level <skill>=<level> …` / `edu set --level <skill>=<level> …`: read / write the Pocket Education learner profile (init refuses to overwrite without `--reset`).
 - `npx pocketto-pi meta get|set <dir> <field> [value]`: read/write .pocket-meta.json (issue/PR linkage).
 - `npx pocketto-pi format <issue|pr|comment|closeout> --input <json>` and `format tasklist <plan_dir>`: render GitHub bodies to temp files.
 - `npx pocketto-pi scaffold github [--dry-run]`: write .github issue/PR templates (idempotent).
