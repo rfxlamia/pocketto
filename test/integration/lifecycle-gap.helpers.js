@@ -10,10 +10,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { FIXED_NOW, PLAN_ID, PR_NUMBER, REPOSITORY_URL } = require('./support/constants');
 const { readLifecycle, readRemote } = require('./support/lifecycle-state');
+const { assertCliOk, runCore } = require('./support/core-cli');
 const { runProcess } = require('./support/process');
 const { sha256, writeFile } = require('./support/files');
-const { commitTransition } = require('../../cli/lib/lifecycle-store');
+const { commitTransition, updateEventDelivery } = require('../../cli/lib/lifecycle-store');
 const { validateEvent } = require('../../cli/lib/lifecycle-contract');
+const { responseDeliveryPatch } = require('../../cli/lib/lifecycle-retry');
 const enterpriseMeta = require('../../enterprise/meta');
 
 function preparePhaseFixtures(fixture) {
@@ -217,6 +219,28 @@ function readHandlerCalls(handlerTrace) {
     .filter(Boolean).map((line) => JSON.parse(line));
 }
 
+function runCoreDeliveryWithWatermarkFailure(fixture, event, faultGate, handlerTrace) {
+  const hooks = [faultGate, handlerTrace].filter(Boolean);
+  const env = {
+    ...fixture.env,
+    NODE_OPTIONS: [fixture.env.NODE_OPTIONS, ...hooks.map(({ hookPath }) => `--require=${hookPath}`)]
+      .filter(Boolean).join(' '),
+    LIFECYCLE_WATERMARK_FAULT_META_PATH: path.join(fixture.specDir, '.pocket-meta.json'),
+    LIFECYCLE_WATERMARK_FAULT_REVISION: String(event.revision),
+    LIFECYCLE_WATERMARK_FAULT_HIT_FILE: faultGate.hitPath,
+  };
+  if (handlerTrace) env.LIFECYCLE_HANDLER_TRACE_FILE = handlerTrace.tracePath;
+  return assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], env), 'Core lifecycle drain with an injected Enterprise watermark-write failure');
+}
+
+function persistRegisteredAdapterResponse(fixture, event, response) {
+  const attempts = event.delivery.attempts + 1;
+  const patch = responseDeliveryPatch(response, attempts, Date.parse(FIXED_NOW) + 1001);
+  return updateEventDelivery(fixture.specDir, event.event_id, { ...patch, attempts });
+}
+
 function withoutLifecycleWatermark(metadata) {
   const { lifecycle_delivery: _lifecycleDelivery, ...handlerMetadata } = metadata;
   return handlerMetadata;
@@ -236,5 +260,7 @@ module.exports = {
   readMetadataBytes,
   readWatermark,
   readHandlerCalls,
+  runCoreDeliveryWithWatermarkFailure,
+  persistRegisteredAdapterResponse,
   withoutLifecycleWatermark,
 };

@@ -191,6 +191,34 @@ Module._load = function(request, parent, isMain) {
   return { hookPath, tracePath };
 }
 
+function installLifecycleIssueHandlerCallTraceGate(fixture) {
+  const hookPath = path.join(fixture.root, 'lifecycle-issue-handler-call-trace-gate.js');
+  const tracePath = path.join(fixture.root, 'lifecycle-issue-handler-calls.jsonl');
+  writeFile(hookPath, `const fs = require('node:fs');
+const Module = require('node:module');
+const path = require('node:path');
+const originalLoad = Module._load;
+Module._load = function(request, parent, isMain) {
+  const loaded = originalLoad.apply(this, arguments);
+  if (request !== './issue-handler' || !parent
+      || !parent.filename.endsWith(path.join('enterprise', 'dispatch.js'))
+      || !loaded || typeof loaded.handleSpecApproved !== 'function') return loaded;
+  return {
+    ...loaded,
+    handleSpecApproved(event, ...args) {
+      fs.appendFileSync(process.env.LIFECYCLE_HANDLER_TRACE_FILE, JSON.stringify({
+        event_id: event.event_id,
+        revision: event.revision,
+        status: event.delivery.status,
+      }) + '\\n');
+      return loaded.handleSpecApproved(event, ...args);
+    },
+  };
+};
+`);
+  return { hookPath, tracePath };
+}
+
 function installStaleCandidateGate(fixture, workerId = 'stale-candidate') {
   const hookPath = path.join(fixture.root, 'stale-candidate-gate.js');
   const readyPath = path.join(fixture.root, `${workerId}.ready`);
@@ -226,5 +254,6 @@ module.exports = {
   installRegisteredEnterprisePathFaultGate,
   installLifecycleWatermarkWriteFaultGate,
   installLifecycleHandlerCallTraceGate,
+  installLifecycleIssueHandlerCallTraceGate,
   installStaleCandidateGate,
 };

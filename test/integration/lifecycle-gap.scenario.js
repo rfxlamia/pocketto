@@ -7,11 +7,14 @@ const path = require('node:path');
 const { FIXED_NOW, PLAN_ID, PR_NUMBER } = require('./support/constants');
 const { createFixture } = require('./support/fixture');
 const { initializePlan, transitionApprovedSpec } = require('./support/plan-commands');
+const { installEnterpriseAdapter } = require('./support/enterprise');
 const { readLifecycle, readRemote } = require('./support/lifecycle-state');
 const { runCore, assertCliOk } = require('./support/core-cli');
+const { sha256, writeFile } = require('./support/files');
 const {
   installLifecycleWatermarkWriteFaultGate,
   installLifecycleHandlerCallTraceGate,
+  installLifecycleIssueHandlerCallTraceGate,
   installRegisteredEnterpriseReadFaultGate,
 } = require('./support/failure-gates');
 const { validateEvent } = require('../../cli/lib/lifecycle-contract');
@@ -32,6 +35,185 @@ test('proof-first recovery rejects a changed second artifact before advancing th
   const failedAttempt = failWatermarkWriteAfterProof(scenario);
   rejectChangedSecondArtifactDuringReplay(scenario, failedAttempt);
 });
+
+test('spec-approved proof-first recovery works before planning with two intact spec refs', (t) => {
+  const scenario = preparePrePlanningSpecApprovedProofFirstScenario(t);
+  const replay = scenarioHelpers.deliverRegisteredEvent(scenario.fixture, scenario.reconcilingEvent, {
+    handlerTrace: scenario.handlerTrace,
+  });
+
+  scenarioHelpers.assertSuccessfulProof(replay, scenario.event);
+  assert.equal(replay.event_id, scenario.event.event_id);
+  assert.equal(replay.proof_ref, scenario.reconcilingEvent.delivery.proof_ref);
+  assert.equal(replay.proof_hash, scenario.reconcilingEvent.delivery.proof_hash);
+  const persisted = scenarioHelpers.persistRegisteredAdapterResponse(
+    scenario.fixture, scenario.reconcilingEvent, replay,
+  );
+  assert.equal(persisted.ok, true, 'Core must persist the registered adapter replay result');
+  assert.equal(persisted.event.delivery.status, 'succeeded');
+  assert.deepEqual(scenarioHelpers.readWatermark(scenario.fixture), {
+    schema: 1, plan_id: PLAN_ID, last_applied_revision: 1,
+  }, 'intact pre-planning spec refs must allow proof-first watermark recovery');
+  assert.deepEqual(scenarioHelpers.readMetadata(scenario.fixture).github_issue.ownership,
+    scenario.proof, 'proof-first replay must leave the canonical issue proof unchanged');
+  assert.deepEqual(readRemote(scenario.fixture), scenario.remoteAfterProof,
+    'proof-first replay must make no additional fake GitHub calls or effects');
+  assert.deepEqual(scenarioHelpers.readHandlerCalls(scenario.handlerTrace), [{
+    event_id: scenario.event.event_id, revision: 1, status: 'claimed',
+  }], 'proof-first replay must not rerun the real spec-approved handler');
+});
+
+test('spec-approved proof-first recovery retries ref EIO, then rejects stale ref 2', (t) => {
+  const scenario = preparePrePlanningSpecApprovedProofFirstScenario(t);
+  const secondRef = scenario.event.artifact_refs[1];
+  const secondArtifactPath = path.join(scenario.fixture.specDir, secondRef.path);
+  const committedBytes = fs.readFileSync(secondArtifactPath);
+  fs.writeFileSync(secondArtifactPath, Buffer.concat([committedBytes, Buffer.from('changed after proof persistence\n')]));
+  assert.notDeepEqual(fs.readFileSync(secondArtifactPath), committedBytes,
+    'only the second committed spec ref must be stale before replay');
+
+  const readFaultGate = installRegisteredEnterpriseReadFaultGate(scenario.fixture);
+  const transient = scenarioHelpers.deliverRegisteredEvent(scenario.fixture, scenario.reconcilingEvent, {
+    handlerTrace: scenario.handlerTrace,
+    readFaultGate,
+    readArtifactPath: secondArtifactPath,
+  });
+  assert.equal(transient.event_id, scenario.event.event_id);
+  assert.equal(transient.status, 'retryable');
+  assert.deepEqual(transient.error && { code: transient.error.code, retryable: transient.error.retryable }, {
+    code: 'ARTIFACT_READ_FAILED', retryable: true,
+  }, 'an injected EIO while reading ref 2 must remain retryable before its stale digest is known');
+  assert.equal(fs.existsSync(readFaultGate.hitPath), true,
+    'proof-first recovery must attempt to read ref 2 through the registered adapter');
+  const injected = JSON.parse(fs.readFileSync(readFaultGate.hitPath, 'utf8'));
+  assert.equal(injected.code, 'EIO');
+  assert.equal(injected.target, fs.realpathSync(secondArtifactPath));
+  assert.deepEqual(scenarioHelpers.readMetadataBytes(scenario.fixture), scenario.metadataAfterProofBytes,
+    'a transient ref-read failure must not mutate the proof or watermark');
+  assert.deepEqual(readRemote(scenario.fixture), scenario.remoteAfterProof,
+    'a transient ref-read failure must make no additional fake GitHub calls or effects');
+  assert.deepEqual(scenarioHelpers.readHandlerCalls(scenario.handlerTrace), [{
+    event_id: scenario.event.event_id, revision: 1, status: 'claimed',
+  }], 'a transient proof-first retry must not rerun the real spec-approved handler');
+
+  const stale = scenarioHelpers.deliverRegisteredEvent(scenario.fixture, scenario.reconcilingEvent, {
+    handlerTrace: scenario.handlerTrace,
+  });
+  assert.equal(stale.event_id, scenario.event.event_id);
+  assert.equal(stale.status, 'terminal');
+  assert.deepEqual(stale.error && { code: stale.error.code, retryable: stale.error.retryable }, {
+    code: 'STALE_ARTIFACT', retryable: false,
+  });
+  const persisted = scenarioHelpers.persistRegisteredAdapterResponse(
+    scenario.fixture, scenario.reconcilingEvent, stale,
+  );
+  assert.equal(persisted.ok, true, 'Core must persist the terminal stale replay result');
+  assert.equal(persisted.event.event_id, scenario.event.event_id);
+  assert.equal(persisted.event.delivery.status, 'terminal');
+  assert.equal(persisted.event.delivery.error.code, 'STALE_ARTIFACT');
+  assert.deepEqual(scenarioHelpers.readMetadataBytes(scenario.fixture), scenario.metadataAfterProofBytes,
+    'stale ref 2 must leave the proof and watermark byte-identical');
+  assert.equal(scenarioHelpers.readMetadata(scenario.fixture).lifecycle_delivery, undefined,
+    'stale proof-first replay must not create or advance a lifecycle watermark');
+  assert.deepEqual(scenarioHelpers.readMetadata(scenario.fixture).github_issue.ownership,
+    scenario.proof, 'stale proof-first replay must not mutate canonical proof');
+  assert.deepEqual(readRemote(scenario.fixture), scenario.remoteAfterProof,
+    'stale proof-first replay must make no additional fake GitHub calls or effects');
+  assert.deepEqual(scenarioHelpers.readHandlerCalls(scenario.handlerTrace), [{
+    event_id: scenario.event.event_id, revision: 1, status: 'claimed',
+  }], 'stale proof-first replay must not rerun the real spec-approved handler');
+});
+
+function preparePrePlanningSpecApprovedProofFirstScenario(t) {
+  const fixture = createFixture(t);
+  installEnterpriseAdapter(fixture);
+  const event = commitPrePlanningSpecApprovedWithTwoRefs(fixture);
+  const lifecycle = readLifecycle(fixture);
+  assert.equal(lifecycle.plan.plan_dir, null, 'spec-approved must use its normative pre-planning state');
+  assert.equal(lifecycle.plan.branch, null, 'spec-approved must not require a captured branch');
+  assert.equal(event.event_id, `${PLAN_ID}:spec-approved:r1`);
+  assert.deepEqual(event.artifact_refs.map(({ root }) => root), ['spec', 'spec']);
+
+  const handlerTrace = installLifecycleIssueHandlerCallTraceGate(fixture);
+  const watermarkFault = installLifecycleWatermarkWriteFaultGate(fixture);
+  const remoteBeforeProof = readRemote(fixture);
+  const firstDrain = scenarioHelpers.runCoreDeliveryWithWatermarkFailure(
+    fixture, event, watermarkFault, handlerTrace,
+  );
+  assert.deepEqual(firstDrain.deliveries.map(({ event_id, status, error }) => ({
+    event_id, status, code: error && error.code, retryable: error && error.retryable,
+  })), [{
+    event_id: event.event_id,
+    status: 'reconciling',
+    code: 'LIFECYCLE_WATERMARK_WRITE_FAILED',
+    retryable: true,
+  }], 'the real Core drain must persist the failed watermark result as reconciling');
+  assert.equal(fs.readFileSync(watermarkFault.hitPath, 'utf8'), 'revision-1');
+
+  const reconcilingEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === event.event_id);
+  assert.equal(reconcilingEvent.delivery.status, 'reconciling');
+  assert.equal(reconcilingEvent.delivery.attempts, 1);
+  assert.deepEqual(reconcilingEvent.artifact_refs, event.artifact_refs,
+    'Core must preserve the original event ID and committed ref identity');
+  assert.equal(reconcilingEvent.delivery.proof_ref, 'meta:github_issue');
+  assert.match(reconcilingEvent.delivery.proof_hash, /^[0-9a-f]{64}$/);
+
+  const metadataAfterProof = scenarioHelpers.readMetadata(fixture);
+  const proof = metadataAfterProof.github_issue.ownership;
+  assert.equal(proof.event_id, event.event_id);
+  assert.equal(proof.plan_id, PLAN_ID);
+  assert.equal(proof.proof_hash, reconcilingEvent.delivery.proof_hash);
+  assert.equal(proof.spec_path, `docs/pocket/spec/${PLAN_ID}/approved-spec.md`);
+  assert.equal(proof.proof_hash, sha256(JSON.stringify({
+    event_id: event.event_id,
+    plan_id: PLAN_ID,
+    repository: proof.repository,
+    issue_number: metadataAfterProof.github_issue.number,
+    issue_url: metadataAfterProof.github_issue.url,
+    spec_path: proof.spec_path,
+    identity: proof.identity,
+  })), 'the real issue handler must persist a canonical event-bound proof');
+  assert.equal(metadataAfterProof.lifecycle_delivery, undefined,
+    'the injected failure must leave the watermark absent before proof-first replay');
+  assert.deepEqual(scenarioHelpers.readHandlerCalls(handlerTrace), [{
+    event_id: event.event_id, revision: 1, status: 'claimed',
+  }], 'the first delivery must run the real spec-approved handler once');
+  const remoteAfterProof = readRemote(fixture);
+  assert.ok(remoteAfterProof.calls.length > remoteBeforeProof.calls.length,
+    'the first delivery must reach the fake GitHub transport');
+  assert.ok(remoteAfterProof.effects.length > remoteBeforeProof.effects.length,
+    'the first delivery must persist a fake GitHub effect before watermark failure');
+
+  return {
+    fixture,
+    event,
+    handlerTrace,
+    reconcilingEvent,
+    proof,
+    metadataAfterProofBytes: scenarioHelpers.readMetadataBytes(fixture),
+    remoteAfterProof,
+  };
+}
+
+function commitPrePlanningSpecApprovedWithTwoRefs(fixture) {
+  const secondPath = 'supporting-spec.md';
+  const secondContents = '# Supporting approved evidence\n';
+  writeFile(path.join(fixture.specDir, secondPath), secondContents);
+  const refs = [
+    { root: 'spec', kind: 'approved-spec', path: 'approved-spec.md', sha256: sha256(fixture.approvedSpec), revision: 1 },
+    { root: 'spec', kind: 'approved-spec', path: secondPath, sha256: sha256(secondContents), revision: 1 },
+  ];
+  const transition = runCore(fixture, [
+    'lifecycle', 'transition', fixture.specDir, 'spec-approved',
+    ...refs.flatMap((ref) => ['--artifact', `${ref.root}:${ref.kind}:${ref.path}:${ref.sha256}`]),
+    '--json', '--contract', '3',
+  ]);
+  const committed = assertCliOk(transition, 'public pre-planning multi-ref spec-approved transition');
+  const event = readLifecycle(fixture).events.find(({ event_id }) => event_id === committed.event_id);
+  assert.ok(event, 'the real Core store must persist the spec-approved event before delivery');
+  assert.deepEqual(event.artifact_refs, refs);
+  return event;
+}
 
 function prepareGapScenario(fixture) {
   initializePlan(fixture);

@@ -10,14 +10,13 @@ const { createFixture } = require('./support/fixture');
 const { initializePlan, transitionApprovedSpec } = require('./support/plan-commands');
 const { runCore, assertCliOk } = require('./support/core-cli');
 const { readRemote, readLifecycle } = require('./support/lifecycle-state');
-const { installRegisteredEnterpriseReadFaultGate } = require('./support/failure-gates');
+const { installLifecycleWatermarkWriteFaultGate } = require('./support/failure-gates');
 const { sha256, writeFile } = require('./support/files');
-const { commitTransition } = require('../../cli/lib/lifecycle-store');
 const { isDeepStrictEqual } = require('node:util');
+const lifecycleGapHelpers = require('./lifecycle-gap.helpers');
 
 const {
   assertClosureArtifactStateIsTerminal,
-  commitPlanClosedEvent,
   commitPlanClosedEventWithNoncanonicalPlanDirectory,
   commitPlanClosedEventWithBothRoots,
   deliverySummary,
@@ -101,6 +100,64 @@ test('plan-closed validates a changed second spec-root ref before closure mutati
     closureProofWritten: false,
     closeoutExists: false,
   }, 'every accepted plan-closed artifact ref must be validated before remote or local closure effects');
+});
+
+test('plan-closed proof-first replay rejects a stale second selected-root ref', (t) => {
+  const fixture = createFixture(t);
+  const committedEvent = commitPlanClosedEventWithBothRoots(fixture);
+  assert.deepEqual(committedEvent.artifact_refs.map(({ root }) => root), ['plan', 'spec']);
+  const metadataBefore = readMetadata(fixture);
+  const remoteBeforeProof = readRemote(fixture);
+  const faultGate = installLifecycleWatermarkWriteFaultGate(fixture);
+  const firstDrain = lifecycleGapHelpers.runCoreDeliveryWithWatermarkFailure(fixture, committedEvent, faultGate);
+
+  assert.deepEqual(firstDrain.deliveries.map(({ event_id, status, error }) => ({
+    event_id, status, code: error && error.code, retryable: error && error.retryable,
+  })), [{
+    event_id: committedEvent.event_id,
+    status: 'reconciling',
+    code: 'LIFECYCLE_WATERMARK_WRITE_FAILED',
+    retryable: true,
+  }]);
+  assert.equal(fs.readFileSync(faultGate.hitPath, 'utf8'), 'revision-3');
+  const reconcilingEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
+  assert.equal(reconcilingEvent.delivery.status, 'reconciling');
+  assert.deepEqual(reconcilingEvent.artifact_refs, committedEvent.artifact_refs);
+  const metadataAfterProof = readMetadata(fixture);
+  assert.equal(metadataAfterProof.lifecycle_delivery.last_applied_revision, 2);
+  const proof = metadataAfterProof.github_issue.tasklist;
+  assert.equal(proof.event_id, committedEvent.event_id);
+  assert.deepEqual(proof.artifact_refs, committedEvent.artifact_refs);
+  const metadataAfterProofBytes = fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json'));
+  const remoteAfterProof = readRemote(fixture);
+  const closeoutPath = path.join(fixture.planDir, 'closeout.md');
+  const closeoutAfterProof = fs.readFileSync(closeoutPath);
+  assert.ok(remoteAfterProof.calls.length > remoteBeforeProof.calls.length,
+    'the initial closure delivery must reach fake GitHub before the watermark failure');
+
+  const specRef = committedEvent.artifact_refs[1];
+  const staleArtifactPath = path.join(fixture.specDir, specRef.path);
+  writeFile(staleArtifactPath, `${fixture.approvedSpec}Changed after proof persistence.\n`);
+  const stale = lifecycleGapHelpers.deliverRegisteredEvent(fixture, reconcilingEvent);
+
+  assert.equal(stale.event_id, committedEvent.event_id);
+  assert.equal(stale.status, 'terminal');
+  assert.deepEqual(stale.error && { code: stale.error.code, retryable: stale.error.retryable }, {
+    code: 'STALE_ARTIFACT', retryable: false,
+  });
+  const persisted = lifecycleGapHelpers.persistRegisteredAdapterResponse(fixture, reconcilingEvent, stale);
+  assert.equal(persisted.ok, true);
+  assert.equal(persisted.event.delivery.status, 'terminal');
+  assert.equal(persisted.event.delivery.error.code, 'STALE_ARTIFACT');
+  assert.deepEqual(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json')), metadataAfterProofBytes,
+    'stale closure replay must leave the canonical proof and watermark byte-identical');
+  assert.equal(readMetadata(fixture).lifecycle_delivery.last_applied_revision, 2);
+  assert.deepEqual(readRemote(fixture), remoteAfterProof,
+    'stale closure replay must not make more fake GitHub calls or effects');
+  assert.deepEqual(fs.readFileSync(closeoutPath), closeoutAfterProof,
+    'stale closure replay must not rerun local closeout mutation');
+  assert.deepEqual(readMetadata(fixture).github_issue.tasklist, proof);
+  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 2);
 });
 
 test('plan-closed resolves intact spec refs against selected roots in noncanonical plan directories', (t) => {

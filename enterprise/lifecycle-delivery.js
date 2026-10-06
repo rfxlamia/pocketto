@@ -181,6 +181,17 @@ function validateCommittedArtifacts(event, selectedContext) {
   }
 }
 
+function selectedArtifactContext(event, context) {
+  if (event.type === 'spec-approved') return { specDir: context.specDir };
+  if (event.type === 'phase-complete' || event.type === 'plan-closed') {
+    return loadContext(event, {
+      projectRoot: context.registeredProjectRoot,
+      specDir: context.specDir,
+    });
+  }
+  throw staleArtifactError();
+}
+
 function lifecycleArtifactFailure(event, error) {
   const retryable = enterpriseMeta.isTransientIoError(error)
     || Boolean(error && error.status === 'retryable' && error.retryable === true);
@@ -198,7 +209,7 @@ function recoverReconcilingEvent(event, context, delivery) {
       || event.revision !== delivery.last_applied_revision + 1) return null;
 
   try {
-    const selectedContext = loadContext(event, { projectRoot: context.registeredProjectRoot });
+    const selectedContext = selectedArtifactContext(event, context);
     validateCommittedArtifacts(event, selectedContext);
   } catch (error) {
     return lifecycleArtifactFailure(event, error);
