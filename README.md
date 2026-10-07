@@ -22,7 +22,7 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 - **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
 - **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
 
-13 skills, one namespace, zero lock-in — reach for the full pipeline on real features, or grab a standalone skill for everyday work. Working in a team? Opt into [Pocket Enterprise](#pocket-enterprise-opt-in) and the same pipeline tracks itself on GitHub — issues, PRs, and review verdicts.
+13 skills across a local-first Core and an optional Enterprise adapter. Use Core for the full pipeline or standalone skills without GitHub access. If your team opts in, Enterprise consumes Core's durable lifecycle events and owns GitHub reconciliation; Core itself does not call `gh`. Core does not perform remote synchronization.
 
 <p align="center">
   <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development (in-loop audit + phase-level pass) → closing, plus standalone skills (pocket-help, pocket-init, bug-hunting, hotfix, brand-design, structured-research, create-pr)" width="100%">
@@ -50,6 +50,19 @@ pi install npm:pocketto-pi
 
 </td></tr>
 </table>
+
+### Release surfaces
+
+Version `4.0.0` is built from the explicit `surfaces.json` manifest. It defines exactly four role names:
+
+| Role | Host | Contents |
+|------|------|----------|
+| `pi/core` | Pi | Local-first Core workflows and neutral lifecycle CLI. |
+| `pi/enterprise` | Pi | Additive Enterprise adapter and references; requires `pi/core`. |
+| `claude/core` | Claude Code | Local-first Core workflows and neutral lifecycle CLI. |
+| `claude/enterprise` | Claude Code | Additive Enterprise adapter and references; requires `claude/core`. |
+
+Select the role artifact for the target host and install the matching Core role first. Release builds stage an explicit manifest role with `node scripts/build-surfaces.js --role <role> --output <artifact-dir>`. That directory contains only the selected role. An Enterprise stage is an overlay on the matching Core stage and does not include Core entry points such as `cli/index.js`. `pi install npm:pocketto-pi` publishes one package that contains both Core and Enterprise sources so either role can be staged from it; it is not itself a Core-only tree. Enterprise is optional and adds only its adapter-owned files; it does not bundle or copy Core skills. The manifest schema is `SURFACE_MANIFEST=1`. The independent protocol versions are `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, and `ADAPTER_CONTRACT=1`.
 
 ### Pi extensions (Pi users)
 
@@ -166,56 +179,84 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 
 </details>
 
-## Pocket Enterprise (opt-in)
+## Pocket Enterprise (optional)
 
-Pocket is local-first — everything above works with zero GitHub coupling. **Pocket Enterprise** is the opt-in team layer: the same pipeline, but every stage leaves a trace on GitHub so the team can follow progress without opening your filesystem.
+Core works locally with no GitHub credentials, remote, or Enterprise installation. It commits lifecycle state and neutral events first; Core does not call `gh`, does not create issues or PRs, does not update issues or PRs, does not merge pull requests, and does not close issues. Pocket Enterprise is a separately installed, opt-in adapter that consumes those events and owns all remote reconciliation. Missing or incompatible Enterprise never blocks Core work; events remain durable for later replay.
 
-| Stage | What enterprise mode adds |
-|-------|---------------------------|
-| `pocket-init` | One-time setup: enables the mode, scaffolds `.github/` issue + PR templates, creates the `pocket-plan` label |
-| `pocket-grinding` | Creates a GitHub issue from the approved spec — structured summary plus the **full spec** in a collapsible section |
-| `pocket-development` | Offers `/pocketto:create-pr` when a phase completes; posts the phase-level pass's per-task verdicts as a PR summary comment + inline findings (reconciled across re-runs, no duplicates); syncs a live task checklist comment to the issue |
-| `create-pr` | Opens the phase PR on the current branch, linked to the issue (`refs`/`closes`), with traveling state committed |
-| `pocket-closing` | Posts the closeout comment to the issue; with `require_approval: true`, blocks the close until the PR is APPROVED |
+Enterprise requires its matching Core role and a successful, fail-closed preflight before any GitHub operation. Consent is explicit. The adapter reconciles the approved-spec issue, an existing phase PR, and the final issue tasklist using stable markers and Enterprise-owned metadata. It never auto-creates a PR, merges a PR, or closes an issue. `create-pr` is a separate, user-triggered recorder; merge and issue closure remain human-controlled.
 
-**Enable it:** run `/pocketto:pocket-init` (guided), or directly:
+### Compatibility matrix
+
+| Core | Enterprise | Result |
+|------|------------|--------|
+| v3 Core + v3 Enterprise | v3 | Legacy pair remains operational with a v4 upgrade warning. |
+| v4 Core + v4 Enterprise | v4 | Supported split and lifecycle contract. |
+| v4 Core + absent Enterprise | — | Supported local-first Core; lifecycle events remain pending and no GitHub call occurs. |
+| v3 Core + v4 Enterprise | v4 | Enterprise fails closed with Core upgrade guidance; Core remains usable. |
+| v4 Core + v3 Enterprise | v3 | Adapter fails closed with Enterprise upgrade guidance; pending events are preserved. |
+
+The v4 preflight warns about a legacy v3 installation. An unchanged v3 binary cannot warn about a future release. For compatibility and release ownership details, see [`skills/pocket-enterprise/references/lifecycle-contract.md`](skills/pocket-enterprise/references/lifecycle-contract.md).
+
+### Lifecycle commands, migration, and rollback
+
+The lifecycle commands use the JSON CLI envelope `--json --contract 3`:
 
 ```bash
-npx pocketto-pi mode init --enterprise true --branch-strategy branch --create-pr true
+npx pocketto-pi lifecycle transition <spec_dir> <event-type> --artifact <root>:<kind>:<relative-path>:<sha256> --json --contract 3
+npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
+npx pocketto-pi lifecycle repair <spec_dir> --json --contract 3
+npx pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3
 ```
 
-This writes a `## Pocket Enterprise` block into `AGENTS.md` (or `CLAUDE.md` via `--file CLAUDE.md`) plus a `.gitattributes` for LF-normalized traveling state. Requirements: a git remote and an authenticated [`gh` CLI](https://cli.github.com). Design guarantees:
+`transition` commits local state and one durable event; optional adapter delivery cannot undo that local commit. `drain` replays existing pending events in revision order and does not create events. `repair` reconciles lifecycle-owned `log.json` projection fields only when task state is recoverable; otherwise it fails closed without changing the projection or lifecycle state.
 
-- **Opt-in & fail-closed** — without the config block (or on any mode error), no skill ever calls GitHub; the workflow is byte-identical to local mode.
-- **One-way sync** — GitHub is the output, your repo stays the source of truth.
-- **Human gates stay human** — Pocket never merges PRs and never closes issues; the issue closes when a supervisor merges the final PR (`closes #N`).
+Migration is explicit and limited to a pristine v3 plan with no execution progress. A progressed or non-pristine v3 plan returns `PIN_V3_REQUIRED` without changing files or making remote calls; finish it with the v3 CLI/Enterprise pair. Migration does not rewrite v3 files or send retrospective events. v3 progress is never silently converted.
+
+For a faulty or unwanted adapter, disable Enterprise without deleting Core or `lifecycle.json`. Preserve `.pocket-meta.json`, `log.json`, lifecycle events, and remote markers. Local execution continues and pending events keep their original IDs. Active v3 plans remain on their v3 path; do not automatically downgrade or destructively convert v4 state.
+
+Disable the adapter. `preflight` only reads the registration. `rm` deletes that registration file and nothing else. Do not delete `lifecycle.json`, `log.json`, or `.pocket-meta.json`. A `lifecycle drain` while the registration is missing does not replay: the event stays pending, the drain reports `adapter-unavailable`, and no remote call is made.
+
+`enterprise/cli.js` is in the pocketto-pi package root. A project that depends on the npm package runs:
+
+```bash
+node node_modules/pocketto-pi/enterprise/cli.js preflight <project-root> --json
+rm <project-root>/.pocket/lifecycle-adapter.json
+```
+
+A checkout of this repository runs the same read-only preflight as `node enterprise/cli.js preflight <project-root> --json`. `pi install` also keeps the package outside the project, so the command is still `<package-root>/enterprise/cli.js`.
+
+Replay only after the adapter is pinned to the last compatible v4 release or reinstalled. That drain uses the original event IDs:
+
+```bash
+npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
+```
 
 ## CLI
 
-The pocket skills drive a single cross-platform Node CLI, run via `npx` — no install, PATH setup, or Python required. Works the same on Windows, macOS, and Linux. Requires Node.js ≥ 18.
+The cross-platform Node CLI requires Node.js ≥ 18. Core commands work locally. `mode` and GitHub body formatting are Enterprise-owned; `meta` and `scaffold` are local file operations, and `reconcile` is a shared utility. Only the optional Enterprise adapter performs remote reconciliation. JSON commands use the current envelope and contract handshake.
 
-| Command | What it does |
-|---------|--------------|
-| `npx pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset]` | Decompose a plan into `execution-plan/` (index + task files; phase manifests when `phaseCount > 1`) |
-| `npx pocketto-pi log init <plan_dir>` | Initialize `log.json` for a plan directory |
-| `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha]` | Update phase or task status |
-| `npx pocketto-pi log close <plan_dir>` | Finalize log after all phases complete |
-| `npx pocketto-pi doctor [--strict]` | Check required/recommended Pi extensions |
-| `npx pocketto-pi mode [<dir>]` | Report Pocket Enterprise mode (from `AGENTS.md`/`CLAUDE.md`) |
-| `npx pocketto-pi mode init [--file CLAUDE.md] …` | Write the enterprise config block + `.gitattributes` |
-| `npx pocketto-pi meta get\|set <dir> <field> [value]` | Read/write `.pocket-meta.json` (issue/PR linkage) |
-| `npx pocketto-pi format <issue\|pr\|comment\|closeout> --input <json>` | Render GitHub bodies to a temp file (`--body-file` safe) |
-| `npx pocketto-pi format tasklist <plan_dir>` | Render the issue task-checklist comment from `log.json` |
-| `npx pocketto-pi scaffold github [--dry-run]` | Write `.github/` issue + PR templates (idempotent) |
-| `npx pocketto-pi reconcile --prior <json> --new <json>` | Set-diff review findings for PR thread upserts |
+| Surface | Command | What it does |
+|---------|---------|--------------|
+| Core | `npx pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset]` | Decompose a plan into `execution-plan/`. |
+| Core | `npx pocketto-pi log init <plan_dir>` | Initialize `log.json`. |
+| Core | `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>]` | Update phase or task status locally. |
+| Core | `npx pocketto-pi log close <plan_dir>` | Finalize local plan state after all phases are complete. |
+| Core | `npx pocketto-pi lifecycle transition <spec_dir> <event-type> --artifact <root>:<kind>:<relative-path>:<sha256> --json --contract 3` | Commit a local lifecycle transition and durable neutral event. |
+| Core | `npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3` | Replay pending events in revision order; creates no events. |
+| Core | `npx pocketto-pi lifecycle repair <spec_dir> --json --contract 3` | Repair recoverable lifecycle-owned projection fields without emitting or dispatching an event. |
+| Core | `npx pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3` | Explicitly migrate only a pristine v3 plan with no execution progress. |
+| Core | `npx pocketto-pi doctor [--strict]` | Check required/recommended Pi extensions. |
+| Enterprise | `npx pocketto-pi mode [<dir>]` / `mode init …` | Read / configure explicit Enterprise opt-in. |
+| Core | `npx pocketto-pi meta get\|set <dir> <field> [value]` | Read / write local `.pocket-meta.json`; this command makes no GitHub call. |
+| Enterprise | `npx pocketto-pi format <issue\|pr\|comment\|closeout> --input <json>` | Render Enterprise GitHub bodies to a temp file. |
+| Core | `npx pocketto-pi scaffold github [--dry-run]` | Write `.github/` issue + PR templates locally. |
+| Shared | `npx pocketto-pi reconcile --prior <json> --new <json>` | Set-diff findings; remote thread updates belong to the Enterprise adapter. |
 
-Status flow: `WAITING` → `REVIEW` → `DONE` \| `BLOCKED`
-
-Add `--json` for a stable output envelope — `{ ok, command, cliVersion, contract, data, error }` — that skills parse instead of scraping text. Add `--contract <N>` for a version handshake that fails loudly on mismatch rather than emitting output an older skill can't read.
+Lifecycle CLI flags above use `CONTRACT=3`; distribution version `4.0.0`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1` are independently versioned. State flow remains `WAITING` → `REVIEW` → `DONE` | `BLOCKED`. Core lifecycle events contain artifact references and opaque proof references, never GitHub IDs or credentials.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for the full version history, including migration notes for breaking changes (3.0.0, 3.1.0).
+See [CHANGELOG.md](CHANGELOG.md) for the `4.0.0` release contract, v3 compatibility and migration guidance, rollback steps, and earlier version history.
 
 ## License
 
