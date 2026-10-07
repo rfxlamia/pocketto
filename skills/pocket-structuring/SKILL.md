@@ -63,7 +63,7 @@ GATE 3: COMPLETE POCKET PACKETS PER TASK.
 ## Step 1: Run the CLI
 
 ```bash
-npx -y pocketto-pi structure "<path-to-execution-plan.md>" --json --contract 2
+npx -y pocketto-pi structure "<path-to-execution-plan.md>" --json --contract 3
 ```
 
 No install step or PATH setup — `npx` resolves the cross-platform binary. Use the path exactly as it appears in the handoff (typically `docs/pocket/plans/{slug}/execution-plan.md` from the project root). Quote the path so spaces are handled.
