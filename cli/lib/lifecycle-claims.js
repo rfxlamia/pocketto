@@ -4,13 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { CliError } = require('./envelope');
+const { writeFileAtomicSync } = require('./atomic-file');
 const { acquireLifecycleGuard: acquireGuard, releaseLifecycleGuard: releaseGuard } = require('./lifecycle-lock');
 
 const CLAIM_LEASE_MS = 60_000;
+// Budget for the delivery fsync after spawnSync returns. An in-flight claim
+// is leased for the granted adapter timeout plus this margin, so a second
+// drain cannot reclaim an invocation that is still inside its timeout.
+const CLAIM_RELEASE_MARGIN_MS = 30_000;
 
-function acquireClaimGuard(lockPath) {
+function acquireClaimGuard(lockPath, options) {
   try {
-    return acquireGuard(lockPath);
+    return acquireGuard(lockPath, options);
   } catch {
     throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not serialize lifecycle claim acquisition');
   }
@@ -62,16 +67,41 @@ function persistEventClaim(lockPath, record, planId, eventId) {
   return true;
 }
 
+function claimClock() {
+  const clock = new Date(process.env.POCKETTO_LIFECYCLE_NOW || Date.now());
+  if (Number.isNaN(clock.getTime())) {
+    throw new CliError('LIFECYCLE_BAD_CLOCK', 'lifecycle clock must be a valid timestamp');
+  }
+  return clock;
+}
+
+function readClaimRecord(lockPath) {
+  try {
+    return JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not verify lifecycle claim owner');
+  }
+}
+
+function withOwnedClaim(claim, mutate) {
+  const guard = acquireClaimGuard(claim.lockPath, { wait: true });
+  try {
+    const record = readClaimRecord(claim.lockPath);
+    if (!record || record.owner_id !== claim.owner_id) return false;
+    return mutate(record);
+  } finally {
+    releaseClaimGuard(guard);
+  }
+}
+
 function acquireEventClaim(specDir, planId, eventId) {
   const lockPath = path.join(specDir, '.lifecycle.lock');
   const guard = acquireClaimGuard(lockPath);
   if (!guard) return null;
 
   try {
-    const clock = new Date(process.env.POCKETTO_LIFECYCLE_NOW || Date.now());
-    if (Number.isNaN(clock.getTime())) {
-      throw new CliError('LIFECYCLE_BAD_CLOCK', 'lifecycle clock must be a valid timestamp');
-    }
+    const clock = claimClock();
     const now = clock.getTime();
     if (!recoverExpiredEventClaim(lockPath, now)) return null;
 
@@ -93,22 +123,39 @@ function acquireEventClaim(specDir, planId, eventId) {
   }
 }
 
-function releaseEventClaim(claim) {
-  let record;
-  try {
-    record = JSON.parse(fs.readFileSync(claim.lockPath, 'utf8'));
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return;
-    throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not verify lifecycle claim owner before release');
+function extendEventClaim(claim, holdMs) {
+  if (!Number.isFinite(holdMs) || holdMs < 1) {
+    throw new CliError('LIFECYCLE_CLAIM_FAILED', 'in-flight lifecycle claim lease must be a positive duration');
   }
-  if (record.owner_id !== claim.owner_id) return;
-  try {
-    fs.unlinkSync(claim.lockPath);
-  } catch (err) {
-    if (!err || err.code !== 'ENOENT') {
-      throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not release lifecycle claim');
+  return withOwnedClaim(claim, (record) => {
+    const now = claimClock().getTime();
+    record.lease_expires_at = new Date(now + holdMs).toISOString();
+    try {
+      writeFileAtomicSync(claim.lockPath, `${JSON.stringify(record)}\n`);
+    } catch (err) {
+      throw new CliError('LIFECYCLE_CLAIM_FAILED', `could not refresh lifecycle claim: ${err.message}`);
     }
-  }
+    return true;
+  });
 }
 
-module.exports = { acquireEventClaim, releaseEventClaim };
+function releaseEventClaim(claim) {
+  withOwnedClaim(claim, () => {
+    try {
+      fs.unlinkSync(claim.lockPath);
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') {
+        throw new CliError('LIFECYCLE_CLAIM_FAILED', 'could not release lifecycle claim');
+      }
+    }
+    return true;
+  });
+}
+
+module.exports = {
+  CLAIM_LEASE_MS,
+  CLAIM_RELEASE_MARGIN_MS,
+  acquireEventClaim,
+  extendEventClaim,
+  releaseEventClaim,
+};

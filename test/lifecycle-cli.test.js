@@ -971,3 +971,38 @@ fs.writeFileSync = function (file, ...args) {
   const projected = JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
   assert.equal(projected.phases[0].status, 'WAITING');
 });
+
+test('lifecycle spec resolution stays inside the project and does not fall back to cwd', { skip: !hasGit() }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-spec-root-'));
+  const projectDir = path.join(root, 'project');
+  const planDir = path.join(projectDir, 'docs', 'pocket', 'plans', 'demo-plan');
+  const specDir = path.join(projectDir, 'docs', 'pocket', 'spec', 'demo-plan');
+  const outsideDir = path.join(root, 'outside');
+  const indexPath = path.join(planDir, 'execution-plan', 'index.md');
+  mkdirSync(path.dirname(indexPath), { recursive: true });
+  mkdirSync(specDir, { recursive: true });
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(path.join(specDir, 'approved-spec.md'), 'spec\n');
+  writeFileSync(path.join(outsideDir, 'approved-spec.md'), 'outside\n');
+  gitIn(projectDir, ['init', '-q']);
+  const { lifecycleSpecDirForPlan } = require('../cli/lib/lifecycle-transition');
+
+  try {
+    writeFileSync(indexPath, '# Plan Index\n\n**Spec:** docs/pocket/spec/demo-plan/approved-spec.md\n');
+    assert.equal(lifecycleSpecDirForPlan(planDir), specDir);
+
+    writeFileSync(indexPath, `# Plan Index\n\n**Spec:** ${path.join(specDir, 'approved-spec.md')}\n`);
+    assert.equal(lifecycleSpecDirForPlan(planDir), specDir);
+
+    writeFileSync(indexPath, '# Plan Index\n\n**Spec:** docs/pocket/spec/demo-plan/missing.md\n');
+    assert.equal(lifecycleSpecDirForPlan(planDir), null);
+
+    writeFileSync(indexPath, `# Plan Index\n\n**Spec:** ${path.join(outsideDir, 'approved-spec.md')}\n`);
+    assert.equal(lifecycleSpecDirForPlan(planDir), null);
+
+    writeFileSync(indexPath, '# Plan Index\n\nNo spec field\n');
+    assert.equal(lifecycleSpecDirForPlan(planDir), planDir);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
