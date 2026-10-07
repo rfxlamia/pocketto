@@ -32,6 +32,66 @@ function sentences(text) {
 		.filter(Boolean);
 }
 
+function unnegatedCoreRemoteClaims(text) {
+	const remoteActionPatterns = [
+		/\b(?:calls?|runs?|invokes?|executes?)\b[^.!?;:]*?\bgh\b/gi,
+		/\b(?:merges?|merge|closes?|close)\b[^.!?;:]*?\b(?:PRs?|pull requests?|issues?)\b/gi,
+	];
+	const negatedActionPrefix =
+		/(?:\b(?:do|does|did|can|could|will|would|should|must)\s+not|\b(?:never|cannot|can't|doesn't|don't)|\bnot\s+(?:allowed|supposed|authorized|permitted)\s+to)\s*$/i;
+	const newClaimConnector = /[;:]|\b(?:but|and|however|whereas|yet|while|then)\b/i;
+
+	return sentences(text).filter((sentence) => {
+		if (!/\bCore\b/i.test(sentence)) return false;
+
+		const actionMatches = remoteActionPatterns
+			.flatMap((pattern) => [...sentence.matchAll(pattern)])
+			.sort((left, right) => left.index - right.index);
+		let negationCarriesToNextAction = false;
+		let previousAction;
+
+		for (const action of actionMatches) {
+			const textSincePreviousAction = previousAction
+				? sentence.slice(previousAction.index + previousAction[0].length, action.index)
+				: sentence.slice(0, action.index);
+			if (previousAction && newClaimConnector.test(textSincePreviousAction)) {
+				negationCarriesToNextAction = false;
+			}
+
+			const directlyNegated = negatedActionPrefix.test(textSincePreviousAction);
+			if (!directlyNegated && !negationCarriesToNextAction) return true;
+
+			negationCarriesToNextAction = true;
+			previousAction = action;
+		}
+		return false;
+	});
+}
+
+test("Core remote-action guard rejects a gh claim despite a negated merge claim", () => {
+	const claim = "Core calls gh but does not merge pull requests.";
+
+	assert.deepEqual(unnegatedCoreRemoteClaims(claim), [claim]);
+});
+
+test("Core remote-action guard rejects an issue-close claim despite a negated gh claim", () => {
+	const claim = "Core closes issues but never calls gh.";
+
+	assert.deepEqual(unnegatedCoreRemoteClaims(claim), [claim]);
+});
+
+test("Core remote-action guard accepts explicit negations for each prohibited action", () => {
+	const explicitlyNegatedClaims = [
+		"Core does not call gh.",
+		"Core never merges pull requests.",
+		"Core does not close issues.",
+	];
+
+	for (const claim of explicitlyNegatedClaims) {
+		assert.deepEqual(unnegatedCoreRemoteClaims(claim), [], `Unexpected remote-action claim: ${claim}`);
+	}
+});
+
 test("user-facing documentation describes the v4 Core and Enterprise contract", () => {
 	const documentation = readDocumentation();
 	const readme = documentation["README.md"];
@@ -101,16 +161,7 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 		"Rollback must preserve local lifecycle and traveling state",
 	);
 
-	const unnegatedCoreClaims = sentences(allDocs).filter((sentence) => {
-		const mentionsRemoteAction =
-			(/\bCore\b/i.test(sentence) &&
-				/\b(?:calls?|runs?|invokes?|executes?)\b[^.!?]*\bgh\b/i.test(sentence)) ||
-			(/\bCore\b/i.test(sentence) &&
-				/\b(?:merges?|merge|closes?|close)\b[^.!?]*\b(?:PRs?|pull requests?|issues?)\b/i.test(sentence));
-		const explicitlyNegated =
-			/\b(?:not|never|no|without|cannot|can't|doesn't|don't|does not|do not)\b/i.test(sentence);
-		return mentionsRemoteAction && !explicitlyNegated;
-	});
+	const unnegatedCoreClaims = unnegatedCoreRemoteClaims(allDocs);
 	assert.deepEqual(
 		unnegatedCoreClaims,
 		[],
