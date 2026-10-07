@@ -1,0 +1,33 @@
+{
+  "header": {
+    "plan_dir": ".",
+    "plan_type": "phased",
+    "status": "IN_PROGRESS",
+    "date_started": "2026-09-19",
+    "date_completed": null,
+    "baseline_sha": "0123456789012345678901234567890123456789",
+    "pipeline": 4,
+    "plan_file": "execution-plan/index.md"
+  },
+  "phases": [
+    {
+      "order": 1,
+      "file": "execution-plan/phase-1.md",
+      "status": "WAITING",
+      "tasks": [
+        {
+          "id": "T1",
+          "name": "Preserve the legacy workflow",
+          "file": "execution-plan/tasks/T1-legacy-workflow.md",
+          "status": "WAITING"
+        },
+        {
+          "id": "T2",
+          "name": "Migrate lifecycle state explicitly",
+          "file": "execution-plan/tasks/T2-migration.md",
+          "status": "WAITING"
+        }
+      ]
+    }
+  ]
+}
