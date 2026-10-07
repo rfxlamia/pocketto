@@ -1,57 +1,55 @@
 # Pocketto
 
-> Structured AI coding workflows for Claude Code and Pi. 13 skills take work
-> from a rough idea to reviewed, shipped code without the agent skipping steps:
-> a 6-stage chained pipeline plus 7 standalone skills, backed by one
-> cross-platform Node CLI. Skills use the `pocketto:` namespace. An opt-in
-> Pocket Enterprise mode mirrors the pipeline to GitHub (issues, PRs, review
-> verdicts) for teams.
+> Pocketto `4.0.0` provides local-first AI coding workflows for Claude Code and Pi. Core is useful without GitHub or Enterprise; the optional Enterprise adapter consumes durable neutral lifecycle events and owns all remote reconciliation.
 
-Core ideas: plan before code (specs + acceptance criteria + TDD plans),
-delegate with contracts (every subagent gets a "Pocket Packet" — objective,
-verification, stop conditions; no packet, no spawn), and gate before done
-(reviews + a hard close step so finished work never rots in IN_PROGRESS limbo).
+## Release surfaces
 
-## Pipeline skills (chained — each stage hands off to the next)
+The schema-1 `surfaces.json` manifest defines exactly four roles:
 
-- [pocket-pitching](skills/pocket-pitching/SKILL.md): Pre-grinding problem exploration when the problem is unformed; diverge→converge, produces a pitch doc.
-- [pocket-grinding](skills/pocket-grinding/SKILL.md): BDD-driven discovery producing a spec + acceptance criteria; invokes pocket-planning at handoff.
-- [pocket-planning](skills/pocket-planning/SKILL.md): Converts a spec into a TDD-structured execution plan of Pocket Packets.
-- [pocket-structuring](skills/pocket-structuring/SKILL.md): Decomposes every plan into index + per-task files; phase manifests only when phaseCount > 1.
-- [pocket-development](skills/pocket-development/SKILL.md): Task-by-task subagent delegation; enforces 6 iron laws, no packet = no spawn; runs an in-loop audit (spec compliance + code quality) per task and a phase-level pass at phase completion, including append-only corrections for any failing findings.
-- [pocket-closing](skills/pocket-closing/SKILL.md): User-triggered terminal stage; reconciles the phase-level pass verdicts vs log.json, gates the close, advances phases, writes closeout.md.
+- `pi/core` — local-first Core workflows for Pi.
+- `pi/enterprise` — additive Enterprise adapter for Pi; requires `pi/core`.
+- `claude/core` — local-first Core workflows for Claude Code.
+- `claude/enterprise` — additive Enterprise adapter for Claude Code; requires `claude/core`.
 
-## Standalone skills (no pipeline needed)
+Protocol versions are independent: `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1`.
 
-- [pocket-help](skills/pocket-help/SKILL.md): Compact onboarding + routing — what Pocket is and which skill to use, without loading every skill.
-- [pocket-init](skills/pocket-init/SKILL.md): Brownfield onboarding — scans the repo, writes a merge-safe CLAUDE.md/AGENTS.md project guide, optionally enables Pocket Enterprise and scaffolds GitHub templates.
-- [create-pr](skills/create-pr/SKILL.md): Pocket Enterprise recorder — opens/reuses the phase PR on the current branch, linked to the Pocket issue; commits traveling state first.
-- [bug-hunting](skills/bug-hunting/SKILL.md): Systematic debugging with confirmed root cause before any fix; reactive and proactive modes.
-- [hotfix](skills/hotfix/SKILL.md): Fast iteration for small-to-medium changes with brief-plan + subagent-review gates.
-- [brand-design](skills/brand-design/SKILL.md): Brand-aware design system generator; writes creative-brief.md as the UI/UX source of truth.
-- [structured-research](skills/structured-research/SKILL.md): Validates an explicit assumption with a chosen research methodology; returns a graded, evidence-backed verdict (Confirmed/Refuted/Inconclusive) and a non-binding recommendation.
+Core commits state and events locally and never calls `gh`, creates or reconciles GitHub resources, merges pull requests, or closes issues. Enterprise is explicit, optional, and fail-closed before remote operations. It does not auto-create a PR; `create-pr` is an explicit user-triggered recorder. Merge and issue closure remain human-controlled.
 
-## CLI (pocketto-pi, run via npx, Node ≥18)
+## Lifecycle and recovery
 
-- `npx pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset]`: decompose a plan into execution-plan/ (index + task files; phase manifests when multi-phase).
-- `npx pocketto-pi log init <plan_dir>`: initialize log.json for a plan directory.
-- `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN]`: update phase/task status (WAITING → REVIEW → DONE | BLOCKED).
-- `npx pocketto-pi log close <plan_dir>`: finalize log after all phases complete.
-- `npx pocketto-pi doctor [--strict]`: check which required/recommended Pi extensions are installed.
-- `npx pocketto-pi setup-extensions [--all]`: install the required Pi extensions (and recommended with `--all`) via `pi install`.
-- `npx pocketto-pi mode [<dir>]` / `mode init [--file CLAUDE.md] …`: read / write the Pocket Enterprise config block.
-- `npx pocketto-pi meta get|set <dir> <field> [value]`: read/write .pocket-meta.json (issue/PR linkage).
-- `npx pocketto-pi format <issue|pr|comment|closeout> --input <json>` and `format tasklist <plan_dir>`: render GitHub bodies to temp files.
-- `npx pocketto-pi scaffold github [--dry-run]`: write .github issue/PR templates (idempotent).
-- `npx pocketto-pi reconcile --prior <json> --new <json>`: set-diff review findings for PR thread upserts.
-- Add `--json` for a stable output envelope, `--contract <N>` for a version handshake.
+All lifecycle CLI commands use `--json --contract 3`:
 
-## Install
+- `pocketto-pi lifecycle transition <spec_dir> <event-type> --artifact <root>:<kind>:<relative-path>:<sha256> --json --contract 3` commits local state and one durable event.
+- `pocketto-pi lifecycle drain <spec_dir> --json --contract 3` replays pending events in revision order without creating events.
+- `pocketto-pi lifecycle repair <spec_dir> --json --contract 3` repairs lifecycle-owned projection fields only when task state is recoverable; otherwise it fails closed without changing state.
+- `pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3` explicitly migrates only a pristine v3 plan with no execution progress.
 
-- Pi: `pi install git:github.com/rfxlamia/pocketto` or `pi install npm:pocketto-pi`
-- Claude Code: `/plugin marketplace add rfxlamia/pocketto` then `/plugin install pocketto@pocketto` then `/reload-plugins`
-- Pi extensions (advisor, context7, subagents): `npx pocketto-pi setup-extensions` after install — Pocket's skills depend on them.
+A progressed or non-pristine v3 plan returns `PIN_V3_REQUIRED` unchanged and must finish with the v3 CLI/Enterprise pair. v3 progress is never silently converted. A v4 preflight warns for v3 installations; an unchanged v3 binary cannot warn about a future release. Mixed-major Enterprise installs fail closed while Core remains usable and pending v4 events are retained.
 
-## Optional
+For rollback, disable or remove the Enterprise adapter but retain Core, `lifecycle.json`, `.pocket-meta.json`, `log.json`, pending events, and remote markers. Local execution continues. Pin a faulty adapter to the last compatible v4 release, correct it, then replay the same event IDs with `lifecycle drain`; do not automatically downgrade or destructively convert v4 state.
 
-- [Full README](README.md): hero, badges, quickstart, diagram, and the full skill reference.
+## Skills
+
+### Pipeline
+- [pocket-pitching](skills/pocket-pitching/SKILL.md): explore an unformed idea.
+- [pocket-grinding](skills/pocket-grinding/SKILL.md): discover requirements and produce a spec.
+- [pocket-planning](skills/pocket-planning/SKILL.md): create a TDD execution plan.
+- [pocket-structuring](skills/pocket-structuring/SKILL.md): split plans into task packets.
+- [pocket-development](skills/pocket-development/SKILL.md): execute tasks with audits and lifecycle events.
+- [pocket-closing](skills/pocket-closing/SKILL.md): reconcile verdicts and close local plan state.
+
+### Standalone
+- [pocket-help](skills/pocket-help/SKILL.md): route users through the skills.
+- [pocket-init](skills/pocket-init/SKILL.md): onboard a project; Enterprise remains opt-in.
+- [create-pr](skills/create-pr/SKILL.md): explicit Enterprise PR recorder.
+- [bug-hunting](skills/bug-hunting/SKILL.md): diagnose and fix confirmed bugs.
+- [hotfix](skills/hotfix/SKILL.md): small-to-medium changes.
+- [brand-design](skills/brand-design/SKILL.md): create a brand-aware design system.
+- [structured-research](skills/structured-research/SKILL.md): validate an assumption with evidence.
+
+## Enterprise references
+- [Lifecycle contract](skills/pocket-enterprise/references/lifecycle-contract.md)
+- [Issue reconciliation](skills/pocket-enterprise/references/issue-reconciliation.md)
+- [Phase and closure reconciliation](skills/pocket-enterprise/references/phase-reconciliation.md)
+- [Full README](README.md)
+- [Changelog](CHANGELOG.md)
