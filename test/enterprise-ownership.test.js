@@ -79,7 +79,7 @@ test('CYCLE 1: T8 and T10 reject conflicting title and full-spec-path ownership'
     const result = runHandler(loadIssueHandler(), fixture, transport);
 
     assert.equal(result.status, 'terminal');
-    assert.match(result.error.code, /MANUAL|OWNERSHIP|CONFLICT/);
+    assert.equal(result.error.code, 'ISSUE_MANUAL_RESOLUTION');
     assertNoT8Mutation(transport, fixture.specDir, beforeMetadata);
   });
 
@@ -101,7 +101,7 @@ test('CYCLE 1: T8 and T10 reject conflicting title and full-spec-path ownership'
     });
 
     assert.equal(result.status, 'terminal', 'T10 must reject conflicting title/path identity');
-    assert.match(result.error.code, /OWNERSHIP|MANUAL|CONFLICT/);
+    assert.equal(result.error.code, 'ISSUE_OWNERSHIP_AMBIGUOUS');
     assertNoT10Mutation(gh, fixture, beforeMetadata);
   });
 });
@@ -118,7 +118,7 @@ test('CYCLE 2: T8 and T10 reject incomplete recorded and candidate issue URLs', 
     const result = runHandler(loadIssueHandler(), fixture, transport);
 
     assert.equal(result.status, 'terminal');
-    assert.match(result.error.code, /MANUAL|OWNERSHIP|CONFLICT/);
+    assert.equal(result.error.code, 'ISSUE_MANUAL_RESOLUTION');
     assertNoT8Mutation(transport, fixture.specDir, beforeMetadata);
   });
 
@@ -138,7 +138,7 @@ test('CYCLE 2: T8 and T10 reject incomplete recorded and candidate issue URLs', 
     });
 
     assert.equal(result.status, 'terminal', 'T10 must reject missing candidate URL ownership');
-    assert.match(result.error.code, /OWNERSHIP|MANUAL|CONFLICT/);
+    assert.equal(result.error.code, 'ISSUE_OWNERSHIP_AMBIGUOUS');
     assertNoT10Mutation(gh, fixture, beforeMetadata);
   });
 
@@ -161,7 +161,7 @@ test('CYCLE 2: T8 and T10 reject incomplete recorded and candidate issue URLs', 
     });
 
     assert.equal(result.status, 'terminal', 'T10 must reject missing metadata URL ownership');
-    assert.match(result.error.code, /OWNERSHIP|MANUAL|CONFLICT/);
+    assert.equal(result.error.code, 'ISSUE_OWNERSHIP_AMBIGUOUS');
     assertNoT10Mutation(gh, fixture, beforeMetadata);
   });
 });
