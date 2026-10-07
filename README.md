@@ -22,7 +22,7 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 - **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
 - **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
 
-13 skills across a local-first Core and an optional Enterprise adapter. Use Core for the full pipeline or standalone skills without GitHub access. If your team opts in, Enterprise consumes Core's durable lifecycle events and owns GitHub reconciliation; Core itself never calls `gh` or performs remote synchronization.
+13 skills across a local-first Core and an optional Enterprise adapter. Use Core for the full pipeline or standalone skills without GitHub access. If your team opts in, Enterprise consumes Core's durable lifecycle events and owns GitHub reconciliation; Core itself does not call `gh`. Core does not perform remote synchronization.
 
 <p align="center">
   <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development (in-loop audit + phase-level pass) → closing, plus standalone skills (pocket-help, pocket-init, bug-hunting, hotfix, brand-design, structured-research, create-pr)" width="100%">
@@ -181,7 +181,7 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 
 ## Pocket Enterprise (optional)
 
-Core works locally with no GitHub credentials, remote, or Enterprise installation. It commits lifecycle state and neutral events first; it does not call `gh`, create or update issues/PRs, merge pull requests, or close issues. Pocket Enterprise is a separately installed, opt-in adapter that consumes those events and owns all remote reconciliation. Missing or incompatible Enterprise never blocks Core work; events remain durable for later replay.
+Core works locally with no GitHub credentials, remote, or Enterprise installation. It commits lifecycle state and neutral events first; Core does not call `gh`, does not create issues or PRs, does not update issues or PRs, does not merge pull requests, and does not close issues. Pocket Enterprise is a separately installed, opt-in adapter that consumes those events and owns all remote reconciliation. Missing or incompatible Enterprise never blocks Core work; events remain durable for later replay.
 
 Enterprise requires its matching Core role and a successful, fail-closed preflight before any GitHub operation. Consent is explicit. The adapter reconciles the approved-spec issue, an existing phase PR, and the final issue tasklist using stable markers and Enterprise-owned metadata. It never auto-creates a PR, merges a PR, or closes an issue. `create-pr` is a separate, user-triggered recorder; merge and issue closure remain human-controlled.
 

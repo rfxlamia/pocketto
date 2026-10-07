@@ -7,7 +7,7 @@ description: Adds the registered Enterprise lifecycle adapter to a compatible Co
 
 Pocket Enterprise is an optional, additive adapter for teams that explicitly choose remote lifecycle synchronization. Install the Enterprise role beside its matching Core role; it does not bundle or copy Core skills.
 
-**Core principle:** Core commits local state and neutral lifecycle events first. Core never calls `gh`, merges pull requests, or closes issues. The adapter validates compatibility before any external operation, reconciles events deterministically, and leaves ambiguous ownership for a human.
+**Core principle:** Core commits local state and neutral lifecycle events first. Core does not call `gh`, does not merge pull requests, and does not close issues. The adapter validates compatibility before any external operation, reconciles events deterministically, and leaves ambiguous ownership for a human.
 
 ## Release and compatibility
 

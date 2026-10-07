@@ -11,7 +11,7 @@ The terminal stage of the Pocket pipeline. Invoked directly by the user after po
 
 ## Core v4 lifecycle boundary
 
-`pocket-closing` is a Core workflow. Core keeps plan closure local-first: `log update` and `log close` commit lifecycle state and neutral events with CLI `CONTRACT=3` and lifecycle schema `1`; Core never calls `gh`, merges pull requests, or closes issues. An optional, compatible Enterprise adapter may later reconcile the `plan-closed` event. Closing locally succeeds without Enterprise, and pending events remain available for replay.
+`pocket-closing` is a Core workflow. Core keeps plan closure local-first: `log update` and `log close` commit lifecycle state and neutral events with CLI `CONTRACT=3` and lifecycle schema `1`. Core does not call `gh`, does not merge pull requests, and does not close issues. An optional, compatible Enterprise adapter may later reconcile the `plan-closed` event. Closing locally succeeds without Enterprise, and pending events remain available for replay.
 
 If a projection write needs recovery, run `pocketto-pi lifecycle repair <spec_dir> --json --contract 3` before `pocketto-pi lifecycle drain <spec_dir> --json --contract 3`. Repair preserves task progress and fails closed when task state is unrecoverable; drain replays pending events in order without creating events. Active v3 plans with progress stay on v3 and are never silently converted.
 

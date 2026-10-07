@@ -1,6 +1,6 @@
 # Issue Reconciliation
 
-This reference owns issue lookup, creation, and proof for the Enterprise `spec-approved` event. Core supplies only a validated spec-root artifact reference and opaque event identity; Core never calls `gh` or reads/writes remote issue identity.
+This reference owns issue lookup, creation, and proof for the Enterprise `spec-approved` event. Core supplies only a validated spec-root artifact reference and opaque event identity; Core does not call `gh`, does not read remote issue identity, and does not write remote issue identity.
 
 ## Preflight and target resolution
 

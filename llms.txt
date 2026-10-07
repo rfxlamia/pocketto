@@ -13,7 +13,7 @@ The schema-1 `surfaces.json` manifest defines exactly four roles:
 
 Protocol versions are independent: `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1`.
 
-Core commits state and events locally and never calls `gh`, creates or reconciles GitHub resources, merges pull requests, or closes issues. Enterprise is explicit, optional, and fail-closed before remote operations. It does not auto-create a PR; `create-pr` is an explicit user-triggered recorder. Merge and issue closure remain human-controlled.
+Core commits state and events locally. Core does not call `gh`, does not create GitHub resources, does not reconcile GitHub resources, does not merge pull requests, and does not close issues. Enterprise is explicit, optional, and fail-closed before remote operations. It does not auto-create a PR; `create-pr` is an explicit user-triggered recorder. Merge and issue closure remain human-controlled.
 
 ## Lifecycle and recovery
 

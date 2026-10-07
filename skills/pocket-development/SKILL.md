@@ -11,7 +11,7 @@ Precise subagent delegation for task-by-task development execution. POCKET ensur
 
 ## Core v4 lifecycle boundary
 
-`pocket-development` is part of the local-first Core role. Core records neutral lifecycle events for approved specs, completed phases, and closed plans; it never calls `gh`, merges pull requests, or closes issues. A separately installed, optional adapter may consume durable events after a successful compatibility preflight. Core work and phase completion do not depend on that adapter; unavailable delivery leaves events pending for replay.
+`pocket-development` is part of the local-first Core role. Core records neutral lifecycle events for approved specs, completed phases, and closed plans. Core does not call `gh`, does not merge pull requests, and does not close issues. A separately installed, optional adapter may consume durable events after a successful compatibility preflight. Core work and phase completion do not depend on that adapter; unavailable delivery leaves events pending for replay.
 
 The v4 lifecycle commands use `--json --contract 3`. `lifecycle transition` commits local state and an event, `lifecycle drain` replays pending events in revision order without creating events, and `lifecycle repair` repairs recoverable `log.json` projection fields without emitting or dispatching an event. Active v3 plans with progress remain on v3; never silently convert their progress.
 

@@ -46,19 +46,6 @@ function unnegatedCoreRemoteClaims(text) {
 		const actionMatches = remoteActionPatterns
 			.flatMap((pattern) => [...sentence.matchAll(pattern)])
 			.sort((left, right) => left.index - right.index);
-		const firstAction = actionMatches[0];
-		const hasNegatedCoordinatedList =
-			firstAction &&
-			/\bnever\b/i.test(sentence.slice(0, firstAction.index)) &&
-			actionMatches.slice(1).some((action, index) => {
-				const previousAction = actionMatches[index];
-				const connector = sentence.slice(
-					previousAction.index + previousAction[0].length,
-					action.index,
-				);
-				return /\b(?:and|or)\s*$/i.test(connector.trim());
-			});
-
 		let previousAction;
 
 		for (const action of actionMatches) {
@@ -66,8 +53,7 @@ function unnegatedCoreRemoteClaims(text) {
 				? sentence.slice(previousAction.index + previousAction[0].length, action.index)
 				: sentence.slice(0, action.index);
 			const directlyNegated = negatedActionPrefix.test(textSincePreviousAction);
-			const negatedAsListMember = action !== firstAction && hasNegatedCoordinatedList;
-			if (!directlyNegated && !negatedAsListMember) return true;
+			if (!directlyNegated) return true;
 
 			previousAction = action;
 		}
@@ -99,11 +85,24 @@ test("Core remote-action guard rejects a gh claim after a negated issue-close cl
 	assert.deepEqual(unnegatedCoreRemoteClaims(claim), [claim]);
 });
 
+test("Core remote-action guard rejects a merge claim after a negated gh claim joined by and", () => {
+	const claim = "Core never calls gh and merges pull requests.";
+
+	assert.deepEqual(unnegatedCoreRemoteClaims(claim), [claim]);
+});
+
+test("Core remote-action guard rejects a merge claim after a negated gh claim joined by or", () => {
+	const claim = "Core never calls gh or merges pull requests.";
+
+	assert.deepEqual(unnegatedCoreRemoteClaims(claim), [claim]);
+});
+
 test("Core remote-action guard accepts explicit negations for each prohibited action", () => {
 	const explicitlyNegatedClaims = [
 		"Core does not call gh.",
 		"Core never merges pull requests.",
 		"Core does not close issues.",
+		"Core does not call gh, does not merge pull requests, and does not close issues.",
 	];
 
 	for (const claim of explicitlyNegatedClaims) {

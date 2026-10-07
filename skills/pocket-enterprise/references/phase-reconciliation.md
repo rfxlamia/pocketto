@@ -1,6 +1,6 @@
 # Phase and Closure Reconciliation
 
-This reference owns Enterprise proof for `phase-complete` and `plan-closed`. It does not redefine Core transitions or the local close gate. Core commits neutral lifecycle state and events locally; it never calls `gh`, merges a pull request, or closes an issue.
+This reference owns Enterprise proof for `phase-complete` and `plan-closed`. It does not redefine Core transitions or the local close gate. Core commits neutral lifecycle state and events locally. Core does not call `gh`, does not merge a pull request, and does not close an issue.
 
 ## Phase-complete PR proof
 

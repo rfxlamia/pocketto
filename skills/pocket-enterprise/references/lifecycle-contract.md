@@ -1,6 +1,6 @@
 # Enterprise Lifecycle Contract
 
-This reference defines the Enterprise consumer of Core's neutral lifecycle journal. Package `4.0.0` ships a local-first Core and a separately installed, optional Enterprise adapter. Core commits locally and never calls `gh`; GitHub policy, IDs, credentials, and reconciliation remain Enterprise-owned.
+This reference defines the Enterprise consumer of Core's neutral lifecycle journal. Package `4.0.0` ships a local-first Core and a separately installed, optional Enterprise adapter. Core commits locally and does not call `gh`. Core does not own GitHub policy, IDs, credentials, or reconciliation; those remain Enterprise-owned.
 
 ## Independent release versions
 
