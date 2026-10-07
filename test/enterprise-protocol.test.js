@@ -412,10 +412,29 @@ test('CYCLE 3: metadata seam round-trips GitHub IDs through the Enterprise wrapp
   assert.equal(raw.github_issue.number, 50);
   assert.equal(raw.phases['phase-1'].github_pr.number, 51);
 
-  const bodyPath = github.writeBodyFile('hello **world**', { dir: root });
-  assert.equal(fs.readFileSync(bodyPath, 'utf8'), 'hello **world**');
-  assert.ok(bodyPath.startsWith(root), 'body-file transport must stay local');
+  const body = 'hello **world**\nsecond line\n';
+  const bodyPath = github.writeBodyFile(body, { dir: root });
+  assert.equal(fs.readFileSync(bodyPath, 'utf8'), body);
+  assertBodyStaysInside(root, bodyPath);
+  assert.deepEqual(github.bodyFileField(bodyPath), ['-F', `body=@${bodyPath}`]);
+
+  const defaultPath = github.writeBodyFile(body);
+  try {
+    assert.equal(fs.readFileSync(defaultPath, 'utf8'), body);
+    assertBodyStaysInside(os.tmpdir(), defaultPath);
+    assert.deepEqual(github.bodyFileField(defaultPath), ['-F', `body=@${defaultPath}`]);
+  } finally {
+    fs.rmSync(path.dirname(defaultPath), { recursive: true, force: true });
+  }
 });
+
+function assertBodyStaysInside(root, bodyPath) {
+  const resolvedRoot = fs.realpathSync(root);
+  const resolvedBody = fs.realpathSync(bodyPath);
+  const relative = path.relative(resolvedRoot, resolvedBody);
+  assert.equal(relative.startsWith('..') || path.isAbsolute(relative), false, relative);
+  assert.ok(resolvedBody.startsWith(`${resolvedRoot}${path.sep}`), resolvedBody);
+}
 
 // T7 CYCLE 4: adapter contract mismatch prevents handler dispatch.
 // Integration through Core's registered executable invocation plus the

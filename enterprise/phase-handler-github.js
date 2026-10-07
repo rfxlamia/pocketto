@@ -26,6 +26,8 @@ function runRequest(args, options, expectJson) {
   const result = github.runGh(args, {
     runner: options.ghRunner,
     timeoutMs: options.timeoutMs,
+    // This invocation is one try. Core's delivery journal owns the
+    // cross-invocation budget (one initial call plus five retries).
     attemptsMade: 1,
     expectJson,
   });
