@@ -166,10 +166,16 @@ function planIdForLog(planDir) {
   return slug;
 }
 
+function isInsideDir(parent, target) {
+  const relative = path.relative(path.resolve(parent), path.resolve(target));
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 // Execution indexes retain the approved spec file reference. Resolve that
-// file from the plan's directory/ancestors so log transitions always find the
-// canonical `<spec_dir>/lifecycle.json`; legacy plans without a Spec field
-// keep their existing colocated-root behavior.
+// file from the plan directory up through the project root so log transitions
+// find the canonical `<spec_dir>/lifecycle.json`. Legacy plans without a Spec
+// field keep their existing colocated-root behavior. A Spec that is missing
+// or outside the project resolves to null; it is never resolved against cwd.
 function lifecycleSpecDirForPlan(planDir) {
   const indexPath = path.join(planDir, 'execution-plan', 'index.md');
   if (!existsSync(indexPath)) return planDir;
@@ -177,17 +183,27 @@ function lifecycleSpecDirForPlan(planDir) {
   const match = index.match(/^\*\*Spec:\*\*\s*(.+?)\s*$/m);
   if (!match) return planDir;
   const specFile = match[1].trim();
-  if (path.isAbsolute(specFile)) return path.dirname(specFile);
+  if (specFile.length === 0) return null;
+
+  const projectRoot = resolveProjectRoot(planDir);
+  if (!projectRoot) return null;
+  if (path.isAbsolute(specFile)) {
+    const specPath = path.resolve(specFile);
+    if (!existsSync(specPath) || !isInsideDir(projectRoot, specPath)) return null;
+    return path.dirname(specPath);
+  }
 
   let candidateRoot = path.resolve(planDir);
+  const stopAt = path.resolve(projectRoot);
   while (true) {
     const candidate = path.resolve(candidateRoot, specFile);
-    if (existsSync(candidate)) return path.dirname(candidate);
+    if (existsSync(candidate) && isInsideDir(projectRoot, candidate)) return path.dirname(candidate);
+    if (candidateRoot === stopAt) break;
     const parent = path.dirname(candidateRoot);
     if (parent === candidateRoot) break;
     candidateRoot = parent;
   }
-  return path.dirname(path.resolve(specFile));
+  return null;
 }
 
 // Emission hook for `log update`: commits exactly one `phase-complete` event
@@ -214,6 +230,7 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
   const planId = planIdForLog(planDir);
   if (!planId) return null;
   const specDir = lifecycleSpecDirForPlan(planDir);
+  if (!specDir) return null;
   const existing = readLifecycleDoc(specDir);
   if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
   const artifacts = [phaseEvidenceRef(planDir, phaseFile)];
@@ -268,6 +285,7 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
   const planId = planIdForLog(planDir);
   if (!planId) return null;
   const specDir = lifecycleSpecDirForPlan(planDir);
+  if (!specDir) return null;
   const existing = readLifecycleDoc(specDir);
   if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
   const artifacts = closureEvidenceRefs(planDir, phaseFiles);
@@ -392,4 +410,4 @@ function runPlanCloseTransition({ planDir, logPath, log, phaseFiles, mutate, dep
   });
 }
 
-module.exports = { parseArtifactFlag, planIdFor, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };
+module.exports = { parseArtifactFlag, planIdFor, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };
