@@ -12,7 +12,7 @@ Core provides `lifecycle transition`, `lifecycle drain`, and `lifecycle repair`;
 
 **Compatibility and migration.** A v3 Core + v3 Enterprise installation remains operational with a v4 warning. v4 Core + v4 Enterprise is supported; v4 Core without Enterprise remains local-first. Mixed-major Enterprise combinations fail closed with upgrade guidance while Core remains usable and pending events are preserved. Use `pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3` only for a pristine v3 plan with no execution progress. A progressed or non-pristine plan returns `PIN_V3_REQUIRED` without file or remote changes and must finish on v3. Migration is never silent or destructive.
 
-**Rollback.** Disable or remove the Enterprise adapter while retaining Core and `lifecycle.json`; preserve `.pocket-meta.json`, `log.json`, lifecycle events, and remote markers. Correct or pin a faulty adapter to the last compatible v4 release, then replay the original pending event IDs with `lifecycle drain`. Keep active v3 plans on their v3 path; do not automatically downgrade or convert them.
+**Rollback.** Disable by removing `.pocket/lifecycle-adapter.json` after the read-only preflight, and keep Core, `lifecycle.json`, `.pocket-meta.json`, `log.json`, and remote markers. A drain with no registration leaves events pending with `adapter-unavailable` and does not replay. Pin or reinstall the adapter, then replay the original event IDs with `lifecycle drain`. The two command lists are in the README section "Lifecycle commands, migration, and rollback". Keep active v3 plans on their v3 path; do not automatically downgrade or convert them.
 
 ## 3.1.3 — 2026-09-19
 

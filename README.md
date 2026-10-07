@@ -212,15 +212,24 @@ npx pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3
 
 Migration is explicit and limited to a pristine v3 plan with no execution progress. A progressed or non-pristine v3 plan returns `PIN_V3_REQUIRED` without changing files or making remote calls; finish it with the v3 CLI/Enterprise pair. Migration does not rewrite v3 files or send retrospective events. v3 progress is never silently converted.
 
-For a faulty or unwanted adapter, disable or remove the Enterprise adapter while leaving Core and `lifecycle.json` installed. Preserve `.pocket-meta.json`, `log.json`, lifecycle events, and remote markers; do not delete or rewrite them as rollback. Local execution continues and pending events keep their original IDs. Pin a faulty adapter to the last compatible v4 release, correct it, then replay with `lifecycle drain`. Active v3 plans remain on their v3 path; do not automatically downgrade or destructively convert v4 state.
+For a faulty or unwanted adapter, disable Enterprise without deleting Core or `lifecycle.json`. Preserve `.pocket-meta.json`, `log.json`, lifecycle events, and remote markers. Local execution continues and pending events keep their original IDs. Active v3 plans remain on their v3 path; do not automatically downgrade or destructively convert v4 state.
+
+Disable the adapter. `preflight` only reads the registration. `rm` deletes that registration file and nothing else. Do not delete `lifecycle.json`, `log.json`, or `.pocket-meta.json`. A `lifecycle drain` while the registration is missing does not replay: the event stays pending, the drain reports `adapter-unavailable`, and no remote call is made.
+
+`enterprise/cli.js` is in the pocketto-pi package root. A project that depends on the npm package runs:
 
 ```bash
-node enterprise/cli.js preflight <project-root> --json
+node node_modules/pocketto-pi/enterprise/cli.js preflight <project-root> --json
 rm <project-root>/.pocket/lifecycle-adapter.json
-npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
 ```
 
-`preflight` only reads the registration. `rm` deletes that registration file and nothing else. After the adapter is repaired or pinned, `lifecycle drain` replays the original event IDs. Do not delete `lifecycle.json`, `log.json`, or `.pocket-meta.json`.
+A checkout of this repository runs the same read-only preflight as `node enterprise/cli.js preflight <project-root> --json`. `pi install` also keeps the package outside the project, so the command is still `<package-root>/enterprise/cli.js`.
+
+Replay only after the adapter is pinned to the last compatible v4 release or reinstalled. That drain uses the original event IDs:
+
+```bash
+npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
+```
 
 ## CLI
 

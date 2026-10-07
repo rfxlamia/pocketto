@@ -182,15 +182,39 @@ function assertMigrationPolicy(allDocs) {
 	);
 }
 
-function assertRollbackGuidance(allDocs) {
+function bashFences(text) {
+	return [...text.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]);
+}
+
+function assertSeparateRollbackRecipes(text, label) {
+	const fences = bashFences(text);
+	const mixed = fences.filter((fence) => fence.includes("lifecycle-adapter.json") && fence.includes("lifecycle drain"));
+	assert.deepEqual(mixed, [], `${label}: registration removal and drain replay must be separate command blocks`);
+	assert.ok(
+		fences.some((fence) => fence.includes("rm <project-root>/.pocket/lifecycle-adapter.json") && !fence.includes("lifecycle drain")),
+		`${label}: disable block removes the registration without draining`,
+	);
+	assert.ok(
+		fences.some((fence) => fence.includes("npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3") && !fence.includes("lifecycle-adapter.json")),
+		`${label}: replay block drains only after the adapter is restored`,
+	);
+}
+
+function assertRollbackGuidance(allDocs, documentation) {
 	assert.match(
 		allDocs,
-		/(?:disable|remove)[^\n.]{0,100}Enterprise adapter/i,
+		/(?:disable|remove)[^\n.]{0,160}(?:Enterprise|registration|adapter)/i,
 		"Rollback guidance must explain how to disable or remove the adapter",
 	);
 	assert.match(allDocs, /pending events?[^\n.]{0,120}(?:retain|preserv|replay|remain)/i, "Rollback must preserve pending events");
 	assert.match(allDocs, /lifecycle drain/, "Rollback guidance must provide the lifecycle replay command");
-	assert.match(allDocs, /node enterprise\/cli\.js preflight <project-root> --json/, "Rollback must name the read-only preflight command");
+	assert.match(allDocs, /adapter-unavailable/, "Rollback must say a drain without registration stays pending");
+	assert.match(allDocs, /node enterprise\/cli\.js preflight <project-root> --json/, "Rollback must name the checkout preflight command");
+	assert.match(
+		allDocs,
+		/node node_modules\/pocketto-pi\/enterprise\/cli\.js preflight <project-root> --json/,
+		"Rollback must name the installed-package preflight command",
+	);
 	assert.match(allDocs, /rm <project-root>\/\.pocket\/lifecycle-adapter\.json/, "Rollback must name the registration file to remove");
 	assert.match(
 		allDocs,
@@ -199,8 +223,18 @@ function assertRollbackGuidance(allDocs) {
 	);
 	assert.match(
 		allDocs,
-		/(?:preserve|retain)[^\n.]{0,100}(?:\.pocket-meta\.json|log\.json|lifecycle\.json)/i,
+		/(?:preserve|retain|keep)[^\n.]{0,140}(?:\.pocket-meta\.json|log\.json|lifecycle\.json)/i,
 		"Rollback must preserve local lifecycle and traveling state",
+	);
+	assert.match(
+		documentation["CHANGELOG.md"],
+		/Lifecycle commands, migration, and rollback/,
+		"Changelog rollback must point at the README command lists",
+	);
+	assertSeparateRollbackRecipes(documentation["README.md"], "README");
+	assertSeparateRollbackRecipes(
+		documentation["skills/pocket-enterprise/references/lifecycle-contract.md"],
+		"lifecycle contract",
 	);
 }
 
@@ -231,6 +265,6 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 	);
 	assertCompatibilityMatrix(readme);
 	assertMigrationPolicy(allDocs);
-	assertRollbackGuidance(allDocs);
+	assertRollbackGuidance(allDocs, documentation);
 	assertNoUnnegatedCoreRemoteClaims(allDocs);
 });
