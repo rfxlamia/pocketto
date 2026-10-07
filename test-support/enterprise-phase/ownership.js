@@ -35,6 +35,17 @@ test('P2-5: phase-complete rejects incomplete or mismatched issue URL proof', as
     ['candidate URL disagrees with recorded issue number', (fixture) => {
       fixture.remote.issue.url = `https://github.com/${OWNER}/${REPOSITORY}/issues/${fixture.remote.issue.number + 1}`;
     }],
+    ['GHES issue URL against a github.com origin', (fixture) => {
+      const url = `https://ghes.example/${OWNER}/${REPOSITORY}/issues/${fixture.remote.issue.number}`;
+      fixture.remote.issue.url = url;
+      enterpriseMeta.setIssueIdentity(fixture.specDir, { number: fixture.remote.issue.number, url });
+    }],
+    ['github.com issue URL against a GHES origin', (fixture) => {
+      const url = `https://github.com/${OWNER}/${REPOSITORY}/issues/${fixture.remote.issue.number}`;
+      fixture.remote.repositoryUrl = `https://ghes.example/${OWNER}/${REPOSITORY}`;
+      fixture.remote.issue.url = url;
+      enterpriseMeta.setIssueIdentity(fixture.specDir, { number: fixture.remote.issue.number, url });
+    }],
   ];
 
   for (const [name, invalidate] of cases) {
@@ -63,8 +74,8 @@ function addMetadataSentinel(fixture) {
 }
 
 function assertIssueOwnershipRejected(response) {
-  assert.ok(response.error && /ISSUE|OWNERSHIP|MANUAL/.test(response.error.code),
-    `phase-complete should reject unproven issue identity, got ${JSON.stringify(response)}`);
+  assert.equal(response.status, 'terminal');
+  assert.equal(response.error && response.error.code, 'ISSUE_OWNERSHIP_UNPROVEN', JSON.stringify(response));
 }
 
 function assertNoIssueOwnershipMutation(fixture, beforeMetadata, beforeComments, beforeThreads) {
@@ -100,11 +111,17 @@ test('RED cycle 3: metadata validation falls back safely and ambiguous PRs stay 
   await runInvalidMetadataCases(t);
   await t.test('missing metadata finds one exact branch/phase PR', (t) => assertExactBranchPhasePr(t));
   await runAmbiguousSearchCases(t);
+  await t.test('github.com metadata is foreign when the current origin is GHES', (t) => {
+    assertGhesOriginRejectsGitHubPullRequest(t);
+  });
 });
 
 async function runInvalidMetadataCases(t) {
   const cases = [
     ['wrong origin', (pr) => { pr.url = 'https://github.com/foreign/repo/pull/51'; }],
+    ['GHES host with the same repository path', (pr) => {
+      pr.url = `https://ghes.example/${OWNER}/${REPOSITORY}/pull/51`;
+    }],
     ['closed state', (pr) => { pr.state = 'CLOSED'; }],
     ['wrong branch', (pr) => { pr.headRefName = 'feature/another-plan'; }],
     ['wrong phase', (pr) => addPhaseMarker(pr, 2, 11)],
@@ -166,6 +183,7 @@ async function runAmbiguousSearchCases(t) {
     ['zero branch matches', []],
     ['multiple matches', [makePr(61), makePr(62)]],
     ['foreign PR', [makePr(63)]],
+    ['GHES host PR', [makePr(67)]],
     ['closed PR', [makePr(64)]],
     ['wrong-branch PR', [makePr(65)]],
     ['wrong-phase PR', [makePr(66)]],
@@ -182,6 +200,7 @@ function assertAmbiguousSearchDoesNotMutate(t, name, prs) {
   fixture.remote.prs = prs;
   for (const pr of prs) addPhaseMarker(pr, 1, pr.number);
   if (name === 'foreign PR') prs[0].url = 'https://github.com/foreign/repo/pull/63';
+  if (name === 'GHES host PR') prs[0].url = `https://ghes.example/${OWNER}/${REPOSITORY}/pull/67`;
   if (name === 'closed PR') prs[0].state = 'CLOSED';
   if (name === 'wrong-branch PR') prs[0].headRefName = 'feature/another-plan';
   if (name === 'wrong-phase PR') {
@@ -206,4 +225,35 @@ function assertAmbiguousSearchDoesNotMutate(t, name, prs) {
   assert.equal(fs.readFileSync(metaPath, 'utf8'), beforeMeta, 'failed lookup must not write metadata proof');
   assert.equal(JSON.stringify(fixture.event), beforeEvent, 'failed lookup must preserve the event for retry/manual action');
   assert.equal(JSON.stringify(prs.map((pr) => allComments(fixture.remote, pr.number))), beforeComments);
+}
+
+function assertGhesOriginRejectsGitHubPullRequest(t) {
+  const fixture = createFixture(t);
+  const origin = `https://ghes.example/${OWNER}/${REPOSITORY}`;
+  fixture.remote.repositoryUrl = origin;
+  fixture.remote.issue.url = `${origin}/issues/${fixture.remote.issue.number}`;
+  enterpriseMeta.setIssueIdentity(fixture.specDir, {
+    number: fixture.remote.issue.number,
+    url: fixture.remote.issue.url,
+  });
+  const githubPr = makePr(51);
+  githubPr.url = `https://github.com/${OWNER}/${REPOSITORY}/pull/51`;
+  addPhaseMarker(githubPr, 1, 10);
+  const ghesPr = makePr(52);
+  ghesPr.url = `${origin}/pull/52`;
+  addPhaseMarker(ghesPr, 1, 20);
+  fixture.remote.prs = [githubPr, ghesPr];
+  enterpriseMeta.setPrIdentity(fixture.specDir, 'phase-1', { number: githubPr.number, url: githubPr.url });
+  const githubComments = JSON.stringify(allComments(fixture.remote, githubPr.number));
+  const handler = loadPhaseHandler();
+
+  const response = handler.handlePhaseComplete(fixture.event, handlerOptions(fixture));
+
+  assert.equal(response.status, 'succeeded', JSON.stringify(response));
+  assert.deepEqual(enterpriseMeta.getPrIdentity(fixture.specDir, 'phase-1'), {
+    number: ghesPr.number,
+    url: ghesPr.url,
+  });
+  assert.equal(JSON.stringify(allComments(fixture.remote, githubPr.number)), githubComments,
+    'the github.com pull request must stay untouched when the origin is GHES');
 }
