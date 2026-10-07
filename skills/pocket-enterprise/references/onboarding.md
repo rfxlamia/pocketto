@@ -43,6 +43,8 @@ Existing user files are not overwritten. Create the `pocket-plan` label only whe
 
 The Enterprise distribution bundles `enterprise/dispatch.js`, which composes the `spec-approved`, `phase-complete`, and `plan-closed` handlers behind the Core adapter protocol. Install registers it by default with the exact fixed argv `[process.execPath, <absolute enterprise/dispatch.js>, <absolute project-root>]`; Core appends the event-file path and `--json --contract 3`.
 
+`enterprise/cli.js` is in the pocketto-pi package root, not in the project being registered. The commands below are a checkout of this repository. A project that depends on the npm package replaces `node enterprise/cli.js` with `node node_modules/pocketto-pi/enterprise/cli.js`.
+
 ```bash
 node enterprise/cli.js install <project-root> --json
 ```

@@ -31,6 +31,8 @@ Run the Enterprise preflight from the project root:
 node enterprise/cli.js preflight <project-root> --json
 ```
 
+`enterprise/cli.js` is in the pocketto-pi package root, not in the project being checked. The command above is a checkout of this repository. A project that depends on the npm package runs `node node_modules/pocketto-pi/enterprise/cli.js preflight <project-root> --json`.
+
 Continue only when it confirms a compatible Core installation and registered adapter. Missing Core, an unsupported contract, malformed registration, or a missing executable is fail-closed: make no GitHub call and follow the install/upgrade action in the error. Preflight is read-only.
 
 Core provides the lifecycle commands with `--json --contract 3`:
