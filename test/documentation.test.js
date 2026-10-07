@@ -9,6 +9,7 @@ const DOCUMENTATION_PATHS = [
 	"llms.txt",
 	"skills/pocket-enterprise/SKILL.md",
 	"skills/pocket-enterprise/references/lifecycle-contract.md",
+	"skills/pocket-enterprise/references/onboarding.md",
 	"skills/pocket-enterprise/references/issue-reconciliation.md",
 	"skills/pocket-enterprise/references/phase-reconciliation.md",
 	"skills/pocket-development/SKILL.md",
@@ -145,6 +146,20 @@ function assertLifecycleCommands(allDocs) {
 	assert.match(allDocs, /--json --contract 3/, "Lifecycle commands must use CLI contract 3");
 }
 
+function assertEnterpriseOnboardingCliContract(onboarding) {
+	const cliCommands = [...onboarding.matchAll(/^npx -y pocketto-pi .+$/gm)].map(
+		([command]) => command,
+	);
+	assert.ok(cliCommands.length > 0, "Enterprise onboarding must include Pocketto CLI commands");
+	for (const command of cliCommands) {
+		assert.match(
+			command,
+			/--json --contract 3$/,
+			`Enterprise onboarding commands must use CLI contract 3: ${command}`,
+		);
+	}
+}
+
 function assertCompatibilityMatrix(readme) {
 	const compatibilityRows = [
 		[/v3 Core\s*\+\s*v3 Enterprise[^\n]*(?:operational|usable)[^\n]*warning/i, "v3 Core + v3 Enterprise remains usable with a warning"],
@@ -204,6 +219,9 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 	assertManifestRoles(readme);
 	assertReleaseIdentifiers(releaseDocs);
 	assertLifecycleCommands(allDocs);
+	assertEnterpriseOnboardingCliContract(
+		documentation["skills/pocket-enterprise/references/onboarding.md"],
+	);
 	assertCompatibilityMatrix(readme);
 	assertMigrationPolicy(allDocs);
 	assertRollbackGuidance(allDocs);
