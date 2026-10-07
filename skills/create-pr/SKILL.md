@@ -58,11 +58,13 @@ Stop unless the envelope succeeds and `data.enterprise` is strictly `true`.
 
 ### Step 2: Core and adapter compatibility
 
-From the project root, run:
+`enterprise/cli.js` is in the pocketto-pi package root, not in the project being checked. A checkout of this repository runs:
 
 ```bash
 node enterprise/cli.js preflight <project-root> --json
 ```
+
+A project that depends on the npm package runs `node node_modules/pocketto-pi/enterprise/cli.js preflight <project-root> --json`.
 
 Continue only when preflight succeeds and confirms the compatible Core contract, lifecycle schema, adapter contract, and registration. On failure, stop before GitHub and follow the actionable install/upgrade guidance.
 
