@@ -30,33 +30,8 @@ test('plan-closed delivery rejects committed phase artifacts missing or changed 
   }
 });
 
-test('plan-closed validates a changed second spec-root ref before closure mutation', (t) => {
-  const fixture = createFixture(t);
-  const committedEvent = commitPlanClosedEventWithBothRoots(fixture);
-  const [planRef, specRef] = committedEvent.artifact_refs;
-  assert.equal(planRef.root, 'plan');
-  assert.equal(specRef.root, 'spec');
-  const metadataBefore = readMetadata(fixture);
-  const remoteBefore = readRemote(fixture);
-  const closeoutPath = path.join(fixture.planDir, 'closeout.md');
-  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 2);
-  assert.equal(metadataBefore.github_issue.tasklist, undefined);
-  assert.equal(fs.existsSync(closeoutPath), false);
-
-  writeFile(path.join(fixture.specDir, specRef.path), `${fixture.approvedSpec}Changed after closure commit.\n`);
-  assert.equal(sha256(fs.readFileSync(path.join(fixture.planDir, planRef.path))), planRef.sha256,
-    'only ref 2 may change after the store commits the closure event');
-  assert.notEqual(sha256(fs.readFileSync(path.join(fixture.specDir, specRef.path))), specRef.sha256,
-    'the spec-root ref 2 must be stale at delivery');
-
-  const drain = assertCliOk(runCore(fixture, [
-    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
-  ]), 'public drain of a plan-closed event with a stale spec-root ref');
-  const delivery = drain.deliveries.find(({ event_id }) => event_id === committedEvent.event_id);
-  const journalEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
-  const metadataAfter = readMetadata(fixture);
-  const remoteAfter = readRemote(fixture);
-
+function assertChangedSecondSpecRootRejected(state) {
+  const { delivery, committedEvent, journalEvent, metadataBefore, metadataAfter, remoteBefore, remoteAfter, closeoutPath } = state;
   assert.deepEqual({
     delivery: delivery && {
       event_id: delivery.event_id,
@@ -100,7 +75,61 @@ test('plan-closed validates a changed second spec-root ref before closure mutati
     closureProofWritten: false,
     closeoutExists: false,
   }, 'every accepted plan-closed artifact ref must be validated before remote or local closure effects');
+}
+
+test('plan-closed validates a changed second spec-root ref before closure mutation', (t) => {
+  const fixture = createFixture(t);
+  const committedEvent = commitPlanClosedEventWithBothRoots(fixture);
+  const [planRef, specRef] = committedEvent.artifact_refs;
+  assert.equal(planRef.root, 'plan');
+  assert.equal(specRef.root, 'spec');
+  const metadataBefore = readMetadata(fixture);
+  const remoteBefore = readRemote(fixture);
+  const closeoutPath = path.join(fixture.planDir, 'closeout.md');
+  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 2);
+  assert.equal(metadataBefore.github_issue.tasklist, undefined);
+  assert.equal(fs.existsSync(closeoutPath), false);
+
+  writeFile(path.join(fixture.specDir, specRef.path), `${fixture.approvedSpec}Changed after closure commit.\n`);
+  assert.equal(sha256(fs.readFileSync(path.join(fixture.planDir, planRef.path))), planRef.sha256,
+    'only ref 2 may change after the store commits the closure event');
+  assert.notEqual(sha256(fs.readFileSync(path.join(fixture.specDir, specRef.path))), specRef.sha256,
+    'the spec-root ref 2 must be stale at delivery');
+
+  const drain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'public drain of a plan-closed event with a stale spec-root ref');
+  const delivery = drain.deliveries.find(({ event_id }) => event_id === committedEvent.event_id);
+  const journalEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
+  const metadataAfter = readMetadata(fixture);
+  const remoteAfter = readRemote(fixture);
+
+  assertChangedSecondSpecRootRejected({
+    delivery, committedEvent, journalEvent, metadataBefore, metadataAfter, remoteBefore, remoteAfter, closeoutPath,
+  });
 });
+
+function assertStaleClosureProofReplayState(fixture, committedEvent, reconcilingEvent, stale,
+  metadataBefore, metadataAfterProofBytes, remoteAfterProof, closeoutPath, closeoutAfterProof, proof) {
+  assert.equal(stale.event_id, committedEvent.event_id);
+  assert.equal(stale.status, 'terminal');
+  assert.deepEqual(stale.error && { code: stale.error.code, retryable: stale.error.retryable }, {
+    code: 'STALE_ARTIFACT', retryable: false,
+  });
+  const persisted = lifecycleGapHelpers.persistRegisteredAdapterResponse(fixture, reconcilingEvent, stale);
+  assert.equal(persisted.ok, true);
+  assert.equal(persisted.event.delivery.status, 'terminal');
+  assert.equal(persisted.event.delivery.error.code, 'STALE_ARTIFACT');
+  assert.deepEqual(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json')), metadataAfterProofBytes,
+    'stale closure replay must leave the canonical proof and watermark byte-identical');
+  assert.equal(readMetadata(fixture).lifecycle_delivery.last_applied_revision, 2);
+  assert.deepEqual(readRemote(fixture), remoteAfterProof,
+    'stale closure replay must not make more fake GitHub calls or effects');
+  assert.deepEqual(fs.readFileSync(closeoutPath), closeoutAfterProof,
+    'stale closure replay must not rerun local closeout mutation');
+  assert.deepEqual(readMetadata(fixture).github_issue.tasklist, proof);
+  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 2);
+}
 
 test('plan-closed proof-first replay rejects a stale second selected-root ref', (t) => {
   const fixture = createFixture(t);
@@ -140,24 +169,8 @@ test('plan-closed proof-first replay rejects a stale second selected-root ref', 
   writeFile(staleArtifactPath, `${fixture.approvedSpec}Changed after proof persistence.\n`);
   const stale = lifecycleGapHelpers.deliverRegisteredEvent(fixture, reconcilingEvent);
 
-  assert.equal(stale.event_id, committedEvent.event_id);
-  assert.equal(stale.status, 'terminal');
-  assert.deepEqual(stale.error && { code: stale.error.code, retryable: stale.error.retryable }, {
-    code: 'STALE_ARTIFACT', retryable: false,
-  });
-  const persisted = lifecycleGapHelpers.persistRegisteredAdapterResponse(fixture, reconcilingEvent, stale);
-  assert.equal(persisted.ok, true);
-  assert.equal(persisted.event.delivery.status, 'terminal');
-  assert.equal(persisted.event.delivery.error.code, 'STALE_ARTIFACT');
-  assert.deepEqual(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json')), metadataAfterProofBytes,
-    'stale closure replay must leave the canonical proof and watermark byte-identical');
-  assert.equal(readMetadata(fixture).lifecycle_delivery.last_applied_revision, 2);
-  assert.deepEqual(readRemote(fixture), remoteAfterProof,
-    'stale closure replay must not make more fake GitHub calls or effects');
-  assert.deepEqual(fs.readFileSync(closeoutPath), closeoutAfterProof,
-    'stale closure replay must not rerun local closeout mutation');
-  assert.deepEqual(readMetadata(fixture).github_issue.tasklist, proof);
-  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 2);
+  assertStaleClosureProofReplayState(fixture, committedEvent, reconcilingEvent, stale,
+    metadataBefore, metadataAfterProofBytes, remoteAfterProof, closeoutPath, closeoutAfterProof, proof);
 });
 
 test('plan-closed resolves intact spec refs against selected roots in noncanonical plan directories', (t) => {
@@ -187,33 +200,8 @@ test('plan-closed resolves intact spec refs against selected roots in noncanonic
   assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), true);
 });
 
-test('plan-closed rejects stale selected spec refs despite a matching-hash inferred sibling decoy', (t) => {
-  const fixture = createFixture(t);
-  const committedEvent = commitPlanClosedEventWithNoncanonicalPlanDirectory(fixture);
-  const specRef = committedEvent.artifact_refs.find((ref) => ref.root === 'spec');
-  const decoyPath = path.join(fixture.root, 'spec', PLAN_ID, specRef.path);
-  const selectedArtifactPath = path.join(fixture.specDir, specRef.path);
-  const metadataBefore = readMetadata(fixture);
-  const remoteBefore = readRemote(fixture);
-  const closeoutPath = path.join(fixture.planDir, 'closeout.md');
-
-  writeFile(decoyPath, fixture.approvedSpec);
-  assert.equal(sha256(fs.readFileSync(decoyPath)), specRef.sha256,
-    'the decoy at the old inferred sibling must match the committed digest');
-  writeFile(selectedArtifactPath, `${fixture.approvedSpec}Changed after closure commit.\n`);
-  assert.notEqual(sha256(fs.readFileSync(selectedArtifactPath)), specRef.sha256,
-    'the selected spec-root ref must be stale at delivery');
-  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 2);
-  assert.equal(metadataBefore.github_issue.tasklist, undefined);
-  assert.equal(fs.existsSync(closeoutPath), false);
-
-  const drain = assertCliOk(runCore(fixture, [
-    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
-  ]), 'public drain with a stale selected-root ref and matching-hash sibling decoy');
-  const delivery = drain.deliveries.find(({ event_id }) => event_id === committedEvent.event_id);
-  const journalEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
-  const metadataAfter = readMetadata(fixture);
-
+function assertStaleSelectedSpecRootState(state) {
+  const { fixture, committedEvent, delivery, journalEvent, metadataBefore, metadataAfter, remoteBefore, closeoutPath } = state;
   assert.deepEqual({
     delivery: delivery && {
       event_id: delivery.event_id,
@@ -253,4 +241,36 @@ test('plan-closed rejects stale selected spec refs despite a matching-hash infer
     closureProofWritten: false,
     closeoutExists: false,
   }, 'the selected root, not a matching decoy, must validate every committed spec ref before effects');
+}
+
+test('plan-closed rejects stale selected spec refs despite a matching-hash inferred sibling decoy', (t) => {
+  const fixture = createFixture(t);
+  const committedEvent = commitPlanClosedEventWithNoncanonicalPlanDirectory(fixture);
+  const specRef = committedEvent.artifact_refs.find((ref) => ref.root === 'spec');
+  const decoyPath = path.join(fixture.root, 'spec', PLAN_ID, specRef.path);
+  const selectedArtifactPath = path.join(fixture.specDir, specRef.path);
+  const metadataBefore = readMetadata(fixture);
+  const remoteBefore = readRemote(fixture);
+  const closeoutPath = path.join(fixture.planDir, 'closeout.md');
+
+  writeFile(decoyPath, fixture.approvedSpec);
+  assert.equal(sha256(fs.readFileSync(decoyPath)), specRef.sha256,
+    'the decoy at the old inferred sibling must match the committed digest');
+  writeFile(selectedArtifactPath, `${fixture.approvedSpec}Changed after closure commit.\n`);
+  assert.notEqual(sha256(fs.readFileSync(selectedArtifactPath)), specRef.sha256,
+    'the selected spec-root ref must be stale at delivery');
+  assert.equal(metadataBefore.lifecycle_delivery.last_applied_revision, 2);
+  assert.equal(metadataBefore.github_issue.tasklist, undefined);
+  assert.equal(fs.existsSync(closeoutPath), false);
+
+  const drain = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ]), 'public drain with a stale selected-root ref and matching-hash sibling decoy');
+  const delivery = drain.deliveries.find(({ event_id }) => event_id === committedEvent.event_id);
+  const journalEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
+  const metadataAfter = readMetadata(fixture);
+
+  assertStaleSelectedSpecRootState({
+    fixture, committedEvent, delivery, journalEvent, metadataBefore, metadataAfter, remoteBefore, closeoutPath,
+  });
 });

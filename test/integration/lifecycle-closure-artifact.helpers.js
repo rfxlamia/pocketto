@@ -41,11 +41,16 @@ function assertClosureArtifactStateIsTerminal(t, artifactState) {
   const drain = runCore(fixture, ['lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3']);
   const data = assertCliOk(drain, `public drain with ${artifactState} committed plan artifact`);
   const delivery = data.deliveries.find(({ event_id }) => event_id === committedEvent.event_id);
-  const journal = readLifecycle(fixture);
-  const deliveredEvent = journal.events.find(({ event_id }) => event_id === committedEvent.event_id);
+  const deliveredEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
   const metadataAfter = JSON.parse(fs.readFileSync(path.join(fixture.specDir, '.pocket-meta.json'), 'utf8'));
   const remoteAfter = readRemote(fixture);
 
+  assertTerminalClosureArtifactState(artifactState, committedEvent, delivery, deliveredEvent,
+    remoteBefore, remoteAfter, metadataBefore, metadataAfter, closeoutExistedBefore, closeoutPath);
+}
+
+function assertTerminalClosureArtifactState(artifactState, committedEvent, delivery, deliveredEvent,
+  remoteBefore, remoteAfter, metadataBefore, metadataAfter, closeoutExistedBefore, closeoutPath) {
   assert.deepEqual({
     delivery: delivery && {
       event_id: delivery.event_id,
@@ -221,6 +226,12 @@ function assertClosureSymlinkIsTerminal(t, targetKind) {
   const delivery = drain.deliveries.find(({ event_id }) => event_id === committedEvent.event_id);
   const journalEvent = readLifecycle(fixture).events.find(({ event_id }) => event_id === committedEvent.event_id);
   const metadataAfter = readMetadata(fixture);
+  assertTerminalClosureSymlinkState(targetKind, committedEvent, delivery, journalEvent,
+    fixture, remoteBefore, metadataBefore, metadataAfter, closeoutPath);
+}
+
+function assertTerminalClosureSymlinkState(targetKind, committedEvent, delivery, journalEvent,
+  fixture, remoteBefore, metadataBefore, metadataAfter, closeoutPath) {
   assert.deepEqual({
     delivery: delivery && {
       event_id: delivery.event_id,

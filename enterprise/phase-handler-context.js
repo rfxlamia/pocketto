@@ -26,20 +26,46 @@ function transientLifecycleIo(label, error) {
     });
 }
 
+function resolvePhysicalPlanRoot(planDir, label) {
+  try {
+    const root = fs.realpathSync(planDir);
+    if (!fs.statSync(root).isDirectory()) throw new Error('plan root is not a directory');
+    return root;
+  } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) throw error;
+    throw invalidPlanArtifactPath(label);
+  }
+}
+
+function resolveMissingPlanArtifact(root, candidate, label, allowMissing, missingError) {
+  let ancestor = path.dirname(candidate);
+  let physicalAncestor;
+  while (!physicalAncestor) {
+    try {
+      physicalAncestor = fs.realpathSync(ancestor);
+    } catch (ancestorError) {
+      if (enterpriseMeta.isTransientIoError(ancestorError)) throw ancestorError;
+      if (!ancestorError || !['ENOENT', 'ENOTDIR'].includes(ancestorError.code)) {
+        throw invalidPlanArtifactPath(label);
+      }
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) throw invalidPlanArtifactPath(label);
+      ancestor = parent;
+    }
+  }
+  if (!isInside(root, physicalAncestor) || !fs.statSync(physicalAncestor).isDirectory()) {
+    throw invalidPlanArtifactPath(label);
+  }
+  if (allowMissing) return null;
+  throw missingError;
+}
+
 function resolvePlanArtifactPath(planDir, relative, label, { allowMissing = false } = {}) {
   if (typeof relative !== 'string' || relative.length === 0 || path.isAbsolute(relative)) {
     throw invalidPlanArtifactPath(label);
   }
 
-  let root;
-  try {
-    root = fs.realpathSync(planDir);
-    if (!fs.statSync(root).isDirectory()) throw new Error('plan root is not a directory');
-  } catch (error) {
-    if (enterpriseMeta.isTransientIoError(error)) throw error;
-    throw invalidPlanArtifactPath(label);
-  }
-
+  const root = resolvePhysicalPlanRoot(planDir, label);
   const candidate = path.resolve(root, relative);
   if (!isInside(root, candidate)) throw invalidPlanArtifactPath(label);
 
@@ -47,25 +73,7 @@ function resolvePlanArtifactPath(planDir, relative, label, { allowMissing = fals
     fs.lstatSync(candidate);
   } catch (error) {
     if (error && error.code === 'ENOENT') {
-      let ancestor = path.dirname(candidate);
-      let physicalAncestor;
-      while (!physicalAncestor) {
-        try {
-          physicalAncestor = fs.realpathSync(ancestor);
-        } catch (ancestorError) {
-          if (enterpriseMeta.isTransientIoError(ancestorError)) throw ancestorError;
-          if (!ancestorError || !['ENOENT', 'ENOTDIR'].includes(ancestorError.code)) {
-            throw invalidPlanArtifactPath(label);
-          }
-          const parent = path.dirname(ancestor);
-          if (parent === ancestor) throw invalidPlanArtifactPath(label);
-          ancestor = parent;
-        }
-      }
-      if (!isInside(root, physicalAncestor) || !fs.statSync(physicalAncestor).isDirectory()) {
-        throw invalidPlanArtifactPath(label);
-      }
-      if (allowMissing) return null;
+      return resolveMissingPlanArtifact(root, candidate, label, allowMissing, error);
     }
     throw error;
   }
@@ -116,10 +124,7 @@ function resolveLifecycleFile(root, candidate) {
   return physical;
 }
 
-function loadContext(event, options = {}) {
-  if (!event || typeof event.plan_id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(event.plan_id)) {
-    throw new PhaseHandlerError('PHASE_PLAN_IDENTITY_MISMATCH', 'Lifecycle context requires a normalized event plan identity.');
-  }
+function resolveRegisteredRoot(options) {
   if (typeof options.projectRoot !== 'string' || !path.isAbsolute(options.projectRoot)) {
     throw new PhaseHandlerError('PHASE_PROJECT_ROOT_REQUIRED', 'Lifecycle context requires the explicit absolute registered project root.');
   }
@@ -132,22 +137,20 @@ function loadContext(event, options = {}) {
     if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('registered project root', error);
     throw new PhaseHandlerError('PHASE_PROJECT_ROOT_INVALID', 'Registered project root must resolve to an accessible directory.');
   }
+  return { registeredRoot, root };
+}
 
-  const specCandidate = path.resolve(registeredRoot, 'docs', 'pocket', 'spec', event.plan_id);
-  const specPath = resolveLifecyclePath(root, registeredRoot, specCandidate, 'spec directory');
-  const specDir = specPath.physical;
-  const expectedSpecDir = path.resolve(root, 'docs', 'pocket', 'spec', event.plan_id);
-  if (specDir !== expectedSpecDir) {
-    throw new PhaseHandlerError('PHASE_SPEC_DIR_MISMATCH', 'Lifecycle spec directory must resolve to the exact selected plan directory.');
-  }
+function readLifecycleDocument(root, specDir) {
   const lifecyclePath = resolveLifecycleFile(root, path.join(specDir, 'lifecycle.json'));
-  let lifecycle;
   try {
-    lifecycle = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+    return JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
   } catch (error) {
     if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('lifecycle evidence', error);
     throw new PhaseHandlerError('PHASE_LIFECYCLE_INVALID', `Lifecycle evidence is missing or malformed: ${safeMessage(error)}`);
   }
+}
+
+function validateLifecycleContext(event, options, root, registeredRoot, specDir, lifecycle) {
   if (!lifecycle || lifecycle.schema !== 1 || !lifecycle.plan || lifecycle.plan.plan_id !== event.plan_id) {
     throw new PhaseHandlerError('PHASE_PLAN_IDENTITY_MISMATCH', 'Lifecycle metadata does not identify this event plan.');
   }
@@ -170,6 +173,22 @@ function loadContext(event, options = {}) {
     throw new PhaseHandlerError('PHASE_BRANCH_REQUIRED', 'Lifecycle metadata does not contain the captured plan branch.');
   }
   return { root, specDir, planDir: recordedPlanDir.physical, branch: lifecycle.plan.branch, lifecycle };
+}
+
+function loadContext(event, options = {}) {
+  if (!event || typeof event.plan_id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(event.plan_id)) {
+    throw new PhaseHandlerError('PHASE_PLAN_IDENTITY_MISMATCH', 'Lifecycle context requires a normalized event plan identity.');
+  }
+  const { registeredRoot, root } = resolveRegisteredRoot(options);
+  const specCandidate = path.resolve(registeredRoot, 'docs', 'pocket', 'spec', event.plan_id);
+  const specPath = resolveLifecyclePath(root, registeredRoot, specCandidate, 'spec directory');
+  const specDir = specPath.physical;
+  const expectedSpecDir = path.resolve(root, 'docs', 'pocket', 'spec', event.plan_id);
+  if (specDir !== expectedSpecDir) {
+    throw new PhaseHandlerError('PHASE_SPEC_DIR_MISMATCH', 'Lifecycle spec directory must resolve to the exact selected plan directory.');
+  }
+  const lifecycle = readLifecycleDocument(root, specDir);
+  return validateLifecycleContext(event, options, root, registeredRoot, specDir, lifecycle);
 }
 
 

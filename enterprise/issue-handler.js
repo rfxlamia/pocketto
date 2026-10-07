@@ -39,11 +39,7 @@ function handleSpecApproved(event, opts = {}) {
     return resultError(event, 'ISSUE_NO_PROJECT', 'A project root is required to resolve the approved specification.');
   }
   const spec = specContext(event, projectRoot);
-  if (spec.error) {
-    const { code, message, retryable } = spec.error;
-    const resolution = retryable ? 'Retry delivery.' : 'Verify the committed spec artifact before retrying.';
-    return resultError(event, code, `${message} ${resolution}`, retryable);
-  }
+  if (spec.error) return mapSpecArtifactError(event, spec.error);
   if (event.delivery.status === 'succeeded') {
     const metadataError = preflightIssueMetadata(event, spec, false);
     return metadataError || replayIssueProof(event, spec);
@@ -80,6 +76,12 @@ function handleSpecApproved(event, opts = {}) {
   if (created.error) return mapGhFailure(event, 'Issue creation or validation', created.error);
   if (created.manual) return resultError(event, 'ISSUE_MANUAL_RESOLUTION', `${created.manual}; verify the target manually before retrying.`);
   return proveIssue(event, created.issue, spec, repo, clock);
+}
+
+function mapSpecArtifactError(event, error) {
+  const { code, message, retryable } = error;
+  const resolution = retryable ? 'Retry delivery.' : 'Verify the committed spec artifact before retrying.';
+  return resultError(event, code, `${message} ${resolution}`, retryable);
 }
 
 function preflightIssueMetadata(event, spec, allowMissing) {

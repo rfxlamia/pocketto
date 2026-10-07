@@ -52,11 +52,8 @@ function preparePendingClosureEvent(fixture) {
   return event;
 }
 
-function installRegisteredPathFaultGate(fixture, { method, targetPath, readWatchPath = '' }) {
-  const hookPath = path.join(fixture.root, 'registered-enterprise-context-fault.js');
-  const hitPath = path.join(fixture.root, 'registered-enterprise-context-fault.json');
-  const readTracePath = path.join(fixture.root, 'registered-enterprise-context-reads.jsonl');
-  fs.writeFileSync(hookPath, `const fs = require('node:fs');
+function registeredPathFaultHookHeader() {
+  return `const fs = require('node:fs');
 const path = require('node:path');
 const originalRealpathSync = fs.realpathSync;
 const originalStatSync = fs.statSync;
@@ -68,7 +65,11 @@ const expectedDispatch = path.resolve(process.env.LIFECYCLE_CONTEXT_FAULT_DISPAT
 const watchedPath = process.env.LIFECYCLE_CONTEXT_READ_WATCH
   ? path.resolve(process.env.LIFECYCLE_CONTEXT_READ_WATCH) : null;
 let injected = false;
-function fromRegisteredEnterprise() {
+`;
+}
+
+function registeredPathFaultHookGuards() {
+  return `function fromRegisteredEnterprise() {
   return typeof process.argv[1] === 'string' && path.resolve(process.argv[1]) === expectedDispatch;
 }
 function shouldInject(method, target) {
@@ -84,7 +85,11 @@ function inject(method, target) {
   error.code = 'EIO';
   throw error;
 }
-fs.realpathSync = function(target, ...args) {
+`;
+}
+
+function registeredPathFaultHookOverrides() {
+  return `fs.realpathSync = function(target, ...args) {
   if (shouldInject('realpathSync', target)) return inject('realpathSync', target);
   return originalRealpathSync.call(this, target, ...args);
 };
@@ -101,7 +106,20 @@ fs.readFileSync = function(target, ...args) {
   }
   return originalReadFileSync.call(this, target, ...args);
 };
-`);
+`;
+}
+
+function registeredPathFaultHookSource() {
+  return registeredPathFaultHookHeader()
+    + registeredPathFaultHookGuards()
+    + registeredPathFaultHookOverrides();
+}
+
+function installRegisteredPathFaultGate(fixture, { method, targetPath, readWatchPath = '' }) {
+  const hookPath = path.join(fixture.root, 'registered-enterprise-context-fault.js');
+  const hitPath = path.join(fixture.root, 'registered-enterprise-context-fault.json');
+  const readTracePath = path.join(fixture.root, 'registered-enterprise-context-reads.jsonl');
+  fs.writeFileSync(hookPath, registeredPathFaultHookSource());
   fs.rmSync(hitPath, { force: true });
   fs.writeFileSync(readTracePath, '');
   return {

@@ -66,6 +66,47 @@ test('phase-complete retries recorded plan-path realpath EIO before mutation, th
   assertWatermark(fixture, 2);
 });
 
+function assertRetryableLifecyclePathRealpathFailure(fixture, event, faultGate, response,
+  externalPath, lifecycleBytes, remoteBefore, metadataBefore) {
+  assertRegisteredFault(faultGate, response);
+  assert.equal(fs.readFileSync(faultGate.readTracePath, 'utf8'), '',
+    'the registered Enterprise process must not read lifecycle.json after realpath failed');
+  assert.equal(response.event_id, event.event_id);
+  assert.equal(response.status, 'retryable');
+  assert.equal(response.error.retryable, true);
+  assert.equal(response.error.code, 'PHASE_LIFECYCLE_UNAVAILABLE');
+  assert.deepEqual(fs.readFileSync(externalPath), lifecycleBytes, 'the external lifecycle target must remain unchanged');
+  assert.deepEqual(readRemote(fixture), remoteBefore, 'an unverified lifecycle path must not reach GitHub');
+  assert.deepEqual(readMetadataBytes(fixture), metadataBefore, 'failed lifecycle validation must not write proof or watermark');
+  assert.equal(nestedValue(readMetadata(fixture), PHASE_PROOF_PATH), undefined);
+  assertEventAttempt(fixture, event.event_id, 'pending', 0);
+  assertWatermark(fixture, 1);
+}
+
+function assertTerminalExternalLifecycleSymlink(fixture, event, terminalPathGate, unsafe,
+  remoteBefore, metadataBefore) {
+  assert.equal(unsafe.event_id, event.event_id);
+  assert.equal(unsafe.status, 'terminal');
+  assert.equal(unsafe.error.retryable, false);
+  assert.equal(unsafe.error.code, 'PHASE_LIFECYCLE_PATH_INVALID');
+  assert.equal(fs.existsSync(terminalPathGate.hitPath), false, 'the deterministic symlink rejection must not inject an I/O failure');
+  assert.equal(fs.readFileSync(terminalPathGate.readTracePath, 'utf8'), '',
+    'the registered Enterprise process must reject a resolved external lifecycle target before reading it');
+  assert.deepEqual(readRemote(fixture), remoteBefore);
+  assert.deepEqual(readMetadataBytes(fixture), metadataBefore);
+  assertEventAttempt(fixture, event.event_id, 'pending', 0);
+  assertWatermark(fixture, 1);
+}
+
+function assertLifecyclePathRecovery(fixture, event, remoteBefore, retried) {
+  assert.deepEqual(retried.deliveries.map(({ event_id, status }) => ({ event_id, status })), [
+    { event_id: event.event_id, status: 'succeeded' },
+  ]);
+  assertEventAttempt(fixture, event.event_id, 'succeeded', 1);
+  assertPhaseProofAndSingleRemoteEffect(fixture, event.event_id, remoteBefore);
+  assertWatermark(fixture, 2);
+}
+
 test('phase-complete fails closed on lifecycle realpath EIO without reading an external symlink target', (t) => {
   const fixture = createFixture(t);
   const event = preparePendingPhaseEvent(fixture);
@@ -87,19 +128,8 @@ test('phase-complete fails closed on lifecycle realpath EIO without reading an e
   const metadataBefore = readMetadataBytes(fixture);
   const response = invokeRegistered(fixture, event, faultGate.environment);
 
-  assertRegisteredFault(faultGate, response);
-  assert.equal(fs.readFileSync(faultGate.readTracePath, 'utf8'), '',
-    'the registered Enterprise process must not read lifecycle.json after realpath failed');
-  assert.equal(response.event_id, event.event_id);
-  assert.equal(response.status, 'retryable');
-  assert.equal(response.error.retryable, true);
-  assert.equal(response.error.code, 'PHASE_LIFECYCLE_UNAVAILABLE');
-  assert.deepEqual(fs.readFileSync(externalPath), lifecycleBytes, 'the external lifecycle target must remain unchanged');
-  assert.deepEqual(readRemote(fixture), remoteBefore, 'an unverified lifecycle path must not reach GitHub');
-  assert.deepEqual(readMetadataBytes(fixture), metadataBefore, 'failed lifecycle validation must not write proof or watermark');
-  assert.equal(nestedValue(readMetadata(fixture), PHASE_PROOF_PATH), undefined);
-  assertEventAttempt(fixture, event.event_id, 'pending', 0);
-  assertWatermark(fixture, 1);
+  assertRetryableLifecyclePathRealpathFailure(fixture, event, faultGate, response,
+    externalPath, lifecycleBytes, remoteBefore, metadataBefore);
 
   const terminalPathGate = installRegisteredPathFaultGate(fixture, {
     method: 'statSync',
@@ -107,27 +137,13 @@ test('phase-complete fails closed on lifecycle realpath EIO without reading an e
     readWatchPath: lifecyclePath,
   });
   const unsafe = invokeRegistered(fixture, event, terminalPathGate.environment);
-  assert.equal(unsafe.event_id, event.event_id);
-  assert.equal(unsafe.status, 'terminal');
-  assert.equal(unsafe.error.retryable, false);
-  assert.equal(unsafe.error.code, 'PHASE_LIFECYCLE_PATH_INVALID');
-  assert.equal(fs.existsSync(terminalPathGate.hitPath), false, 'the deterministic symlink rejection must not inject an I/O failure');
-  assert.equal(fs.readFileSync(terminalPathGate.readTracePath, 'utf8'), '',
-    'the registered Enterprise process must reject a resolved external lifecycle target before reading it');
-  assert.deepEqual(readRemote(fixture), remoteBefore);
-  assert.deepEqual(readMetadataBytes(fixture), metadataBefore);
-  assertEventAttempt(fixture, event.event_id, 'pending', 0);
-  assertWatermark(fixture, 1);
+  assertTerminalExternalLifecycleSymlink(fixture, event, terminalPathGate, unsafe,
+    remoteBefore, metadataBefore);
 
   fs.rmSync(lifecyclePath);
   fs.writeFileSync(lifecyclePath, lifecycleBytes);
   const retried = assertCliOk(drain(fixture), 'registered phase delivery after lifecycle-path recovery');
-  assert.deepEqual(retried.deliveries.map(({ event_id, status }) => ({ event_id, status })), [
-    { event_id: event.event_id, status: 'succeeded' },
-  ]);
-  assertEventAttempt(fixture, event.event_id, 'succeeded', 1);
-  assertPhaseProofAndSingleRemoteEffect(fixture, event.event_id, remoteBefore);
-  assertWatermark(fixture, 2);
+  assertLifecyclePathRecovery(fixture, event, remoteBefore, retried);
 });
 
 test('registered phase-complete keeps missing and malformed lifecycle documents terminal and read-only', async (t) => {

@@ -16,6 +16,42 @@ const { PhaseHandlerError, phaseFailure, safeMessage } = require('./phase-handle
 const RECONCILABLE_DELIVERY_STATUSES = new Set(['claimed', 'pending', 'retryable', 'reconciling']);
 const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
+function upsertPhaseSummary(repo, pr, phase, selectedPr, options) {
+  const marker = identity.markerFor(phase.number);
+  const commentEndpoint = `repos/${repo.nameWithOwner}/issues/${pr.number}/comments`;
+  const summary = summaryBody({
+    phase: phase.number,
+    verdicts: phase.verdicts,
+    prLinked: true,
+  });
+  const existingSummaries = selectedPr.comments.filter((comment) =>
+    typeof comment.body === 'string' && comment.body.split(/\r?\n/, 1)[0] === marker);
+  if (existingSummaries.length !== 1 || existingSummaries[0].body !== summary) {
+    github.upsertSummary(commentEndpoint, selectedPr.comments, marker, summary, options);
+  }
+  return marker;
+}
+
+function reconcilePhase(event, context, phase, options) {
+  const repo = resolveRepository(options);
+  const meta = enterpriseMeta.readMetaFor(context.specDir, metaContextFor(context));
+  const issue = resolveOwnedIssue(event, context, repo, options);
+  const selectedPr = resolvePhasePr(context, phase, repo, options);
+  const pr = selectedPr.pr;
+  const marker = upsertPhaseSummary(repo, pr, phase, selectedPr, options);
+  const threads = github.listReviewThreads(repo, pr.number, options);
+  const fingerprints = reconcileFindings({
+    repo,
+    pr,
+    threads,
+    prior: readPriorFingerprints(meta, phase.key),
+    findings: phase.findings,
+    options,
+    onResolveFailure: (records) => persistPhaseProof(event, context, issue, phase, pr, marker, records),
+  });
+  return persistPhaseProof(event, context, issue, phase, pr, marker, fingerprints);
+}
+
 function handlePhaseComplete(event, options = {}) {
   const eventId = event && typeof event.event_id === 'string' ? event.event_id : 'unknown-event';
   try {
@@ -35,36 +71,7 @@ function handlePhaseComplete(event, options = {}) {
     }
     preflightPhaseMetadata(context);
 
-    const repo = resolveRepository(options);
-    const meta = enterpriseMeta.readMetaFor(context.specDir, metaContextFor(context));
-    const issue = resolveOwnedIssue(event, context, repo, options);
-    const selectedPr = resolvePhasePr(context, phase, repo, options);
-    const pr = selectedPr.pr;
-    const marker = identity.markerFor(phase.number);
-    const commentEndpoint = `repos/${repo.nameWithOwner}/issues/${pr.number}/comments`;
-    const summary = summaryBody({
-      phase: phase.number,
-      verdicts: phase.verdicts,
-      prLinked: true,
-    });
-    const existingSummaries = selectedPr.comments.filter((comment) =>
-      typeof comment.body === 'string' && comment.body.split(/\r?\n/, 1)[0] === marker);
-    if (existingSummaries.length !== 1 || existingSummaries[0].body !== summary) {
-      github.upsertSummary(commentEndpoint, selectedPr.comments, marker, summary, options);
-    }
-
-    const threads = github.listReviewThreads(repo, pr.number, options);
-    const fingerprints = reconcileFindings({
-      repo,
-      pr,
-      threads,
-      prior: readPriorFingerprints(meta, phase.key),
-      findings: phase.findings,
-      options,
-      onResolveFailure: (records) => persistPhaseProof(event, context, issue, phase, pr, marker, records),
-    });
-
-    const proofHash = persistPhaseProof(event, context, issue, phase, pr, marker, fingerprints);
+    const proofHash = reconcilePhase(event, context, phase, options);
     return {
       event_id: eventId,
       status: 'succeeded',

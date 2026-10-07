@@ -70,23 +70,8 @@ test('plan-closed keeps escaping, dangling, and ELOOP artifact symlinks terminal
   }
 });
 
-test('plan-closed retries EIO during committed artifact validation and recovers', (t) => {
-  const fixture = createFixture(t);
-  const committedEvent = commitPlanClosedEvent(fixture);
-  const artifactPath = path.join(fixture.planDir, PHASE_PATH);
-  const faultGate = installRegisteredEnterpriseReadFaultGate(fixture);
-  const metadataBefore = readMetadata(fixture);
-  const remoteBefore = readRemote(fixture);
-  const failedAttempt = runCore(fixture, [
-    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
-  ], {
-    ...fixture.env,
-    NODE_OPTIONS: [fixture.env.NODE_OPTIONS, `--require=${faultGate.hookPath}`].filter(Boolean).join(' '),
-    LIFECYCLE_ENTERPRISE_READ_FAILURE_PATH: artifactPath,
-    LIFECYCLE_ENTERPRISE_DISPATCH_PATH: faultGate.dispatchPath,
-    LIFECYCLE_ENTERPRISE_READ_FAILURE_HIT_FILE: faultGate.hitPath,
-  });
-  const failure = assertCliOk(failedAttempt, 'public drain after registered closure artifact read EIO');
+function assertClosureArtifactEioFailure(fixture, artifactPath, committedEvent, faultGate, failedAttempt, failure,
+  remoteBefore, metadataBefore) {
   assert.equal(fs.existsSync(faultGate.hitPath), true,
     `registered closure artifact read must inject EIO: ${failedAttempt.stdout}${failedAttempt.stderr}`);
   const injected = JSON.parse(fs.readFileSync(faultGate.hitPath, 'utf8'));
@@ -111,13 +96,9 @@ test('plan-closed retries EIO during committed artifact validation and recovers'
   assert.deepEqual(readMetadata(fixture), metadataBefore,
     'artifact EIO must not write closure proof or advance the watermark');
   assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), false);
+}
 
-  const retry = assertCliOk(runCore(fixture, [
-    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
-  ], {
-    ...fixture.env,
-    POCKETTO_LIFECYCLE_NOW: new Date(Date.parse(FIXED_NOW) + 1001).toISOString(),
-  }), 'public retry after closure artifact EIO recovery');
+function assertClosureArtifactEioRecovery(fixture, committedEvent, retry, remoteBefore) {
   assert.deepEqual(deliverySummary(retry, committedEvent.event_id), {
     event_id: committedEvent.event_id,
     revision: committedEvent.revision,
@@ -129,4 +110,33 @@ test('plan-closed retries EIO during committed artifact validation and recovers'
   assert.equal(readMetadata(fixture).lifecycle_delivery.last_applied_revision, 3);
   assert.deepEqual(readRemote(fixture).effects.slice(remoteBefore.effects.length).map(({ kind }) => kind), ['tasklist-create']);
   assert.equal(fs.existsSync(path.join(fixture.planDir, 'closeout.md')), true);
+}
+
+test('plan-closed retries EIO during committed artifact validation and recovers', (t) => {
+  const fixture = createFixture(t);
+  const committedEvent = commitPlanClosedEvent(fixture);
+  const artifactPath = path.join(fixture.planDir, PHASE_PATH);
+  const faultGate = installRegisteredEnterpriseReadFaultGate(fixture);
+  const metadataBefore = readMetadata(fixture);
+  const remoteBefore = readRemote(fixture);
+  const failedAttempt = runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], {
+    ...fixture.env,
+    NODE_OPTIONS: [fixture.env.NODE_OPTIONS, `--require=${faultGate.hookPath}`].filter(Boolean).join(' '),
+    LIFECYCLE_ENTERPRISE_READ_FAILURE_PATH: artifactPath,
+    LIFECYCLE_ENTERPRISE_DISPATCH_PATH: faultGate.dispatchPath,
+    LIFECYCLE_ENTERPRISE_READ_FAILURE_HIT_FILE: faultGate.hitPath,
+  });
+  const failure = assertCliOk(failedAttempt, 'public drain after registered closure artifact read EIO');
+  assertClosureArtifactEioFailure(fixture, artifactPath, committedEvent, faultGate, failedAttempt, failure,
+    remoteBefore, metadataBefore);
+
+  const retry = assertCliOk(runCore(fixture, [
+    'lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3',
+  ], {
+    ...fixture.env,
+    POCKETTO_LIFECYCLE_NOW: new Date(Date.parse(FIXED_NOW) + 1001).toISOString(),
+  }), 'public retry after closure artifact EIO recovery');
+  assertClosureArtifactEioRecovery(fixture, committedEvent, retry, remoteBefore);
 });

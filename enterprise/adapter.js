@@ -89,6 +89,133 @@ function serializeResponse(input, expectedEventId) {
   return out;
 }
 
+function invalidEventResponse(eventId, eventValidation) {
+  const validationCode = typeof eventValidation.code === 'string' ? eventValidation.code : 'LIFECYCLE_INVALID_EVENT';
+  return serializeResponse({
+    event_id: eventId,
+    status: 'terminal',
+    error: {
+      code: 'ADAPTER_PROTOCOL_INVALID_EVENT',
+      retryable: false,
+      message: `Lifecycle event violates the neutral schema (${validationCode}); no handler or GitHub call ran.`,
+    },
+  }, eventId === 'unknown-event' ? undefined : eventId);
+}
+
+function validateIncomingEvent(event, eventId) {
+  let eventValidation;
+  try {
+    eventValidation = validateEvent(event);
+  } catch {
+    eventValidation = { ok: false, code: 'LIFECYCLE_INVALID_EVENT' };
+  }
+  return eventValidation.ok ? null : invalidEventResponse(eventId, eventValidation);
+}
+
+function registrationForProject(projectRoot, protocolError) {
+  let registration;
+  try {
+    registration = require('./registration');
+  } catch (err) {
+    return { response: protocolError(
+      'ADAPTER_PROTOCOL_ERROR',
+      `Adapter registration boundary is unavailable: ${redactSecrets(err && err.message ? err.message : String(err))}`
+    ) };
+  }
+  const loaded = registration.loadRegistration(projectRoot);
+  if (!loaded.ok) {
+    return { response: protocolError(
+      loaded.code === 'ENTERPRISE_ADAPTER_CONTRACT_MISMATCH' ? 'ADAPTER_CONTRACT_MISMATCH' : 'ADAPTER_PROTOCOL_REGISTRATION',
+      `${loaded.message} The event stays pending/retryable and no handler or GitHub call ran.`
+    ) };
+  }
+  return { record: loaded.record };
+}
+
+function resolveEventHandler(eventType, record, opts, protocolError) {
+  if (!record.events.includes(eventType)) {
+    return { response: protocolError(
+      'ADAPTER_EVENT_NOT_ALLOWED',
+      `Event type "${eventType}" is not in the adapter registration allowlist. Update the registration; the event stays pending/retryable and no handler or GitHub call ran.`
+    ) };
+  }
+  if (!Object.prototype.hasOwnProperty.call(HANDLERS, eventType)) {
+    return { response: protocolError(
+      'ADAPTER_PROTOCOL_NO_HANDLER',
+      `No Enterprise handler is registered for event type "${eventType}". The event stays pending and no GitHub call ran.`
+    ) };
+  }
+  const handlers = opts.handlers || {};
+  const handler = handlers[eventType];
+  if (typeof handler !== 'function') {
+    return { response: protocolError(
+      'ADAPTER_PROTOCOL_NO_HANDLER',
+      `Enterprise handler "${HANDLERS[eventType]}" is unavailable for event type "${eventType}". The event stays pending and no GitHub call ran.`
+    ) };
+  }
+  return { handler };
+}
+
+function prepareLifecycleEvent(event, lifecycleDelivery) {
+  let handlerEvent = event;
+  let deliveryState = null;
+  if (lifecycleDelivery && typeof lifecycleDelivery.prepare === 'function') {
+    const prepared = lifecycleDelivery.prepare(event);
+    if (prepared && prepared.response) return { response: prepared.response };
+    if (prepared && prepared.event) handlerEvent = prepared.event;
+    deliveryState = prepared && prepared.state;
+  }
+  return { handlerEvent, deliveryState };
+}
+
+function hasValidTypedHandlerClassification(error) {
+  return error instanceof PhaseHandlerError
+    && typeof error.code === 'string'
+    && error.code.length > 0
+    && ((error.status === 'terminal' && error.retryable === false)
+      || (error.status === 'retryable' && error.retryable === true));
+}
+
+function invokeHandler(handler, handlerEvent, projectRoot, record, ghRunner, eventId, protocolError) {
+  try {
+    return { produced: handler(handlerEvent, { projectRoot, record, ghRunner }) };
+  } catch (err) {
+    if (hasValidTypedHandlerClassification(err)) {
+      return { response: serializeResponse({
+        event_id: eventId,
+        status: err.status,
+        error: {
+          code: err.code,
+          retryable: err.retryable,
+          message: `Enterprise context validation failed before remote mutation: ${redactSecrets(err.message)}`,
+        },
+      }, eventId) };
+    }
+    return { response: protocolError(
+      'ADAPTER_PROTOCOL_HANDLER_FAILED',
+      `Enterprise handler failed before remote mutation completed: ${redactSecrets(err && err.message ? err.message : String(err))}`
+    ) };
+  }
+}
+
+function completeHandlerResponse(produced, event, eventId, lifecycleDelivery, deliveryState, protocolError) {
+  // Serialize through the response boundary: malformed handler output can
+  // never leak as success — it throws, which the caller treats as retryable.
+  try {
+    const response = serializeResponse(produced, eventId);
+    if (lifecycleDelivery && typeof lifecycleDelivery.complete === 'function') {
+      const completed = lifecycleDelivery.complete(event, response, deliveryState);
+      return serializeResponse(completed || response, eventId);
+    }
+    return response;
+  } catch (err) {
+    return protocolError(
+      'ADAPTER_PROTOCOL_MALFORMED_RESPONSE',
+      `Enterprise handler returned a malformed response: ${redactSecrets(err && err.message ? err.message : String(err))}`
+    );
+  }
+}
+
 // Compatibility boundary + explicit dispatch.
 //
 // Mirrors Core's registered-executable invocation contract: before any
@@ -107,24 +234,8 @@ function dispatchEvent(event, opts = {}) {
     error: { code, retryable: true, message },
   }, eventId === 'unknown-event' ? undefined : eventId);
 
-  let eventValidation;
-  try {
-    eventValidation = validateEvent(event);
-  } catch {
-    eventValidation = { ok: false, code: 'LIFECYCLE_INVALID_EVENT' };
-  }
-  if (!eventValidation.ok) {
-    const validationCode = typeof eventValidation.code === 'string' ? eventValidation.code : 'LIFECYCLE_INVALID_EVENT';
-    return serializeResponse({
-      event_id: eventId,
-      status: 'terminal',
-      error: {
-        code: 'ADAPTER_PROTOCOL_INVALID_EVENT',
-        retryable: false,
-        message: `Lifecycle event violates the neutral schema (${validationCode}); no handler or GitHub call ran.`,
-      },
-    }, eventId === 'unknown-event' ? undefined : eventId);
-  }
+  const invalidEvent = validateIncomingEvent(event, eventId);
+  if (invalidEvent) return invalidEvent;
 
   const expectedCoreContract = CORE_VERSION ? CORE_VERSION.CONTRACT : 3;
   const coreContract = opts.coreContract !== undefined ? opts.coreContract : expectedCoreContract;
@@ -143,98 +254,20 @@ function dispatchEvent(event, opts = {}) {
     );
   }
 
-  let registration;
-  try {
-    registration = require('./registration');
-  } catch (err) {
-    return protocolError(
-      'ADAPTER_PROTOCOL_ERROR',
-      `Adapter registration boundary is unavailable: ${redactSecrets(err && err.message ? err.message : String(err))}`
-    );
-  }
-  const loaded = registration.loadRegistration(projectRoot);
-  if (!loaded.ok) {
-    return protocolError(
-      loaded.code === 'ENTERPRISE_ADAPTER_CONTRACT_MISMATCH' ? 'ADAPTER_CONTRACT_MISMATCH' : 'ADAPTER_PROTOCOL_REGISTRATION',
-      `${loaded.message} The event stays pending/retryable and no handler or GitHub call ran.`
-    );
-  }
-  const record = loaded.record;
-
+  const registration = registrationForProject(projectRoot, protocolError);
+  if (registration.response) return registration.response;
   const eventType = event && typeof event.type === 'string' ? event.type : null;
-
-  if (!record.events.includes(eventType)) {
-    return protocolError(
-      'ADAPTER_EVENT_NOT_ALLOWED',
-      `Event type "${eventType}" is not in the adapter registration allowlist. Update the registration; the event stays pending/retryable and no handler or GitHub call ran.`
-    );
-  }
-  if (!Object.prototype.hasOwnProperty.call(HANDLERS, eventType)) {
-    return protocolError(
-      'ADAPTER_PROTOCOL_NO_HANDLER',
-      `No Enterprise handler is registered for event type "${eventType}". The event stays pending and no GitHub call ran.`
-    );
-  }
-
-  const handlers = opts.handlers || {};
-  const handler = handlers[eventType];
-  if (typeof handler !== 'function') {
-    return protocolError(
-      'ADAPTER_PROTOCOL_NO_HANDLER',
-      `Enterprise handler "${HANDLERS[eventType]}" is unavailable for event type "${eventType}". The event stays pending and no GitHub call ran.`
-    );
-  }
+  const selected = resolveEventHandler(eventType, registration.record, opts, protocolError);
+  if (selected.response) return selected.response;
 
   const lifecycleDelivery = opts.lifecycleDelivery;
-  let handlerEvent = event;
-  let deliveryState = null;
-  if (lifecycleDelivery && typeof lifecycleDelivery.prepare === 'function') {
-    const prepared = lifecycleDelivery.prepare(event);
-    if (prepared && prepared.response) return prepared.response;
-    if (prepared && prepared.event) handlerEvent = prepared.event;
-    deliveryState = prepared && prepared.state;
-  }
-
-  let produced;
-  try {
-    produced = handler(handlerEvent, { projectRoot, record, ghRunner: opts.ghRunner });
-  } catch (err) {
-    const hasValidTypedClassification = err instanceof PhaseHandlerError
-      && typeof err.code === 'string'
-      && err.code.length > 0
-      && ((err.status === 'terminal' && err.retryable === false)
-        || (err.status === 'retryable' && err.retryable === true));
-    if (hasValidTypedClassification) {
-      return serializeResponse({
-        event_id: eventId,
-        status: err.status,
-        error: {
-          code: err.code,
-          retryable: err.retryable,
-          message: `Enterprise context validation failed before remote mutation: ${redactSecrets(err.message)}`,
-        },
-      }, eventId);
-    }
-    return protocolError(
-      'ADAPTER_PROTOCOL_HANDLER_FAILED',
-      `Enterprise handler failed before remote mutation completed: ${redactSecrets(err && err.message ? err.message : String(err))}`
-    );
-  }
-  // Serialize through the response boundary: malformed handler output can
-  // never leak as success — it throws, which the caller treats as retryable.
-  try {
-    const response = serializeResponse(produced, eventId);
-    if (lifecycleDelivery && typeof lifecycleDelivery.complete === 'function') {
-      const completed = lifecycleDelivery.complete(event, response, deliveryState);
-      return serializeResponse(completed || response, eventId);
-    }
-    return response;
-  } catch (err) {
-    return protocolError(
-      'ADAPTER_PROTOCOL_MALFORMED_RESPONSE',
-      `Enterprise handler returned a malformed response: ${redactSecrets(err && err.message ? err.message : String(err))}`
-    );
-  }
+  const prepared = prepareLifecycleEvent(event, lifecycleDelivery);
+  if (prepared.response) return prepared.response;
+  const invocation = invokeHandler(selected.handler, prepared.handlerEvent, projectRoot,
+    registration.record, opts.ghRunner, eventId, protocolError);
+  if (invocation.response) return invocation.response;
+  return completeHandlerResponse(invocation.produced, event, eventId, lifecycleDelivery,
+    prepared.deliveryState, protocolError);
 }
 
 module.exports = { serializeResponse, buildError, ADAPTER_STATUSES, HANDLERS, dispatchEvent };

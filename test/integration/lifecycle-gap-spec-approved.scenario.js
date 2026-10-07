@@ -37,21 +37,7 @@ test('spec-approved proof-first recovery works before planning with two intact s
   }], 'proof-first replay must not rerun the real spec-approved handler');
 });
 
-test('spec-approved proof-first recovery retries ref EIO, then rejects stale ref 2', (t) => {
-  const scenario = preparePrePlanningSpecApprovedProofFirstScenario(t);
-  const secondRef = scenario.event.artifact_refs[1];
-  const secondArtifactPath = path.join(scenario.fixture.specDir, secondRef.path);
-  const committedBytes = fs.readFileSync(secondArtifactPath);
-  fs.writeFileSync(secondArtifactPath, Buffer.concat([committedBytes, Buffer.from('changed after proof persistence\n')]));
-  assert.notDeepEqual(fs.readFileSync(secondArtifactPath), committedBytes,
-    'only the second committed spec ref must be stale before replay');
-
-  const readFaultGate = installRegisteredEnterpriseReadFaultGate(scenario.fixture);
-  const transient = scenarioHelpers.deliverRegisteredEvent(scenario.fixture, scenario.reconcilingEvent, {
-    handlerTrace: scenario.handlerTrace,
-    readFaultGate,
-    readArtifactPath: secondArtifactPath,
-  });
+function assertTransientSpecArtifactReadFailure(scenario, transient, readFaultGate, secondArtifactPath) {
   assert.equal(transient.event_id, scenario.event.event_id);
   assert.equal(transient.status, 'retryable');
   assert.deepEqual(transient.error && { code: transient.error.code, retryable: transient.error.retryable }, {
@@ -69,10 +55,9 @@ test('spec-approved proof-first recovery retries ref EIO, then rejects stale ref
   assert.deepEqual(scenarioHelpers.readHandlerCalls(scenario.handlerTrace), [{
     event_id: scenario.event.event_id, revision: 1, status: 'claimed',
   }], 'a transient proof-first retry must not rerun the real spec-approved handler');
+}
 
-  const stale = scenarioHelpers.deliverRegisteredEvent(scenario.fixture, scenario.reconcilingEvent, {
-    handlerTrace: scenario.handlerTrace,
-  });
+function assertStaleSpecArtifactReplay(scenario, stale) {
   assert.equal(stale.event_id, scenario.event.event_id);
   assert.equal(stale.status, 'terminal');
   assert.deepEqual(stale.error && { code: stale.error.code, retryable: stale.error.retryable }, {
@@ -96,4 +81,27 @@ test('spec-approved proof-first recovery retries ref EIO, then rejects stale ref
   assert.deepEqual(scenarioHelpers.readHandlerCalls(scenario.handlerTrace), [{
     event_id: scenario.event.event_id, revision: 1, status: 'claimed',
   }], 'stale proof-first replay must not rerun the real spec-approved handler');
+}
+
+test('spec-approved proof-first recovery retries ref EIO, then rejects stale ref 2', (t) => {
+  const scenario = preparePrePlanningSpecApprovedProofFirstScenario(t);
+  const secondRef = scenario.event.artifact_refs[1];
+  const secondArtifactPath = path.join(scenario.fixture.specDir, secondRef.path);
+  const committedBytes = fs.readFileSync(secondArtifactPath);
+  fs.writeFileSync(secondArtifactPath, Buffer.concat([committedBytes, Buffer.from('changed after proof persistence\n')]));
+  assert.notDeepEqual(fs.readFileSync(secondArtifactPath), committedBytes,
+    'only the second committed spec ref must be stale before replay');
+
+  const readFaultGate = installRegisteredEnterpriseReadFaultGate(scenario.fixture);
+  const transient = scenarioHelpers.deliverRegisteredEvent(scenario.fixture, scenario.reconcilingEvent, {
+    handlerTrace: scenario.handlerTrace,
+    readFaultGate,
+    readArtifactPath: secondArtifactPath,
+  });
+  assertTransientSpecArtifactReadFailure(scenario, transient, readFaultGate, secondArtifactPath);
+
+  const stale = scenarioHelpers.deliverRegisteredEvent(scenario.fixture, scenario.reconcilingEvent, {
+    handlerTrace: scenario.handlerTrace,
+  });
+  assertStaleSpecArtifactReplay(scenario, stale);
 });
