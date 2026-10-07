@@ -85,6 +85,11 @@ function snapshotLocalState(specDir) {
       revision: event.revision,
       payload_hash: event.payload_hash,
       artifact_refs: event.artifact_refs,
+      delivery: {
+        status: event.delivery.status,
+        attempts: event.delivery.attempts,
+        error: event.delivery.error ?? null,
+      },
     })),
     files: Object.fromEntries(['.pocket-meta.json', 'log.json', 'remote-marker.md'].map((name) => [
       name,
