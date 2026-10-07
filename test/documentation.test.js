@@ -110,20 +110,13 @@ test("Core remote-action guard accepts explicit negations for each prohibited ac
 	}
 });
 
-test("user-facing documentation describes the v4 Core and Enterprise contract", () => {
-	const documentation = readDocumentation();
-	const readme = documentation["README.md"];
-	const releaseDocs = [
-		documentation["README.md"],
-		documentation["CHANGELOG.md"],
-		documentation["llms.txt"],
-	].join("\n");
-	const allDocs = Object.values(documentation).join("\n");
-
+function assertManifestRoles(readme) {
 	const roles = ["pi/core", "pi/enterprise", "claude/core", "claude/enterprise"];
 	const missingRoles = roles.filter((role) => !readme.includes(role));
 	assert.deepEqual(missingRoles, [], `README is missing manifest role(s): ${missingRoles.join(", ")}`);
+}
 
+function assertReleaseIdentifiers(releaseDocs) {
 	for (const [label, pattern] of [
 		["package version 4.0.0", /\b4\.0\.0\b/],
 		["CLI CONTRACT=3", /\bCONTRACT\s*=\s*3\b/],
@@ -134,7 +127,9 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 	]) {
 		assert.match(releaseDocs, pattern, `Release documentation must identify ${label}`);
 	}
+}
 
+function assertLifecycleCommands(allDocs) {
 	for (const command of [
 		"lifecycle transition",
 		"lifecycle drain",
@@ -148,7 +143,9 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 		"Documentation must show the explicit v3 migration command",
 	);
 	assert.match(allDocs, /--json --contract 3/, "Lifecycle commands must use CLI contract 3");
+}
 
+function assertCompatibilityMatrix(readme) {
 	const compatibilityRows = [
 		[/v3 Core\s*\+\s*v3 Enterprise[^\n]*(?:operational|usable)[^\n]*warning/i, "v3 Core + v3 Enterprise remains usable with a warning"],
 		[/v4 Core\s*\+\s*v4 Enterprise[^\n]*supported/i, "v4 Core + v4 Enterprise is supported"],
@@ -159,13 +156,18 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 	for (const [pattern, description] of compatibilityRows) {
 		assert.match(readme, pattern, `Compatibility matrix must state that ${description}`);
 	}
+}
+
+function assertMigrationPolicy(allDocs) {
 	assert.match(allDocs, /PIN_V3_REQUIRED/, "Progressed v3 plans must remain pinned to v3");
 	assert.match(
 		allDocs,
 		/(?:never|must not|cannot|does not)[^\n.]{0,120}(?:silently|automatic(?:ally)?)[^\n.]{0,80}(?:migrat|convert|rewrit)|(?:silently|automatic(?:ally)?)[^\n.]{0,80}(?:migrat|convert|rewrit)[^\n.]{0,120}(?:never|must not|cannot|does not)/i,
 		"Documentation must prohibit silent or automatic v3 conversion",
 	);
+}
 
+function assertRollbackGuidance(allDocs) {
 	assert.match(
 		allDocs,
 		/(?:disable|remove)[^\n.]{0,100}Enterprise adapter/i,
@@ -178,11 +180,32 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 		/(?:preserve|retain)[^\n.]{0,100}(?:\.pocket-meta\.json|log\.json|lifecycle\.json)/i,
 		"Rollback must preserve local lifecycle and traveling state",
 	);
+}
 
+function assertNoUnnegatedCoreRemoteClaims(allDocs) {
 	const unnegatedCoreClaims = unnegatedCoreRemoteClaims(allDocs);
 	assert.deepEqual(
 		unnegatedCoreClaims,
 		[],
 		`Core documentation must not claim GitHub side effects: ${unnegatedCoreClaims.join(" | ")}`,
 	);
+}
+
+test("user-facing documentation describes the v4 Core and Enterprise contract", () => {
+	const documentation = readDocumentation();
+	const readme = documentation["README.md"];
+	const releaseDocs = [
+		documentation["README.md"],
+		documentation["CHANGELOG.md"],
+		documentation["llms.txt"],
+	].join("\n");
+	const allDocs = Object.values(documentation).join("\n");
+
+	assertManifestRoles(readme);
+	assertReleaseIdentifiers(releaseDocs);
+	assertLifecycleCommands(allDocs);
+	assertCompatibilityMatrix(readme);
+	assertMigrationPolicy(allDocs);
+	assertRollbackGuidance(allDocs);
+	assertNoUnnegatedCoreRemoteClaims(allDocs);
 });
