@@ -6,6 +6,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { isDeepStrictEqual } = require('node:util');
 const { CliError } = require('./envelope');
 const { writeFileAtomicSync } = require('./atomic-file');
 const { withLifecycleMutation } = require('./lifecycle-lock');
@@ -203,8 +204,20 @@ function runMigration({ specDir, from } = {}) {
   const planId = path.basename(absoluteSpecDir);
   const outcome = withLifecycleMutation(absoluteSpecDir, () => {
     const existing = readExistingLifecycle(absoluteSpecDir, planId);
-    if (existing) return existing;
+    if (existing && existing.ok === false) return existing;
+    // An identity match is not a finished migration. Replay succeeds only when
+    // the v3 log is still pristine and the journal is still that snapshot.
     const log = readV3Snapshot(absoluteSpecDir);
+    if (existing) {
+      const expected = lifecycleSnapshot(absoluteSpecDir, log);
+      if (!isDeepStrictEqual(existing.doc, expected)) {
+        return fail(
+          'LIFECYCLE_ALREADY_EXISTS',
+          `lifecycle document is not the pristine v3 migration snapshot and will not be replaced: ${path.join(absoluteSpecDir, LIFECYCLE_FILE)}`,
+        );
+      }
+      return existing;
+    }
     const doc = lifecycleSnapshot(absoluteSpecDir, log);
     try {
       writeFileAtomicSync(path.join(absoluteSpecDir, LIFECYCLE_FILE), serializeLifecycle(doc));
