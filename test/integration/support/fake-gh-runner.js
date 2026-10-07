@@ -6,6 +6,11 @@ const args = process.argv.slice(2);
 const file = process.env.FAKE_GH_STATE;
 const state = JSON.parse(fs.readFileSync(file, 'utf8'));
 state.calls.push(args);
+if (process.env.FAKE_GH_RETRYABLE_FAILURE === '1') {
+  fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+  process.stderr.write('gh: operation timed out after 30s\n');
+  process.exit(1);
+}
 const repository = process.env.FAKE_GH_REPOSITORY;
 const repositoryUrl = process.env.FAKE_GH_REPOSITORY_URL;
 const issueNumber = Number(process.env.FAKE_GH_ISSUE_NUMBER);
@@ -54,11 +59,60 @@ if (args[0] === 'pr' && args[1] === 'view') {
   fail('pull request not found in fake repository');
 }
 if (args[0] === 'pr' && args[1] === 'list') json(state.pullRequests);
-if (args[0] === 'api' && args[1] === 'graphql') {
-  json({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } });
-}
+if (args[0] === 'api' && args[1] === 'graphql') handleGraphql();
 if (args[0] === 'api' && typeof args[1] === 'string') handleApiRequest(args[1]);
 fail(`fake GitHub rejected unexpected request: ${args.join(' ')}`);
+
+function handleGraphql() {
+  const query = field('query') || '';
+  if (query.includes('resolveReviewThread')) return resolveReviewThread();
+  if (query.includes('reviewThreads')) return reviewThreadPage();
+  fail('unexpected GraphQL operation');
+}
+
+function reviewThreadPages(number) {
+  const pullRequest = state.pullRequests.find((candidate) => candidate.number === Number(number));
+  if (pullRequest && Array.isArray(pullRequest.reviewThreadPages)) return pullRequest.reviewThreadPages;
+  if (pullRequest && Array.isArray(pullRequest.reviewThreads)) return [pullRequest.reviewThreads];
+  return [[]];
+}
+
+function reviewThreadPage() {
+  const pages = reviewThreadPages(field('number'));
+  const after = field('after');
+  const pageIndex = !after || after === 'null' ? 0 : Number(String(after).replace(/^cursor-/, ''));
+  const nodes = Number.isInteger(pageIndex) ? (pages[pageIndex] || []) : [];
+  const hasNextPage = Number.isInteger(pageIndex) && pageIndex + 1 < pages.length;
+  json({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes,
+            pageInfo: { hasNextPage, endCursor: hasNextPage ? `cursor-${pageIndex + 1}` : null },
+          },
+        },
+      },
+    },
+  });
+}
+
+function allReviewThreads() {
+  return state.pullRequests.flatMap((pullRequest) => (
+    Array.isArray(pullRequest.reviewThreadPages)
+      ? pullRequest.reviewThreadPages.flat()
+      : (pullRequest.reviewThreads || [])
+  ));
+}
+
+function resolveReviewThread() {
+  const threadId = field('threadId');
+  const thread = allReviewThreads().find((candidate) => candidate.id === threadId);
+  if (!thread) fail('review thread not found');
+  thread.isResolved = true;
+  state.effects.push({ kind: 'review-thread-resolve', id: threadId });
+  json({ data: { resolveReviewThread: { thread: { id: thread.id, isResolved: true } } } });
+}
 
 function createIssue() {
   if (process.env.FAKE_GH_GATE_EFFECT === 'issue-create'

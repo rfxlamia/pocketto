@@ -35,7 +35,7 @@ function routeRepository({ args, remote, json }) {
     owner: { login: remote.owner },
     name: remote.repository,
     nameWithOwner: `${remote.owner}/${remote.repository}`,
-    url: `https://github.com/${remote.owner}/${remote.repository}`,
+    url: remote.repositoryUrl || `https://github.com/${remote.owner}/${remote.repository}`,
   });
 }
 
