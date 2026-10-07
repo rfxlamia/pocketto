@@ -418,7 +418,7 @@ Run the CLI against the **saved** path to confirm the plan parses, conforms to t
 the execution flow — **without writing any files**:
 
 ```bash
-npx -y pocketto-pi structure "docs/pocket/plans/{date}-{slug}/execution-plan.md" --dry-run --json --contract 2
+npx -y pocketto-pi structure "docs/pocket/plans/{date}-{slug}/execution-plan.md" --dry-run --json --contract 3
 ```
 
 Parse the JSON envelope — do not scrape prose:

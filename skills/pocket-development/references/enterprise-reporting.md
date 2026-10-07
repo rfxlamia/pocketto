@@ -1,4 +1,4 @@
-[CRITICAL: This file is the single source of truth for posting phase verdicts to GitHub. `pocket-development`'s End-of-Execution Handoff SHALL cite it and SHALL NOT restate its steps. Non-enterprise execution SHALL NOT be affected by anything in this file.]
+[CRITICAL: This file is the Enterprise-only source of truth for posting phase verdicts to GitHub. `skills/pocket-enterprise` and the registered adapter own this path. Core `pocket-development` End-of-Execution Handoff MUST NOT cite this file or restate its steps. Non-enterprise execution never loads it.]
 
 # Enterprise Reporting (Phase-Completion)
 
@@ -19,7 +19,7 @@ Enterprise reporting runs at phase completion inside `pocket-development`; `crea
 Run the preflight before anything else in this file:
 
 ```bash
-npx -y pocketto-pi mode --json --contract 2
+npx -y pocketto-pi mode --json --contract 3
 ```
 
 Parse the JSON envelope. If `ok` is `false`, the command is missing, or `data.enterprise` is not strictly `true` → **skip this entire file's behavior** and return to the caller (the phase-completion flow in `pocket-development/SKILL.md`) as if this file did not exist. This is fail-closed: any error or malformed output means non-enterprise. Zero `gh` calls are made, and the output stays byte-identical to the non-enterprise path.
@@ -40,7 +40,7 @@ Derive the meta location the same way `create-pr` and `pocket-closing` do — `.
 Read the PR number from the phase-nested path `create-pr` writes:
 
 ```bash
-npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 3
 ```
 
 - `ok` is `false` (e.g. `error.code == "NOT_FOUND"` — `spec_dir` doesn't exist) → treat as no-meta and fall back to branch-based discovery, same as the null-value case below.
@@ -96,7 +96,7 @@ Build the input JSON for `format comment` from the phase's per-task verdict arti
 Write to a temp file, then:
 
 ```bash
-npx -y pocketto-pi format comment --input <tmp-verdicts.json> --json --contract 2
+npx -y pocketto-pi format comment --input <tmp-verdicts.json> --json --contract 3
 ```
 
 Read the body from `data.bodyFile`. The body starts with the marker `<!-- pocket-phase-<N>-summary -->` — this marker is the canonical identity for upsert.
@@ -117,8 +117,8 @@ Exactly **one** marker-tagged summary comment per phase. On re-runs, update in p
 
    | Matches | Action |
    |---------|--------|
-   | 0 | Create: `gh api repos/<owner>/<repo>/issues/<pr_number>/comments -f body="$(cat <body-file>)"` |
-   | 1 | Update in place: `gh api repos/<owner>/<repo>/issues/comments/<comment_id> --method PATCH -f body="$(cat <body-file>)"` |
+   | 0 | Create: `gh api repos/<owner>/<repo>/issues/<pr_number>/comments -F body=@<body-file>` |
+   | 1 | Update in place: `gh api repos/<owner>/<repo>/issues/comments/<comment_id> --method PATCH -F body=@<body-file>` |
    | >1 (race) | Update earliest (lowest `id`) with new body. Delete each later comment: `gh api repos/<owner>/<repo>/issues/comments/<later_id> --method DELETE` |
 
 ## E5. Reconcile and post inline findings
@@ -128,13 +128,13 @@ The CLI computes the set-diff (resolve/post/keep). The skill executes the result
 ### E5a. Read prior fingerprints
 
 ```bash
-npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.review.fingerprints --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.review.fingerprints --json --contract 3
 ```
 
 If `data.value` is null or absent, **or** the envelope is `ok:false` (e.g. `error.code == "NOT_FOUND"` — `spec_dir` doesn't exist), before defaulting to `[]`, check the pre-2.5 location once as a migration fallback:
 
 ```bash
-npx -y pocketto-pi meta get <plan_dir> review.fingerprints --json --contract 2
+npx -y pocketto-pi meta get <plan_dir> review.fingerprints --json --contract 3
 ```
 
 If that returns a non-null `data.value`, use it as the prior fingerprints (a plan last reviewed under 2.4.x has its fingerprints here). Otherwise treat as `[]` (no prior findings). Do not let a `NOT_FOUND` on either read abort E5 — findings still get posted; only fingerprint persistence (E5f / `meta set`, which always writes the new `<spec_dir>` location) is affected, and it should fail soft (log, don't block) for the same reason.
@@ -179,7 +179,7 @@ Write the new findings array to a temp file `<new-findings.json>`:
 ### E5c. Run reconcile
 
 ```bash
-npx -y pocketto-pi reconcile --prior <prior-fingerprints.json> --new <new-findings.json> --json --contract 2
+npx -y pocketto-pi reconcile --prior <prior-fingerprints.json> --new <new-findings.json> --json --contract 3
 ```
 
 Returns:
@@ -219,9 +219,11 @@ For each entry in `data.post`, post as an inline review comment on the PR diff:
 
 ```bash
 gh api repos/<owner>/<repo>/pulls/<pr_number>/comments \
+  -F body=@<body-file> \
   -f path="<file>" \
-  -f position=<diff_position> \
-  -f body="<finding body with fingerprint tag>"
+  -f commit_id="<head_sha>" \
+  -F line=<line> \
+  -f side=RIGHT
 ```
 
 - `path` — the file from `finding.file`.
@@ -266,7 +268,7 @@ Build the updated fingerprints array:
 Write to a temp file, then persist:
 
 ```bash
-npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.review.fingerprints "$(cat <updated-fingerprints.json>)" --json --contract 2
+npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.review.fingerprints "$(cat <updated-fingerprints.json>)" --json --contract 3
 ```
 
 If this returns `ok:false` (e.g. `error.code == "NOT_FOUND"` — `spec_dir` doesn't exist), do not treat it as a phase failure: the inline findings from E5e were already posted successfully. Log the persistence failure and continue — the only consequence is that a future re-review won't see these as prior findings and may repost them.

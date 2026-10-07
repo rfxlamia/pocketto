@@ -1,6 +1,12 @@
 {
   "name": "pocketto",
   "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, and code review workflows for Claude Code.",
+  "version": "4.0.0",
+  "surface_manifest": "./surfaces.json",
+  "surfaces": {
+    "core": "claude/core",
+    "enterprise": "claude/enterprise"
+  },
   "author": {
     "name": "rfxlamia",
     "url": "https://github.com/rfxlamia"

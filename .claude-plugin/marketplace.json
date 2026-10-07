@@ -5,6 +5,12 @@
     "url": "https://github.com/rfxlamia"
   },
   "description": "Pocket-driven development skills for Claude Code",
+  "version": "4.0.0",
+  "surface_manifest": "./surfaces.json",
+  "surfaces": {
+    "core": "claude/core",
+    "enterprise": "claude/enterprise"
+  },
   "plugins": [
     {
       "name": "pocketto",
