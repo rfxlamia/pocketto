@@ -8,7 +8,8 @@
 const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
-const { writeLog, todayISO, readLogChecked } = require('../lib/logjson');
+const { writeLog, todayISO, readLogChecked, withProjectionMutation } = require('../lib/logjson');
+const { runPhaseUpdateTransition, runPlanCloseTransition } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 const { PIPELINE } = require('../lib/version');
 
@@ -415,7 +416,7 @@ function findPhaseInLog(log, phaseFileArg) {
 
 // ─── UPDATE ─────────────────────────────────────────────────────────────────
 
-function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSha = false } = {}) {
+function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSha = false, projectionWriter = null, adapterRunner = null } = {}) {
   if (positionals.length !== 3) {
     throw new CliError(
       'USAGE',
@@ -563,10 +564,40 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
     };
   } else {
     const oldStatus = phase.status;
-    phase.status = newStatus;
-    writeLog(logPath, log);
+    // Cycle 5: commit-before-project — the coordinator commits the
+    // authoritative lifecycle event FIRST, then projects log.json, then
+    // dispatches. `mutate` applies the status change to the in-memory log
+    // before either. Existing status rules above are unchanged, including
+    // REVIEW→DONE which emits nothing.
+    const outcome = runPhaseUpdateTransition({
+      planDir,
+      logPath,
+      log,
+      phaseFile: phase.file,
+      level: 'phase',
+      oldStatus,
+      newStatus,
+      mutate: () => { phase.status = newStatus; },
+      deps: { projectionWriter, adapterRunner },
+    });
     human = [`Updated ${phase.file}: ${oldStatus} → ${newStatus}`];
-    data = { planDir, phaseFile: phase.file, level: 'phase', oldStatus, newStatus };
+    data = {
+      planDir,
+      phaseFile: phase.file,
+      level: 'phase',
+      oldStatus,
+      newStatus,
+      event: outcome.event
+        ? {
+          event_id: outcome.event.event_id,
+          plan_id: outcome.event.plan_id,
+          type: outcome.event.type,
+          revision: outcome.event.revision,
+          status: outcome.event.delivery.status,
+        }
+        : null,
+      dispatch: outcome.dispatch,
+    };
   }
 
   human.push('Current log:');
@@ -729,7 +760,7 @@ function recordCorrection(positionals, sha, forTask) {
 
 // ─── CLOSE ──────────────────────────────────────────────────────────────────
 
-function close(positionals) {
+function close(positionals, { projectionWriter = null, adapterRunner = null } = {}) {
   if (positionals.length !== 1) {
     throw new CliError('USAGE', 'Usage: pocketto-pi log close <plan_dir>');
   }
@@ -751,9 +782,23 @@ function close(positionals) {
     );
   }
 
-  log.header.status = 'DONE';
-  log.header.date_completed = todayISO();
-  writeLog(logPath, log);
+  // Cycle 5: commit-before-project — the coordinator commits the
+  // authoritative plan-closed event FIRST, then projects log.json, then
+  // dispatches. `mutate` applies the closure to the in-memory log before
+  // either. Plans without a matching lifecycle document keep existing v3
+  // close behavior untouched.
+  const phaseFiles = log.phases.map((p) => p.file);
+  const outcome = runPlanCloseTransition({
+    planDir,
+    logPath,
+    log,
+    phaseFiles,
+    mutate: () => {
+      log.header.status = 'DONE';
+      log.header.date_completed = todayISO();
+    },
+    deps: { projectionWriter, adapterRunner },
+  });
 
   const human = [
     `Closed ${logPath}`,
@@ -774,13 +819,36 @@ function close(positionals) {
       dateStarted: log.header.date_started,
       dateCompleted: log.header.date_completed,
       phaseCount: log.phases.length,
+      event: outcome.event
+        ? {
+          event_id: outcome.event.event_id,
+          plan_id: outcome.event.plan_id,
+          type: outcome.event.type,
+          revision: outcome.event.revision,
+          status: outcome.event.delivery.status,
+        }
+        : null,
+      dispatch: outcome.dispatch,
     },
   };
 }
 
 // ─── DISPATCH ───────────────────────────────────────────────────────────────
 
-function run({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha }) {
+function run(input = {}) {
+  const { sub, positionals, correction } = input;
+  const args = Array.isArray(positionals) ? positionals : [];
+  let expectedCount = null;
+  if (sub === 'init' || sub === 'close') expectedCount = 1;
+  else if (sub === 'update') expectedCount = correction ? 2 : 3;
+  if (expectedCount === null || args.length !== expectedCount) return runUnlocked(input);
+
+  const planDir = resolvePlanDir(args[0]);
+  const logPath = path.join(planDir, 'log.json');
+  return withProjectionMutation(logPath, () => runUnlocked(input));
+}
+
+function runUnlocked({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha, projectionWriter = null, adapterRunner = null } = {}) {
   if (sub === 'init') return init(positionals);
   if (sub === 'update') {
     if (correction) {
@@ -789,9 +857,9 @@ function run({ sub, positionals, task, correction, forTask, sha, allowDuplicateS
       }
       return recordCorrection(positionals, correction, forTask);
     }
-    return update(positionals, task, { sha, allowDuplicateSha });
+    return update(positionals, task, { sha, allowDuplicateSha, projectionWriter, adapterRunner });
   }
-  if (sub === 'close') return close(positionals);
+  if (sub === 'close') return close(positionals, { projectionWriter, adapterRunner });
   throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'log' subcommand: ${sub || '(none)'}. Use init | update | close.`);
 }
 

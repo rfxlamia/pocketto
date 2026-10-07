@@ -7,7 +7,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { readFileSync, existsSync, writeFileSync, mkdirSync, rmSync, renameSync, mkdtempSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
-const { writeLog, todayISO } = require('../lib/logjson');
+const { writeLog, todayISO, withProjectionMutation } = require('../lib/logjson');
 const { getGitSha } = require('../lib/git');
 const { PIPELINE } = require('../lib/version');
 
@@ -474,7 +474,14 @@ ${task.body}
 
 // ─── RUN ────────────────────────────────────────────────────────────────────
 
-function run({ planArg, dryRun, force, reset }) {
+function run(options = {}) {
+  if (!options.planArg || options.dryRun) return runUnlocked(options);
+  const planDir = path.dirname(path.resolve(options.planArg));
+  const logPath = path.join(planDir, 'log.json');
+  return withProjectionMutation(logPath, () => runUnlocked(options));
+}
+
+function runUnlocked({ planArg, dryRun, force, reset } = {}) {
   if (!planArg) {
     throw new CliError('USAGE', 'Usage: pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset]');
   }
