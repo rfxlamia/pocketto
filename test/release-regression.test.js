@@ -220,11 +220,11 @@ test('final v4 release rehearsal stages all roles and verifies the packed packag
   }
 });
 
-test('npm test command includes every v4 runtime suite and keeps the T13 documentation gate separate', () => {
-  // T14 Cycle 2 — test/release-regression.test.js, integration.
-  // Intent: Given completed v4 executable test files, when regression inspects package.json and invokes test-command contract, then the script names test/cli.test.js, test/package.test.js, every lifecycle/surface/Enterprise/compatibility/integration/release suite, with no omission; documentation contract remains a separate T13 gate because T13 runs in parallel.
-  // Exercise: the exact package.json scripts.test value and a controlled command-list assertion; run the full command only after the script update. Test doubles: none for package metadata; no live services.
-  // Expected RED: the task text describes only CLI/package tests, but this baseline also includes test/surfaces.test.js. The actual missing suites are lifecycle-contract, lifecycle-store, lifecycle-cli, lifecycle-dispatch, skill-surfaces, enterprise-protocol, enterprise-issue, enterprise-phase, enterprise-closeout, enterprise-dispatch, enterprise-issue-dispatch, enterprise-meta, enterprise-ownership, compatibility, integration/lifecycle-enterprise, and release-regression.
+test('npm test command includes every v4 runtime suite and the T13 documentation gate', () => {
+  // T14 post-T13 follow-up — test/release-regression.test.js, integration.
+  // Intent: Given completed v4 executable test files and the merged T13 documentation contract, when regression inspects package.json and invokes the test-command contract, then scripts.test names every lifecycle/surface/Enterprise/compatibility/integration/release suite and test/documentation.test.js, with no omission.
+  // Exercise: the exact package.json scripts.test value and a controlled command-list assertion; the full command runs after the script update. Test doubles: none for package metadata; no live services.
+  // Expected RED: scripts.test does not yet include test/documentation.test.js.
   // Exact command: node --test test/release-regression.test.js
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const match = packageJson.scripts?.test?.match(/^node --test (.+)$/);
@@ -250,8 +250,8 @@ test('npm test command includes every v4 runtime suite and keeps the T13 documen
     'test/compatibility.test.js',
     'test/integration/lifecycle-enterprise.test.js',
     'test/release-regression.test.js',
+    'test/documentation.test.js',
   ];
   const actualSuites = match[1].trim().split(/\s+/);
-  assert.deepEqual(actualSuites, expectedSuites, 'scripts.test must name every v4 runtime suite, without omissions or unapproved extras');
-  assert.equal(actualSuites.includes('test/documentation.test.js'), false, 'T13 owns the separately ordered documentation gate until it merges');
+  assert.deepEqual(actualSuites, expectedSuites, 'scripts.test must name every v4 runtime suite and the merged T13 documentation gate, without omissions or unapproved extras');
 });

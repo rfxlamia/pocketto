@@ -112,7 +112,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/cli.test.js test/package.test.js test/lifecycle-contract.test.js test/lifecycle-store.test.js test/lifecycle-cli.test.js test/lifecycle-dispatch.test.js test/surfaces.test.js test/skill-surfaces.test.js test/enterprise-protocol.test.js test/enterprise-issue.test.js test/enterprise-phase.test.js test/enterprise-closeout.test.js test/enterprise-dispatch.test.js test/enterprise-issue-dispatch.test.js test/enterprise-meta.test.js test/enterprise-ownership.test.js test/compatibility.test.js test/integration/lifecycle-enterprise.test.js test/release-regression.test.js",
+    "test": "node --test test/cli.test.js test/package.test.js test/lifecycle-contract.test.js test/lifecycle-store.test.js test/lifecycle-cli.test.js test/lifecycle-dispatch.test.js test/surfaces.test.js test/skill-surfaces.test.js test/enterprise-protocol.test.js test/enterprise-issue.test.js test/enterprise-phase.test.js test/enterprise-closeout.test.js test/enterprise-dispatch.test.js test/enterprise-issue-dispatch.test.js test/enterprise-meta.test.js test/enterprise-ownership.test.js test/compatibility.test.js test/integration/lifecycle-enterprise.test.js test/release-regression.test.js test/documentation.test.js",
     "prepublishOnly": "echo 'Publishing pocketto to npm...'"
   },
   "pi": {
