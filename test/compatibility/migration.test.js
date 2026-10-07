@@ -100,6 +100,123 @@ test('RED CYCLE 2: repeated v3 migration returns the existing identity without c
   assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', 'replay must not invoke GitHub');
 });
 
+function migrationCommand(specDir) {
+  return ['lifecycle', 'migrate', specDir, '--from', 'v3', '--json', '--contract', '3'];
+}
+
+function recordingEnv(remote) {
+  return {
+    ...process.env,
+    PATH: `${remote.binDir}${path.delimiter}${process.env.PATH || ''}`,
+    REMOTE_CALLS: remote.remoteCalls,
+    GH_CALLS: remote.ghCalls,
+  };
+}
+
+function assertNoRemoteOrByteChanges(specDir, remote, before, label) {
+  assert.deepEqual(snapshotTree(specDir), before, `${label}: refusal must leave every file byte-identical`);
+  assert.equal(fs.readFileSync(remote.remoteCalls, 'utf8'), '', `${label}: refusal must not invoke the adapter`);
+  assert.equal(fs.readFileSync(remote.ghCalls, 'utf8'), '', `${label}: refusal must not invoke GitHub`);
+}
+
+function writeIdentityLifecycle(specDir, mutate) {
+  const doc = {
+    schema: 1,
+    plan: {
+      plan_id: 'v3-plan',
+      spec_dir: path.resolve(specDir),
+      plan_dir: path.resolve(specDir),
+      branch: null,
+      state: { approval: 'PENDING', phase_status: {}, status: 'IN_PROGRESS' },
+      revision: 0,
+    },
+    events: [],
+  };
+  mutate(doc);
+  fs.writeFileSync(path.join(specDir, 'lifecycle.json'), `${JSON.stringify(doc, null, 2)}\n`);
+}
+
+function markV3PhaseReview(specDir) {
+  const logPath = path.join(specDir, 'log.json');
+  const log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+  log.phases[0].status = 'REVIEW';
+  fs.writeFileSync(logPath, `${JSON.stringify(log, null, 2)}\n`);
+}
+
+test('migration replay re-checks the v3 snapshot and does not treat a planted lifecycle as idempotent', (t) => {
+  const scenarios = [
+    {
+      name: 'migrated snapshot then v3 progress',
+      prepare(specDir) {
+        const remote = installRecordingRemoteBoundary(specDir, path.dirname(specDir));
+        const migrated = runCli(migrationCommand(specDir), { cwd: specDir, env: recordingEnv(remote) });
+        assert.equal(migrated.status, 0, `setup migration should succeed: ${migrated.stdout}${migrated.stderr}`);
+        markV3PhaseReview(specDir);
+      },
+    },
+    {
+      name: 'planted pristine lifecycle beside v3 progress',
+      prepare(specDir) {
+        writeIdentityLifecycle(specDir, () => {});
+        markV3PhaseReview(specDir);
+      },
+    },
+    {
+      name: 'planted journal with events beside v3 progress',
+      prepare(specDir) {
+        writeIdentityLifecycle(specDir, (doc) => {
+          doc.plan.revision = 2;
+          doc.events.push({ event_id: 'v3-plan:spec-approved:r2', revision: 2 });
+        });
+        markV3PhaseReview(specDir);
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const fixture = copyV3Plan(t);
+    scenario.prepare(fixture.specDir);
+    const remote = installRecordingRemoteBoundary(fixture.specDir, fixture.tempRoot);
+    const before = snapshotTree(fixture.specDir);
+    const result = runCli(migrationCommand(fixture.specDir), {
+      cwd: fixture.specDir,
+      env: recordingEnv(remote),
+    });
+
+    assert.notEqual(result.status, 0, `${scenario.name}: progressed v3 must not replay as success`);
+    assert.equal(result.json && result.json.ok, false, `${scenario.name}: expected a JSON refusal: ${result.stdout}`);
+    assert.equal(result.json.error.code, 'PIN_V3_REQUIRED', `${scenario.name}: an existing lifecycle must not skip the pristine check`);
+    assert.match(result.json.error.message, /finish.*under v3|v3.*finish/i, `${scenario.name}: explain that the plan must finish on v3`);
+    assertNoRemoteOrByteChanges(fixture.specDir, remote, before, scenario.name);
+  }
+});
+
+test('migration replay refuses a journal that is no longer the pristine snapshot without rewriting it', (t) => {
+  const fixture = copyV3Plan(t);
+  const remote = installRecordingRemoteBoundary(fixture.specDir, fixture.tempRoot);
+  const env = recordingEnv(remote);
+  const created = runCli(migrationCommand(fixture.specDir), { cwd: fixture.specDir, env });
+  assert.equal(created.status, 0, `setup migration should succeed: ${created.stdout}${created.stderr}`);
+  writeIdentityLifecycle(fixture.specDir, (doc) => {
+    doc.plan.revision = 1;
+    doc.events.push({
+      event_id: 'v3-plan:spec-approved:r1',
+      type: 'spec-approved',
+      revision: 1,
+      delivery: { status: 'pending', attempts: 0 },
+    });
+  });
+  const before = snapshotTree(fixture.specDir);
+
+  const result = runCli(migrationCommand(fixture.specDir), { cwd: fixture.specDir, env });
+
+  assert.notEqual(result.status, 0, `a moved journal must not report idempotent migration: ${result.stdout}${result.stderr}`);
+  assert.equal(result.json && result.json.ok, false, `expected a JSON refusal: ${result.stdout}`);
+  assert.equal(result.json.error.code, 'LIFECYCLE_ALREADY_EXISTS');
+  assert.match(result.json.error.message, /not the pristine v3 migration snapshot/);
+  assertNoRemoteOrByteChanges(fixture.specDir, remote, before, 'moved journal');
+});
+
 test('RED CYCLE 3: v3 progress refuses migration with PIN_V3_REQUIRED and no file or remote changes', (t) => {
   const scenarios = [
     { name: 'phase REVIEW', mutate: (log) => { log.phases[0].status = 'REVIEW'; } },
