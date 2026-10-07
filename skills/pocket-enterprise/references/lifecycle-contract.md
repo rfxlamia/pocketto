@@ -58,6 +58,8 @@ Run the Enterprise preflight before any issue, PR, or comment operation:
 node enterprise/cli.js preflight <project-root> --json
 ```
 
+`enterprise/cli.js` is in the pocketto-pi package root, not in the project being checked. The command above is a checkout of this repository. A project that depends on the npm package runs `node node_modules/pocketto-pi/enterprise/cli.js preflight <project-root> --json`.
+
 Proceed only when it confirms compatible Core, lifecycle schema, registration, adapter contract, and executable. Preflight is read-only. Enterprise retains remote IDs in `.pocket-meta.json`; the Core journal contains only opaque proof references. Events are claimed one at a time. An idle claim expires after 60 seconds. Before an adapter invocation, Core extends that claim through the granted timeout plus a release margin, so a second drain cannot reclaim an event while the invocation can still be running. A crashed owner is reclaimed only after its lease expires. Retries are bounded to one initial invocation plus at most five retries (delays: 1, 5, 30, 120, and 600 seconds). Authentication, permission, validation, integrity, and ownership conflicts require manual resolution.
 
 The adapter is the sole v4 remote writer for issue reconciliation, phase reporting, and final tasklist sync. It may create/reconcile one issue for `spec-approved`; phase completion requires an existing PR, and the adapter never auto-creates a PR. Plan closure upserts the `<!-- pocket-tasklist -->` proof only. No operation automatically merges a PR or closes an issue.
@@ -76,11 +78,20 @@ The v4 preflight warns about legacy v3 installations; an unchanged v3 binary can
 
 ## Non-destructive rollback
 
-To roll back a faulty or unwanted adapter, disable or remove Enterprise while leaving Core and `lifecycle.json` installed. Local work continues and events remain pending under their original IDs. Preserve `.pocket-meta.json`, `log.json`, `lifecycle.json`, task progress, and remote markers; rollback does not delete or rewrite them. Pin a faulty Enterprise artifact to the last compatible v4 release, correct the adapter, and replay the original event IDs with `lifecycle drain`. Keep active v3 plans on the v3 path; do not automatically downgrade v4 state.
+To disable a faulty or unwanted adapter, remove its registration and leave Core and `lifecycle.json` installed. Local work continues and events remain pending under their original IDs. Preserve `.pocket-meta.json`, `log.json`, `lifecycle.json`, task progress, and remote markers. Rollback does not delete or rewrite those files. Keep active v3 plans on the v3 path; do not automatically downgrade v4 state.
+
+Disable. `preflight` only reads the registration. `rm` deletes that registration file and nothing else. A later `lifecycle drain` does not replay while the registration is missing: the event stays pending, the drain reports `adapter-unavailable`, and no remote call is made.
 
 ```bash
-node enterprise/cli.js preflight <project-root> --json
+node node_modules/pocketto-pi/enterprise/cli.js preflight <project-root> --json
 rm <project-root>/.pocket/lifecycle-adapter.json
+```
+
+From a checkout of this repository, the read-only preflight is `node enterprise/cli.js preflight <project-root> --json`.
+
+Replay only after the adapter is pinned to the last compatible v4 release or reinstalled. That drain uses the original event IDs:
+
+```bash
 npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
 ```
 
