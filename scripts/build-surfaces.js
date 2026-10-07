@@ -219,6 +219,9 @@ function main() {
       fail('SURFACE_USAGE', 'Usage: node scripts/build-surfaces.js --role <role> --output <dir> [--source <dir>]');
       return;
     }
+    // Stage only this role's includes. `requires` names the Core role that
+    // must already be installed; those files are not copied into this output.
+    // An Enterprise stage is an overlay, so Core entry points stay forbidden.
     const role = manifest.roles[opts.role];
     let expanded;
     try {
