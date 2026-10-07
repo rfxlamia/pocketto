@@ -78,6 +78,10 @@ function assertExplicitPackageListIncludesReleaseAssets() {
       packed.includes('skills/pocket-development/.skillkit-mode'),
       'packed tarball must include the pocket-development .skillkit-mode dotfile',
     );
+    assert.ok(
+      packed.includes('surfaces.json'),
+      'packed tarball must include surfaces.json',
+    );
   }
 }
 
