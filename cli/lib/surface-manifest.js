@@ -52,23 +52,32 @@ function expandIncludes(includes, sourceDir) {
       if (!stat.isDirectory()) {
         throw new Error(`SURFACE_INCLUDE_MISSING: declared include is not a directory: ${pattern}`);
       }
-      expanded.push(...walkUnder(baseDir, sourceDir, base));
+      expanded.push(...walkUnder(baseDir, sourceDir, new Set()));
     } else {
       const target = path.join(sourceDir, pattern);
-      let stat;
+      let listed;
       try {
-        stat = fs.statSync(target);
+        listed = fs.lstatSync(target);
       } catch {
         throw new Error(`SURFACE_INCLUDE_MISSING: declared include is missing: ${pattern}`);
       }
+      if (!listed.isSymbolicLink() && !listed.isFile() && !listed.isDirectory()) {
+        throw new Error(`SURFACE_INCLUDE_MISSING: declared include is missing: ${pattern}`);
+      }
+      // stat follows a direct symlink. Resolve it before staging so a link
+      // cannot copy a file from outside the source root.
+      assertResolvedPathInside(target, sourceDir, pattern);
+      const stat = listed.isSymbolicLink() ? fs.statSync(target) : listed;
       if (stat.isDirectory()) {
-        expanded.push(...walkUnder(target, sourceDir, pattern));
-      } else {
+        expanded.push(...walkUnder(target, sourceDir, new Set()));
+      } else if (stat.isFile()) {
         expanded.push(posix(pattern));
+      } else {
+        throw new Error(`SURFACE_INCLUDE_MISSING: declared include is missing: ${pattern}`);
       }
     }
   }
-  return expanded.sort();
+  return [...new Set(expanded)].sort();
 }
 
 function assertIncludeStaysInSource(pattern, sourceDir) {
@@ -93,32 +102,49 @@ function posix(rel) {
   return rel.split(path.sep).join('/');
 }
 
-function walkUnder(dir, sourceDir, relBase) {
-  void relBase;
+// Lexical checks reject `..` and absolute patterns. This rejects a path whose
+// real target, including through a symlink, sits outside the source root.
+// A target that cannot be resolved is rejected too: staging must not copy it.
+function assertResolvedPathInside(full, sourceDir, label) {
+  let realTarget;
+  let realRoot;
+  try {
+    realTarget = fs.realpathSync(full);
+    realRoot = fs.realpathSync(sourceDir);
+  } catch {
+    throw new Error(`SURFACE_INCLUDE_ESCAPE: include escapes the staging root: ${label}`);
+  }
+  const escaped = path.relative(realRoot, realTarget);
+  if (escaped.startsWith('..') || path.isAbsolute(escaped)) {
+    throw new Error(`SURFACE_INCLUDE_ESCAPE: include escapes the staging root: ${label}`);
+  }
+}
+
+function walkUnder(dir, sourceDir, seen) {
+  const logicalDir = posix(path.relative(sourceDir, dir)) || '.';
+  assertResolvedPathInside(dir, sourceDir, logicalDir);
+  const realDir = fs.realpathSync(dir);
+  if (seen.has(realDir)) return [];
+  seen.add(realDir);
   const out = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
   );
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
+    const logical = posix(path.relative(sourceDir, full));
+    if (entry.isSymbolicLink()) {
+      assertResolvedPathInside(full, sourceDir, logical);
+      const stat = fs.statSync(full);
+      if (stat.isDirectory()) out.push(...walkUnder(full, sourceDir, seen));
+      else if (stat.isFile()) out.push(logical);
+      continue;
+    }
     if (entry.isDirectory()) {
-      out.push(...walkUnder(full, sourceDir, relBase));
+      out.push(...walkUnder(full, sourceDir, seen));
     } else if (entry.isFile()) {
       if (entry.name === '__pycache__') continue;
-      const logical = posix(path.relative(sourceDir, full));
-      let realTarget = full;
-      let realRoot = sourceDir;
-      try {
-        realTarget = fs.realpathSync(full);
-        realRoot = fs.realpathSync(sourceDir);
-      } catch {
-        realTarget = full;
-        realRoot = sourceDir;
-      }
-      const escaped = path.relative(realRoot, realTarget);
-      if (escaped.startsWith('..') || path.isAbsolute(escaped)) {
-        throw new Error(`SURFACE_INCLUDE_ESCAPE: include escapes the staging root: ${logical}`);
-      }
+      assertResolvedPathInside(full, sourceDir, logical);
       out.push(logical);
     }
   }
