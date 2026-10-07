@@ -20,13 +20,13 @@ This reference owns optional Enterprise setup. Core onboarding remains local-onl
 Read the current mode first:
 
 ```bash
-npx -y pocketto-pi mode --json --contract 2
+npx -y pocketto-pi mode --json --contract 3
 ```
 
 If it is not already enabled, initialize it only after explicit consent:
 
 ```bash
-npx -y pocketto-pi mode init --enterprise true --branch-strategy branch --create-pr true --json --contract 2
+npx -y pocketto-pi mode init --enterprise true --branch-strategy branch --create-pr true --json --contract 3
 ```
 
 `mode init` validates the configured remote and writes the mode block to the selected project memory file plus `.gitattributes`. If the user requires an approval gate, request that choice and pass `--require-approval true`; do not infer it.
@@ -34,7 +34,7 @@ npx -y pocketto-pi mode init --enterprise true --branch-strategy branch --create
 Optional project templates may be created after mode setup:
 
 ```bash
-npx -y pocketto-pi scaffold github --json --contract 2
+npx -y pocketto-pi scaffold github --json --contract 3
 ```
 
 Existing user files are not overwritten. Create the `pocket-plan` label only when the user requests that project setup step.

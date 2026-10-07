@@ -2,6 +2,18 @@
 
 All notable changes to Pocketto are documented here, newest first. Dates are the tag's commit date.
 
+## 4.0.0 — 2026-09-19
+
+**Core / Enterprise split.** Package version `4.0.0` ships four manifest roles: `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Core is local-first and commits neutral lifecycle state/events without GitHub calls. Enterprise is an optional additive adapter that requires matching Core and fails closed on missing or incompatible installations.
+
+**Protocol versions:** `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1`. These versions identify separate boundaries and must not be treated as interchangeable.
+
+Core provides `lifecycle transition`, `lifecycle drain`, and `lifecycle repair`; the registered Enterprise adapter owns issue/PR reconciliation. It never auto-creates a PR, merges a pull request, or closes an issue. Human operators retain those gates.
+
+**Compatibility and migration.** A v3 Core + v3 Enterprise installation remains operational with a v4 warning. v4 Core + v4 Enterprise is supported; v4 Core without Enterprise remains local-first. Mixed-major Enterprise combinations fail closed with upgrade guidance while Core remains usable and pending events are preserved. Use `pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3` only for a pristine v3 plan with no execution progress. A progressed or non-pristine plan returns `PIN_V3_REQUIRED` without file or remote changes and must finish on v3. Migration is never silent or destructive.
+
+**Rollback.** Disable or remove the Enterprise adapter while retaining Core and `lifecycle.json`; preserve `.pocket-meta.json`, `log.json`, lifecycle events, and remote markers. Correct or pin a faulty adapter to the last compatible v4 release, then replay the original pending event IDs with `lifecycle drain`. Keep active v3 plans on their v3 path; do not automatically downgrade or convert them.
+
 ## 3.1.3 — 2026-09-19
 
 `pocket-development` and `pocket-planning` SKILL.md files no longer restate normative contracts — they cite the canonical references instead (`two-stage-review.md`, `phase-level-pass.md`, `plan-template.md`), closing the drift risk from duplicated rules (#48). The in-loop audit gains a bounded retry ladder (3 attempts, no fix-round consumed) before `auditor-unavailable` escalates to BLOCKED (#52). `pocket-closing` now distinguishes `REVIEW_BLOCKED` by category: infra blocks (`auditor-unavailable`) re-run development, escalations print `fix_instructions`, and stale stubs without a category re-run the phase-level pass instead of closing. Parallel-merge conflicts get one bounded merge-recovery attempt (implementer → gate → auditor → merge retry) scoped to the plan dir's review artifacts, with `parallel-conflict` as a terminal stage so resume can't re-enter recovery. Adds `rebuild-skills.sh` to rebuild bundled `.skill` archives from source.
