@@ -194,3 +194,35 @@ test('expandIncludes rejects absolute and parent-directory includes', () => {
     fs.rmSync(source, { recursive: true, force: true });
   }
 });
+
+test('expandIncludes rejects symlinks that resolve outside the source root', () => {
+  const { expandIncludes } = require('../../cli/lib/surface-manifest');
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'surface-symlink-escape-'));
+  const source = path.join(parent, 'source');
+  const outside = path.join(parent, 'outside');
+  fs.mkdirSync(path.join(source, 'nested'), { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  try {
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'secret\n');
+    fs.writeFileSync(path.join(source, 'nested', 'real.txt'), 'ok\n');
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(source, 'linked.txt'));
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(source, 'nested', 'via-glob.txt'));
+    fs.symlinkSync(outside, path.join(source, 'outside-dir'));
+    fs.symlinkSync(path.join(source, 'nested', 'real.txt'), path.join(source, 'inside-link.txt'));
+
+    assert.throws(() => expandIncludes(['linked.txt'], source), /SURFACE_INCLUDE_ESCAPE/);
+    assert.throws(() => expandIncludes(['nested/**'], source), /SURFACE_INCLUDE_ESCAPE/);
+    assert.throws(() => expandIncludes(['outside-dir'], source), /SURFACE_INCLUDE_ESCAPE/);
+    assert.throws(() => expandIncludes(['outside-dir/**'], source), /SURFACE_INCLUDE_ESCAPE/);
+    assert.deepEqual(expandIncludes(['inside-link.txt'], source), ['inside-link.txt']);
+    assert.deepEqual(expandIncludes(['nested/real.txt'], source), ['nested/real.txt']);
+
+    const cycle = path.join(source, 'cycle-root');
+    fs.mkdirSync(cycle);
+    fs.writeFileSync(path.join(cycle, 'file.txt'), 'ok\n');
+    fs.symlinkSync(cycle, path.join(cycle, 'loop'));
+    assert.deepEqual(expandIncludes(['cycle-root/**'], source), ['cycle-root/file.txt']);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
