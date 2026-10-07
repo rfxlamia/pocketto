@@ -27,7 +27,11 @@ const value = (flag) => {
 const field = (name) => {
   for (let index = 0; index < args.length - 1; index++) {
     if ((args[index] === '-f' || args[index] === '-F') && args[index + 1].startsWith(`${name}=`)) {
-      return args[index + 1].slice(name.length + 1);
+      const value = args[index + 1].slice(name.length + 1);
+      // gh -F treats a value that starts with @ as a filename. Read it while
+      // the producer still holds the temp file (spawn is synchronous).
+      if (value.startsWith('@') && value.length > 1) return fs.readFileSync(value.slice(1), 'utf8');
+      return value;
     }
   }
   return null;

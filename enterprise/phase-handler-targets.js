@@ -160,19 +160,33 @@ function hasPhaseIdentity(comments, phaseNumber, metadataFirst) {
   return metadataFirst && markers.length === 0;
 }
 
+function repositoryOrigin(repo) {
+  if (repo && repo.identity && typeof repo.identity.origin === 'string') return repo.identity.origin;
+  if (repo && typeof repo.url === 'string') {
+    try {
+      return new URL(repo.url).origin;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function sameRepository(url, repo) {
-  if (typeof url !== 'string') return false;
+  if (typeof url !== 'string' || !repo) return false;
   let parsed;
   try {
     parsed = new URL(url);
   } catch {
     return false;
   }
+  const origin = repositoryOrigin(repo);
   const parts = parsed.pathname.replace(/\.git\/?$/, '').split('/').filter(Boolean);
-  return parsed.hostname.toLowerCase() === 'github.com'
+  return Boolean(origin)
+    && parsed.origin === origin
     && parts.length >= 2
-    && parts[0].toLowerCase() === repo.owner.toLowerCase()
-    && parts[1].toLowerCase() === repo.name.toLowerCase();
+    && parts[0].toLowerCase() === String(repo.owner).toLowerCase()
+    && parts[1].toLowerCase() === String(repo.name).toLowerCase();
 }
 
 function requiredPr(message) {

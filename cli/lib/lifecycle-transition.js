@@ -17,6 +17,7 @@ const { execFileSync } = require('node:child_process');
 const { CliError } = require('./envelope');
 const { EVENT_TYPES } = require('./lifecycle-contract');
 const { commitTransition, readLifecycleDoc, hashBytes: sha256Bytes } = require('./lifecycle-store');
+const { resolveProjectRoot } = require('./lifecycle-adapter');
 const { writeProjection: defaultWriteProjection } = require('./logjson');
 
 // Parses one `--artifact <root>:<kind>:<relative-path>:<sha256>` flag value.
@@ -97,12 +98,11 @@ function runTransition({ specDir, type, artifactFlags, planDir = null, deps = {}
 }
 
 // Local-first dispatch decision: Core never performs remote work itself.
-// The ONLY adapter signal is the project-local registration file
-// `<project>/.pocket/lifecycle-adapter.json` (checked with a single
-// existence probe — no child process, no filesystem reads outside the
-// project, no Enterprise imports, no `gh`, no credentials). Without that
-// registration present there is nothing to invoke, so Core succeeds
-// locally and defers dispatch with the event pending.
+// The ONLY adapter signal is `<project>/.pocket/lifecycle-adapter.json`.
+// The project root is the nearest ancestor of the spec/plan directory that
+// holds that file or a `.git` directory. The check is an existence probe:
+// no child process, no Enterprise imports, no `gh`, no credentials.
+// Without that registration, Core succeeds locally and leaves the event pending.
 const ADAPTER_REGISTRATION_REL = path.join('.pocket', 'lifecycle-adapter.json');
 const NO_ADAPTER_REASON = 'no-adapter-registration';
 
@@ -111,9 +111,10 @@ const NO_ADAPTER_REASON = 'no-adapter-registration';
 // may be a spec dir (CLI `lifecycle transition`) or a plan dir (`log`
 // update/close); a missing directory simply has no registration.
 function hasAdapterRegistration(projectDir) {
-  if (typeof projectDir !== 'string' || projectDir.length === 0) return false;
+  const projectRoot = resolveProjectRoot(projectDir);
+  if (!projectRoot) return false;
   try {
-    return existsSync(path.join(path.resolve(projectDir), ADAPTER_REGISTRATION_REL));
+    return existsSync(path.join(projectRoot, ADAPTER_REGISTRATION_REL));
   } catch {
     return false;
   }

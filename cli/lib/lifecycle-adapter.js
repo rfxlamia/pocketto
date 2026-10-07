@@ -8,6 +8,22 @@ const { validateAdapterResponse } = require('./lifecycle-contract');
 const { protocolFailure } = require('./lifecycle-retry');
 
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
+// Enterprise install accepts the same ceiling (registration-record.js).
+// A lower Core bound rejects a legal install as ADAPTER_REGISTRATION_INVALID.
+const MAX_ADAPTER_TIMEOUT_MS = 600_000;
+
+function resolveProjectRoot(startDir) {
+  if (typeof startDir !== 'string' || startDir.length === 0) return null;
+  let dir = path.resolve(startDir);
+  const filesystemRoot = path.parse(dir).root;
+  while (true) {
+    if (fs.existsSync(path.join(dir, REGISTRATION_PATH)) || fs.existsSync(path.join(dir, '.git'))) {
+      return dir;
+    }
+    if (dir === filesystemRoot) return path.resolve(startDir);
+    dir = path.dirname(dir);
+  }
+}
 
 function readAdapterRegistration(projectDir) {
   const registrationPath = path.resolve(projectDir, REGISTRATION_PATH);
@@ -36,7 +52,7 @@ function readAdapterRegistration(projectDir) {
     || registration.events.some((event) => typeof event !== 'string')
     || !Number.isInteger(registration.timeout_ms)
     || registration.timeout_ms < 1
-    || registration.timeout_ms > 30_000
+    || registration.timeout_ms > MAX_ADAPTER_TIMEOUT_MS
   ) {
     return { registration: null, error: protocolFailure('ADAPTER_REGISTRATION_INVALID', 'lifecycle adapter registration is invalid') };
   }
@@ -68,9 +84,12 @@ function invocationFailure(error) {
   );
 }
 
-function invokeAdapter(event, registration) {
+function invokeAdapter(event, registration, projectRoot) {
   const eventDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pocketto-lifecycle-event-'));
   const eventPath = path.join(eventDir, 'event.json');
+  const cwd = typeof projectRoot === 'string' && projectRoot.length > 0
+    ? path.resolve(projectRoot)
+    : process.cwd();
   try {
     fs.writeFileSync(eventPath, `${JSON.stringify(event)}\n`, { mode: 0o600 });
     const args = [
@@ -81,7 +100,7 @@ function invokeAdapter(event, registration) {
       '3',
     ];
     const result = spawnSync(registration.argv[0], args, {
-      cwd: process.cwd(),
+      cwd,
       encoding: 'utf8',
       timeout: registration.timeout_ms,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -96,4 +115,9 @@ function invokeAdapter(event, registration) {
   }
 }
 
-module.exports = { invokeAdapter, readAdapterRegistration };
+module.exports = {
+  MAX_ADAPTER_TIMEOUT_MS,
+  invokeAdapter,
+  readAdapterRegistration,
+  resolveProjectRoot,
+};

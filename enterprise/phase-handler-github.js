@@ -1,7 +1,18 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const github = require('./github');
 const { PhaseHandlerError, safeMessage } = require('./phase-handler-errors');
+
+function withBodyFile(body, run) {
+  const bodyFile = github.writeBodyFile(body);
+  try {
+    return run(bodyFile);
+  } finally {
+    try { fs.rmSync(path.dirname(bodyFile), { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
+  }
+}
 
 function runJson(args, options) {
   return runRequest(args, options, true);
@@ -40,10 +51,12 @@ function upsertSummary(endpoint, comments, marker, body, options) {
     .filter((comment) => typeof comment.body === 'string' && comment.body.split(/\r?\n/, 1)[0] === marker)
     .sort((left, right) => Number(left.id) - Number(right.id));
   if (matches.length === 0) {
-    runJson(['api', endpoint, '-f', `body=${body}`], options);
+    withBodyFile(body, (bodyFile) => runJson(['api', endpoint, ...github.bodyFileField(bodyFile)], options));
     return;
   }
-  runJson(['api', commentEndpointForId(endpoint, matches[0].id), '--method', 'PATCH', '-f', `body=${body}`], options);
+  withBodyFile(body, (bodyFile) => runJson([
+    'api', commentEndpointForId(endpoint, matches[0].id), '--method', 'PATCH', ...github.bodyFileField(bodyFile),
+  ], options));
   for (const duplicate of matches.slice(1)) {
     runNoContent(['api', commentEndpointForId(endpoint, duplicate.id), '--method', 'DELETE'], options);
   }

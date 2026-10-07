@@ -158,9 +158,11 @@ function assertRetrySchedule(fixture, run) {
 }
 
 test('Core classifies adapter protocol failures with bounded retry scheduling and no GitHub calls', () => {
-  // Given missing registration, wrong adapter contract, timeout, non-zero exit,
-  // malformed response, or rate-limit failure, When Core drains committed events,
-  // Then it records retryable protocol errors with original IDs and bounded attempts.
+  // Given a missing registration, When Core drains a committed event, Then the
+  // delivery stays pending with zero attempts and no persisted protocol error.
+  // Given wrong adapter contract, timeout, non-zero exit, malformed response, or
+  // rate-limit failure, When Core drains committed events, Then it records
+  // retryable protocol errors with original IDs and bounded attempts.
   // Timeout/rate-limit retries use 1s, 5s, 30s, 120s, and 600s before terminal state.
   // All remote command calls are trapped by a recording fake `gh`; no network is used.
   const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-adapter-protocol-'));
@@ -179,7 +181,14 @@ test('Core classifies adapter protocol failures with bounded retry scheduling an
       const fixture = createProtocolPlan(root, adapterPath, `plan-${scenario.label}`);
       if (scenario.registration) fixture.register(scenario.registration);
       run(fixture, { mode: scenario.mode });
-      assertRetryableFailure(fixture, scenario.label);
+      if (scenario.label === 'missing-registration') {
+        const delivery = readDelivery(fixture);
+        assert.equal(delivery.status, 'pending', 'missing registration must not burn the pending event');
+        assert.equal(delivery.attempts, 0, 'missing registration must not record a delivery attempt');
+        assert.equal(delivery.error, undefined, 'missing registration must not persist a protocol error');
+      } else {
+        assertRetryableFailure(fixture, scenario.label);
+      }
     }
 
     const retryFixture = createProtocolPlan(root, adapterPath, 'plan-rate-limit-retry');

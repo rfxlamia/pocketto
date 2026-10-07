@@ -77,6 +77,14 @@ function makeEvent(planDir) {
   };
 }
 
+function bodyFromArgs(args) {
+  const field = args.find((arg) => arg.startsWith('body=') || arg.startsWith('body=@'));
+  if (!field) return null;
+  const value = field.slice('body='.length);
+  if (field.startsWith('body=@')) return fs.readFileSync(value.slice(1), 'utf8');
+  return value;
+}
+
 function makeFakeGh(initialComments = [], issueRecord = ISSUE) {
   const calls = [];
   const comments = initialComments.map((comment) => ({ ...comment }));
@@ -94,17 +102,16 @@ function makeFakeGh(initialComments = [], issueRecord = ISSUE) {
       return { exit: 0, stdout: JSON.stringify([comments.slice(0, 1), comments.slice(1)]), stderr: '' };
     }
     if (args[0] === 'api' && joined.includes('/comments') && (args.includes('POST') || args.includes('--method=POST'))) {
-      const field = args.find((arg) => arg.startsWith('body='));
-      const body = field ? field.slice('body='.length) : '';
+      const body = bodyFromArgs(args);
       comments.push({ id: nextCommentId++, body });
       return { exit: 0, stdout: JSON.stringify(comments.at(-1)), stderr: '' };
     }
     if (args[0] === 'api' && joined.includes('/issues/comments/') && (args.includes('PATCH') || args.includes('--method=PATCH'))) {
       const id = Number(args.find((arg) => /\/issues\/comments\/\d+/.test(arg)).match(/\d+$/)[0]);
       const comment = comments.find((item) => item.id === id);
-      const field = args.find((arg) => arg.startsWith('body='));
-      if (!comment || !field) return { exit: 1, stdout: '', stderr: 'comment not found' };
-      comment.body = field.slice('body='.length);
+      const body = bodyFromArgs(args);
+      if (!comment || body === null) return { exit: 1, stdout: '', stderr: 'comment not found' };
+      comment.body = body;
       return { exit: 0, stdout: JSON.stringify(comment), stderr: '' };
     }
     if (args[0] === 'api' && joined.includes('/issues/comments/') && (args.includes('DELETE') || args.includes('--method=DELETE'))) {

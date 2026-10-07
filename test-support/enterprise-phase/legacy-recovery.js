@@ -135,5 +135,5 @@ function inlinePostCount(remote) {
   return remote.calls.filter((args) => args[0] === 'api'
     && String(args[1]).includes('/pulls/')
     && String(args[1]).endsWith('/comments')
-    && args.some((arg) => String(arg).includes('pocket-fp:'))).length;
+    && args.some((arg) => String(arg).includes('pocket-fp:') || String(arg).startsWith('body=@'))).length;
 }

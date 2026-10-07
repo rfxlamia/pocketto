@@ -190,6 +190,13 @@ function assertRollbackGuidance(allDocs) {
 	);
 	assert.match(allDocs, /pending events?[^\n.]{0,120}(?:retain|preserv|replay|remain)/i, "Rollback must preserve pending events");
 	assert.match(allDocs, /lifecycle drain/, "Rollback guidance must provide the lifecycle replay command");
+	assert.match(allDocs, /node enterprise\/cli\.js preflight <project-root> --json/, "Rollback must name the read-only preflight command");
+	assert.match(allDocs, /rm <project-root>\/\.pocket\/lifecycle-adapter\.json/, "Rollback must name the registration file to remove");
+	assert.match(
+		allDocs,
+		/npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3/,
+		"Rollback must name the exact drain replay command",
+	);
 	assert.match(
 		allDocs,
 		/(?:preserve|retain)[^\n.]{0,100}(?:\.pocket-meta\.json|log\.json|lifecycle\.json)/i,

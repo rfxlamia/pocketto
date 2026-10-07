@@ -69,6 +69,7 @@
       ],
       "requires": [],
       "forbidden_paths": [
+        "enterprise/",
         "skills/create-pr/",
         "skills/pocket-enterprise/",
         "skills/pocket-development/references/enterprise-reporting.md",
@@ -202,6 +203,7 @@
       ],
       "requires": [],
       "forbidden_paths": [
+        "enterprise/",
         "skills/create-pr/",
         "skills/pocket-enterprise/",
         "skills/pocket-development/references/enterprise-reporting.md",

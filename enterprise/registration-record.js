@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { writeFileAtomicSync } = require('../cli/lib/atomic-file');
 const { EVENT_TYPES } = require('../cli/lib/lifecycle-contract');
+const { MAX_ADAPTER_TIMEOUT_MS } = require('../cli/lib/lifecycle-adapter');
 
 let CORE_VERSION = null;
 let CORE_VERSION_PATH = null;
@@ -21,7 +22,7 @@ const ADAPTER_CONTRACT = 1;
 const REGISTRATION_DIR = '.pocket';
 const REGISTRATION_FILE = 'lifecycle-adapter.json';
 const DEFAULT_TIMEOUT_MS = 30000;
-const MAX_TIMEOUT_MS = 600000;
+const MAX_TIMEOUT_MS = MAX_ADAPTER_TIMEOUT_MS;
 const REGISTRATION_FIELDS = ['schema', 'adapter_contract', 'argv', 'events', 'timeout_ms'];
 
 function fail(code, message, extra = {}) {

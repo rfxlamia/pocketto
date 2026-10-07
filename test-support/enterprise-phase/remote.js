@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs');
+
 function fakeGh(remote) {
   return (args) => {
     remote.calls.push(args.slice());
@@ -131,7 +133,11 @@ function valueFor(args, flag) {
 function fieldFor(args, name) {
   for (let index = 0; index < args.length - 1; index += 1) {
     if ((args[index] === '-f' || args[index] === '-F') && args[index + 1].startsWith(`${name}=`)) {
-      return args[index + 1].slice(name.length + 1);
+      const value = args[index + 1].slice(name.length + 1);
+      if (value.startsWith('@') && value.length > 1) {
+        return fs.readFileSync(value.slice(1), 'utf8');
+      }
+      return value;
     }
   }
   return null;

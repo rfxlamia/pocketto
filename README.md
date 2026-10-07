@@ -62,7 +62,7 @@ Version `4.0.0` is built from the explicit `surfaces.json` manifest. It defines 
 | `claude/core` | Claude Code | Local-first Core workflows and neutral lifecycle CLI. |
 | `claude/enterprise` | Claude Code | Additive Enterprise adapter and references; requires `claude/core`. |
 
-Select the role artifact for the target host and install the matching Core role first. Release builds stage an explicit manifest role with `node scripts/build-surfaces.js --role <role> --output <artifact-dir>`. Enterprise is optional and adds only its adapter-owned files; it does not bundle or copy Core skills. The manifest schema is `SURFACE_MANIFEST=1`. The independent protocol versions are `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, and `ADAPTER_CONTRACT=1`.
+Select the role artifact for the target host and install the matching Core role first. Release builds stage an explicit manifest role with `node scripts/build-surfaces.js --role <role> --output <artifact-dir>`. That staged directory is the role-clean install artifact. `pi install npm:pocketto-pi` publishes one package that contains both Core and Enterprise sources so either role can be staged from it; it is not itself a Core-only tree. Enterprise is optional and adds only its adapter-owned files; it does not bundle or copy Core skills. The manifest schema is `SURFACE_MANIFEST=1`. The independent protocol versions are `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, and `ADAPTER_CONTRACT=1`.
 
 ### Pi extensions (Pi users)
 
@@ -213,6 +213,14 @@ npx pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3
 Migration is explicit and limited to a pristine v3 plan with no execution progress. A progressed or non-pristine v3 plan returns `PIN_V3_REQUIRED` without changing files or making remote calls; finish it with the v3 CLI/Enterprise pair. Migration does not rewrite v3 files or send retrospective events. v3 progress is never silently converted.
 
 For a faulty or unwanted adapter, disable or remove the Enterprise adapter while leaving Core and `lifecycle.json` installed. Preserve `.pocket-meta.json`, `log.json`, lifecycle events, and remote markers; do not delete or rewrite them as rollback. Local execution continues and pending events keep their original IDs. Pin a faulty adapter to the last compatible v4 release, correct it, then replay with `lifecycle drain`. Active v3 plans remain on their v3 path; do not automatically downgrade or destructively convert v4 state.
+
+```bash
+node enterprise/cli.js preflight <project-root> --json
+rm <project-root>/.pocket/lifecycle-adapter.json
+npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
+```
+
+`preflight` only reads the registration. `rm` deletes that registration file and nothing else. After the adapter is repaired or pinned, `lifecycle drain` replays the original event IDs. Do not delete `lifecycle.json`, `log.json`, or `.pocket-meta.json`.
 
 ## CLI
 

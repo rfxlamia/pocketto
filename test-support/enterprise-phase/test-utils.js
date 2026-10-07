@@ -10,7 +10,7 @@ function isRemoteMutation(args) {
   if (args[0] !== 'api') return false;
   const methodIndex = args.indexOf('--method');
   if (methodIndex >= 0) return args[methodIndex + 1] !== 'GET';
-  return args.some((arg) => arg === 'body=' || arg.startsWith('body='));
+  return args.some((arg) => arg === 'body=' || arg.startsWith('body=') || arg.startsWith('body=@'));
 }
 
 function loadPhaseHandler() {

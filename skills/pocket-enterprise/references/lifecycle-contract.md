@@ -50,7 +50,7 @@ A projection write failure after the authoritative lifecycle commit returns `PRO
 
 ## Enterprise registration and delivery
 
-Enterprise atomically registers `<project-root>/.pocket/lifecycle-adapter.json` with schema `1`, `adapter_contract: 1`, executable `argv`, an event allowlist, and a timeout. Core invokes the registered executable with the event file and `--json --contract 3`. Responses are limited to the matching event ID, a supported delivery status, opaque proof references, and a bounded error object. Missing or malformed registration, timeout, malformed response, or non-zero exit is retryable within the configured bound; no fallback writer is permitted.
+Enterprise atomically registers `<project-root>/.pocket/lifecycle-adapter.json` with schema `1`, `adapter_contract: 1`, executable `argv`, an event allowlist, and a timeout. Core invokes the registered executable with the event file and `--json --contract 3`. Responses are limited to the matching event ID, a supported delivery status, opaque proof references, and a bounded error object. A missing registration, or a fail-closed major mismatch, leaves the event pending with no delivery mutation and no remote call. A malformed registration, timeout, malformed response, or non-zero exit is retryable within the configured bound; no fallback writer is permitted.
 
 Run the Enterprise preflight before any issue, PR, or comment operation:
 
@@ -77,5 +77,11 @@ The v4 preflight warns about legacy v3 installations; an unchanged v3 binary can
 ## Non-destructive rollback
 
 To roll back a faulty or unwanted adapter, disable or remove Enterprise while leaving Core and `lifecycle.json` installed. Local work continues and events remain pending under their original IDs. Preserve `.pocket-meta.json`, `log.json`, `lifecycle.json`, task progress, and remote markers; rollback does not delete or rewrite them. Pin a faulty Enterprise artifact to the last compatible v4 release, correct the adapter, and replay the original event IDs with `lifecycle drain`. Keep active v3 plans on the v3 path; do not automatically downgrade v4 state.
+
+```bash
+node enterprise/cli.js preflight <project-root> --json
+rm <project-root>/.pocket/lifecycle-adapter.json
+npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
+```
 
 For issue lookup and ownership, see `issue-reconciliation.md`. For phase PR and closure proof, see `phase-reconciliation.md`.

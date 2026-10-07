@@ -45,7 +45,9 @@ function parseArgs(argv) {
 }
 
 function isEnterpriseRel(rel) {
-  return rel.startsWith('skills/create-pr/') ||
+  return rel.startsWith('enterprise/') ||
+    rel.startsWith('skills/pocket-enterprise/') ||
+    rel.startsWith('skills/create-pr/') ||
     rel === 'skills/pocket-development/references/enterprise-reporting.md' ||
     rel === 'cli/commands/mode.js' ||
     rel === 'cli/lib/mode.js' ||

@@ -82,12 +82,12 @@ function testMixedMajorDispatch(t) {
   assert.equal(mixedDrain.status, 0, `Core must remain locally successful for mixed majors: ${mixedDrain.stdout}${mixedDrain.stderr}`);
   assert.equal(mixedDrain.json.ok, true);
   assert.equal(mixedDrain.json.data.deliveries[0].event_id, mixedEventId);
-  assert.equal(mixedDrain.json.data.deliveries[0].status, 'retryable');
+  assert.equal(mixedDrain.json.data.deliveries[0].status, 'pending');
   assert.equal(mixedDrain.json.data.deliveries[0].error.code, 'ADAPTER_MAJOR_MISMATCH');
   assert.equal(fs.readFileSync(mixed.remote.remoteCalls, 'utf8'), '', 'mixed-major dispatch must not invoke the adapter');
   assert.equal(fs.readFileSync(mixed.remote.ghCalls, 'utf8'), '', 'mixed-major dispatch must not invoke GitHub');
   assert.deepEqual(snapshotLocalState(mixed.projectRoot), mixedBefore, 'mixed-major refusal must preserve local plan, journal identity, metadata, task projection, and remote markers');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(mixed.projectRoot, 'lifecycle.json'), 'utf8')).events[0].delivery.status, 'retryable');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(mixed.projectRoot, 'lifecycle.json'), 'utf8')).events[0].delivery.status, 'pending');
 }
 
 function prepareUnavailableAdapter(fixture, mode) {
@@ -145,7 +145,7 @@ function testUnavailableAdapterMode(t, mode) {
   assert.equal(unavailable.status, 0, `${mode} adapter must not block local Core: ${unavailable.stdout}${unavailable.stderr}`);
   assert.equal(unavailable.json.ok, true);
   assert.equal(unavailable.json.data.deliveries[0].event_id, eventId);
-  assert.equal(unavailable.json.data.deliveries[0].status, 'retryable');
+  assert.equal(unavailable.json.data.deliveries[0].status, 'pending');
   assert.deepEqual(snapshotLocalState(fixture.projectRoot), before, `${mode} adapter must preserve local lifecycle identity and rollback files`);
   assert.equal(fs.readFileSync(fixture.remote.remoteCalls, 'utf8'), '', `${mode} adapter must not reach the recording remote`);
   assert.equal(fs.readFileSync(fixture.remote.ghCalls, 'utf8'), '', `${mode} adapter must not invoke gh`);
@@ -175,7 +175,7 @@ function testCoreOnlyExecution(t) {
   assert.equal(local.status, 0, `Core-only local drain must succeed: ${local.stdout}${local.stderr}`);
   assert.equal(local.json.ok, true);
   assert.equal(local.json.data.deliveries[0].event_id, coreOnlyEventId);
-  assert.equal(local.json.data.deliveries[0].status, 'retryable');
+  assert.equal(local.json.data.deliveries[0].status, 'pending');
   assert.deepEqual(snapshotLocalState(coreOnly.projectRoot), coreOnlyBefore);
   assert.equal(fs.readFileSync(coreOnly.remote.remoteCalls, 'utf8'), '', 'Core-only drain must make no adapter call');
   assert.equal(fs.readFileSync(coreOnly.remote.ghCalls, 'utf8'), '', 'Core-only drain must make no GitHub call');

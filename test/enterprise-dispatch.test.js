@@ -183,7 +183,11 @@ const pr = {
 const json = (value) => process.stdout.write(JSON.stringify(value));
 const field = (name) => {
   for (let i = 0; i < args.length - 1; i++) {
-    if ((args[i] === '-f' || args[i] === '-F') && args[i + 1].startsWith(name + '=')) return args[i + 1].slice(name.length + 1);
+    if ((args[i] === '-f' || args[i] === '-F') && args[i + 1].startsWith(name + '=')) {
+      const value = args[i + 1].slice(name.length + 1);
+      if (value.startsWith('@') && value.length > 1) return fs.readFileSync(value.slice(1), 'utf8');
+      return value;
+    }
   }
   return null;
 };

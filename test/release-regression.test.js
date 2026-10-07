@@ -16,6 +16,7 @@ const {
   skillArchivePaths,
   walkFiles,
 } = require('../test-support/surface-test-utils');
+const { expandIncludes } = require('../cli/lib/surface-manifest');
 
 const ROOT = path.resolve(__dirname, '..');
 const BUILDER = path.join(ROOT, 'scripts', 'build-surfaces.js');
@@ -168,6 +169,16 @@ function assertPackedPackageMetadata(extracted) {
   );
 }
 
+function assertPackedEnterpriseSources(extracted, manifest) {
+  const packed = new Set(walkRelativeFiles(extracted));
+  for (const roleName of ['pi/enterprise', 'claude/enterprise']) {
+    const expanded = expandIncludes(manifest.roles[roleName].includes, ROOT);
+    for (const rel of expanded) {
+      assert.ok(packed.has(rel), `packed package must include enterprise role source ${rel}`);
+    }
+  }
+}
+
 function assertPackedRoleArchives(extracted, staged, manifest, selectedPaths) {
   const stagedArchives = new Set([...staged.values()].flatMap(({ files }) => files.filter((rel) => rel.endsWith('.skill'))));
   const packedFiles = walkRelativeFiles(extracted);
@@ -234,6 +245,7 @@ test('final v4 release rehearsal stages all roles and verifies the packed packag
     const selectedPaths = assertStagedCoreSurfaceContent(staged);
     const extracted = packAndExtractReleasePackage(temporaryRoot);
     assertPackedPackageMetadata(extracted);
+    assertPackedEnterpriseSources(extracted, manifest);
     assertPackedRoleArchives(extracted, staged, manifest, selectedPaths);
     assertPublicCli(extracted, temporaryRoot);
   } finally {

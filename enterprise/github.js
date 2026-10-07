@@ -96,4 +96,10 @@ function writeBodyFile(body, opts = {}) {
   return file;
 }
 
-module.exports = { runGh, writeBodyFile, defaultRunner, DEFAULT_TIMEOUT_MS };
+// `gh api` has no `--body-file`. `-F body=@file` is its file transport:
+// the body is read from disk and is not interpolated by a shell.
+function bodyFileField(bodyFile) {
+  return ['-F', `body=@${bodyFile}`];
+}
+
+module.exports = { runGh, writeBodyFile, bodyFileField, defaultRunner, DEFAULT_TIMEOUT_MS };

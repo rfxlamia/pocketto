@@ -89,8 +89,8 @@ function assertRetryableLocalState(fixture, lifecyclePath, before, unchangedFile
     payload_hash: eventBefore.payload_hash,
     artifact_refs: eventBefore.artifact_refs,
   }, 'rejection must preserve the original event identity and payload');
-  assert.equal(after.events[0].delivery.status, 'retryable');
-  assert.equal(after.events[0].delivery.attempts, 1);
+  assert.equal(after.events[0].delivery.status, 'pending');
+  assert.equal(after.events[0].delivery.attempts, 0);
   for (const [name, contents] of Object.entries(unchangedFiles)) {
     assert.deepEqual(fs.readFileSync(path.join(fixture.projectRoot, name)), contents, `${name} must remain unchanged`);
   }
@@ -116,7 +116,7 @@ function drainFixture(fixture) {
   });
   assert.equal(result.status, 0, `Core local drain must succeed: ${result.stdout}${result.stderr}`);
   assert.equal(result.json.ok, true);
-  assert.equal(result.json.data.deliveries[0].status, 'retryable');
+  assert.equal(result.json.data.deliveries[0].status, 'pending');
   assert.equal(result.json.data.deliveries[0].error.code, 'ADAPTER_MAJOR_UNVERIFIED');
   assert.equal(fs.readFileSync(fixture.remote.remoteCalls, 'utf8'), '', 'unverified adapter must not be invoked');
   assert.equal(fs.readFileSync(fixture.remote.ghCalls, 'utf8'), '', 'Core must not invoke GitHub');
@@ -193,7 +193,7 @@ function assertUnknownMajorDelivery(fixture, scenario, result) {
   assert.equal(result.status, 0, `${scenario.name}: Core local drain must remain successful: ${result.stdout}${result.stderr}`);
   assert.equal(result.json.ok, true);
   assert.equal(result.json.data.deliveries[0].event_id, fixture.eventId);
-  assert.equal(result.json.data.deliveries[0].status, 'retryable');
+  assert.equal(result.json.data.deliveries[0].status, 'pending');
   assert.equal(result.json.data.deliveries[0].error.code, 'ADAPTER_MAJOR_UNVERIFIED');
   assert.equal(fs.readFileSync(fixture.remote.remoteCalls, 'utf8'), '', `${scenario.name}: unknown-major adapter must not be invoked`);
   assert.equal(fs.readFileSync(fixture.remote.ghCalls, 'utf8'), '', `${scenario.name}: Core must not invoke GitHub`);
@@ -204,7 +204,7 @@ function assertUnknownMajorRollback(fixture, scenario, snapshot) {
   assert.deepEqual(after.plan, snapshot.before.plan, `${scenario.name}: local plan state must remain intact`);
   assert.equal(after.events.length, 1);
   assert.equal(after.events[0].event_id, fixture.eventId, `${scenario.name}: pending event identity must survive`);
-  assert.equal(after.events[0].delivery.status, 'retryable', `${scenario.name}: the event must remain pending for replay`);
+  assert.equal(after.events[0].delivery.status, 'pending', `${scenario.name}: the event must remain pending for replay`);
   assertRetryableLocalState(fixture, snapshot.lifecyclePath, snapshot.before, snapshot.unchangedFiles);
   for (const [name, contents] of Object.entries(snapshot.unchangedFiles)) {
     assert.deepEqual(fs.readFileSync(path.join(fixture.projectRoot, name)), contents, `${scenario.name}: ${name} must remain unchanged`);

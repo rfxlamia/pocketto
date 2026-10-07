@@ -10,6 +10,7 @@ const ROOT = path.resolve(__dirname, '..');
 const CITATION_RE =
   /(?:<skills_root>\/|(?:skills|references|cli)\/)[A-Za-z0-9._/-]+\.(?:md|js)(?::\d+(?:-\d+)?)?/g;
 const FORBIDDEN_CORE_PATHS = [
+  'enterprise/',
   'skills/create-pr/',
   'skills/pocket-enterprise/',
   'skills/pocket-development/references/enterprise-reporting.md',

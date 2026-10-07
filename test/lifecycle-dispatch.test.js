@@ -12,3 +12,4 @@ require('../test-support/lifecycle-dispatch/guard-recovery');
 require('../test-support/lifecycle-dispatch/adapter-protocol');
 require('../test-support/lifecycle-dispatch/concurrent-mutations');
 require('../test-support/lifecycle-dispatch/registered-enterprise-symlink');
+require('../test-support/lifecycle-dispatch/project-root');

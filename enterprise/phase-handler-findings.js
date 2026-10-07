@@ -1,8 +1,11 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { setDiff } = require('../cli/lib/reconcile');
 const identity = require('../cli/lib/identity');
 const { PhaseHandlerError } = require('./phase-handler-errors');
+const github = require('./github');
 const { runJson, listReviewThreads } = require('./phase-handler-github');
 
 const FINGERPRINT_PATTERN = /<!-- pocket-fp:([0-9a-f]{16}) -->/g;
@@ -200,14 +203,19 @@ function postFinding(repo, pr, record, options) {
     throw new PhaseHandlerError('PHASE_FINDING_LOCATION_REQUIRED', `Finding ${record.fingerprint} lacks a reviewable diff location.`);
   }
   const body = `${finding.message}\n\n<!-- pocket-fp:${record.fingerprint} -->`;
-  runJson([
-    'api', `repos/${repo.nameWithOwner}/pulls/${pr.number}/comments`,
-    '-f', `body=${body}`,
-    '-f', `commit_id=${pr.headRefOid}`,
-    '-f', `path=${finding.file}`,
-    '-F', `line=${record.line}`,
-    '-f', 'side=RIGHT',
-  ], options);
+  const bodyFile = github.writeBodyFile(body);
+  try {
+    runJson([
+      'api', `repos/${repo.nameWithOwner}/pulls/${pr.number}/comments`,
+      ...github.bodyFileField(bodyFile),
+      '-f', `commit_id=${pr.headRefOid}`,
+      '-f', `path=${finding.file}`,
+      '-F', `line=${record.line}`,
+      '-f', 'side=RIGHT',
+    ], options);
+  } finally {
+    try { fs.rmSync(path.dirname(bodyFile), { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
+  }
 }
 
 module.exports = { readPriorFingerprints, reconcileFindings };

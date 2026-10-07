@@ -1,6 +1,7 @@
 'use strict';
 
-const { readFileSync, writeFileSync } = require('node:fs');
+const { readFileSync } = require('node:fs');
+const { writeFileAtomicSync } = require('./atomic-file');
 const { CliError } = require('./envelope');
 const { acquireLifecycleGuard, releaseLifecycleGuard } = require('./lifecycle-lock');
 const { PIPELINE, PIPELINE_FLOOR_CLI, MARKERLESS_FLOOR_CLI } = require('./version');
@@ -43,7 +44,10 @@ function readLogChecked(logPath) {
 }
 
 function writeLog(logPath, log) {
-  writeFileSync(logPath, JSON.stringify(log, null, 2) + '\n');
+  // Same bytes as the historical in-place writer (2-space indent + trailing
+  // newline). Publish them with temp-file plus rename so a crash cannot
+  // leave a truncated projection.
+  writeFileAtomicSync(logPath, JSON.stringify(log, null, 2) + '\n');
 }
 
 // All log.json read-modify-write operations hold this guard from their first

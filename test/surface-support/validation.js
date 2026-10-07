@@ -175,3 +175,22 @@ test('scripts/build-surfaces.js validates the manifest against a fixture source 
 test('manifest staging rejects missing, duplicate, or forbidden fixture entries before partial output', () => {
   assertManifestStagingFailuresAreAtomic();
 });
+
+test('expandIncludes rejects absolute and parent-directory includes', () => {
+  const { expandIncludes } = require('../../cli/lib/surface-manifest');
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'surface-include-escape-'));
+  try {
+    fs.writeFileSync(path.join(source, 'inside.txt'), 'ok\n');
+    assert.throws(
+      () => expandIncludes(['../outside.txt'], source),
+      /SURFACE_INCLUDE_ESCAPE/,
+    );
+    assert.throws(
+      () => expandIncludes([path.resolve(source, 'inside.txt')], source),
+      /SURFACE_INCLUDE_ESCAPE/,
+    );
+    assert.deepEqual(expandIncludes(['inside.txt'], source), ['inside.txt']);
+  } finally {
+    fs.rmSync(source, { recursive: true, force: true });
+  }
+});

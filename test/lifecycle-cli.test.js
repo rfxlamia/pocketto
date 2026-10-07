@@ -935,10 +935,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const originalWriteFileSync = fs.writeFileSync;
 fs.writeFileSync = function (file, ...args) {
-  if (path.resolve(String(file)) === path.resolve(process.env.POCKET_PROJECTION_FAIL_PATH)) {
-    const error = new Error('injected projection failure');
-    error.code = 'EIO';
-    throw error;
+  if (typeof file === 'string') {
+    const resolved = path.resolve(file);
+    const projection = path.resolve(process.env.POCKET_PROJECTION_FAIL_PATH);
+    const tempPrefix = '.' + path.basename(projection) + '.tmp-';
+    if (resolved === projection || (path.dirname(resolved) === path.dirname(projection) && path.basename(resolved).startsWith(tempPrefix))) {
+      const error = new Error('injected projection failure');
+      error.code = 'EIO';
+      throw error;
+    }
   }
   return originalWriteFileSync.call(fs, file, ...args);
 };

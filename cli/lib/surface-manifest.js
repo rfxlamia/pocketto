@@ -39,6 +39,7 @@ function expandIncludes(includes, sourceDir) {
     if (pattern === 'skills/**' || pattern === 'skills/*') {
       throw new Error(`SURFACE_WILDCARD_FORBIDDEN: package-wide wildcard include is forbidden: ${pattern}`);
     }
+    assertIncludeStaysInSource(pattern, sourceDir);
     if (pattern.endsWith('/**')) {
       const base = pattern.slice(0, -3);
       const baseDir = path.join(sourceDir, base);
@@ -70,6 +71,24 @@ function expandIncludes(includes, sourceDir) {
   return expanded.sort();
 }
 
+function assertIncludeStaysInSource(pattern, sourceDir) {
+  const portable = pattern.split(path.sep).join('/');
+  if (path.isAbsolute(pattern) || path.win32.isAbsolute(pattern) || portable.startsWith('/')) {
+    throw new Error(`SURFACE_INCLUDE_ESCAPE: include escapes the staging root: ${pattern}`);
+  }
+  const segments = portable.split('/');
+  if (segments.includes('..')) {
+    throw new Error(`SURFACE_INCLUDE_ESCAPE: include escapes the staging root: ${pattern}`);
+  }
+  const root = path.resolve(sourceDir);
+  const base = portable.endsWith('/**') ? portable.slice(0, -3) : portable;
+  const resolved = path.resolve(root, base);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`SURFACE_INCLUDE_ESCAPE: include escapes the staging root: ${pattern}`);
+  }
+}
+
 function posix(rel) {
   return rel.split(path.sep).join('/');
 }
@@ -86,7 +105,21 @@ function walkUnder(dir, sourceDir, relBase) {
       out.push(...walkUnder(full, sourceDir, relBase));
     } else if (entry.isFile()) {
       if (entry.name === '__pycache__') continue;
-      out.push(posix(path.relative(sourceDir, full)));
+      const logical = posix(path.relative(sourceDir, full));
+      let realTarget = full;
+      let realRoot = sourceDir;
+      try {
+        realTarget = fs.realpathSync(full);
+        realRoot = fs.realpathSync(sourceDir);
+      } catch {
+        realTarget = full;
+        realRoot = sourceDir;
+      }
+      const escaped = path.relative(realRoot, realTarget);
+      if (escaped.startsWith('..') || path.isAbsolute(escaped)) {
+        throw new Error(`SURFACE_INCLUDE_ESCAPE: include escapes the staging root: ${logical}`);
+      }
+      out.push(logical);
     }
   }
   return out;

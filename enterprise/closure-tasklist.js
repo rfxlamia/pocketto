@@ -2,6 +2,8 @@
 
 // Canonical remote closure proof: tasklist marker plus matching metadata.
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { TASKLIST_MARKER } = require('../cli/lib/bodies');
 const github = require('./github');
 const { PROOF_REF, adapterResult, fromTransport, ghJson } = require('./closure-prerequisites');
@@ -26,14 +28,19 @@ function selectTasklistComments(comments) {
 }
 
 function updateComment(eventId, endpoint, method, body, opts) {
-  const response = github.runGh(['api', endpoint, '--method', method, '-f', `body=${body}`], {
-    runner: opts.ghRunner,
-    timeoutMs: opts.timeoutMs,
-    expectJson: method !== 'DELETE',
-  });
-  return response.ok
-    ? { ok: true, data: response.data }
-    : { ok: false, result: fromTransport(eventId, response, 'TASKLIST_UPSERT_FAILED') };
+  const bodyFile = github.writeBodyFile(body);
+  try {
+    const response = github.runGh(['api', endpoint, '--method', method, ...github.bodyFileField(bodyFile)], {
+      runner: opts.ghRunner,
+      timeoutMs: opts.timeoutMs,
+      expectJson: method !== 'DELETE',
+    });
+    return response.ok
+      ? { ok: true, data: response.data }
+      : { ok: false, result: fromTransport(eventId, response, 'TASKLIST_UPSERT_FAILED') };
+  } finally {
+    try { fs.rmSync(path.dirname(bodyFile), { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
+  }
 }
 
 function hasCanonicalTasklistProof({ event, marker, metadata } = {}) {

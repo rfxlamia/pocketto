@@ -34,7 +34,7 @@ function writeExpiredClaim(lockPath, eventId) {
     plan_id: 'demo-plan',
     event_id: eventId,
     owner_id: ownerId,
-    owner_pid: 2147483647,
+    owner_pid: process.pid,
     claimed_at: '2026-09-19T11:58:59.000Z',
     lease_expires_at: '2026-09-19T11:59:59.000Z',
   };
@@ -105,10 +105,9 @@ function assertExpiredClaimReclaimed(fixture) {
 }
 
 test('lifecycle drain reclaims an expired 60-second claim without overlapping invocation', () => {
-  // Given a claimed event with an expired 60-second lease,
-  // When a later worker drains,
-  // Then it may reclaim the event, records the new owner, and does not overlap
-  // the expired worker's invocation. Use a fixed clock and real claim/ledger files.
+  // Given a claimed event with an expired 60-second lease whose owner_pid is
+  // still alive (this process), When a later worker drains, Then lease expiry
+  // reclaims the event. A live pid must not pin the claim.
   const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-drain-expired-claim-'));
   try {
     assertExpiredClaimReclaimed(createExpiredClaimFixture(root));

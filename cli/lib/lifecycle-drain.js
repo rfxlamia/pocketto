@@ -3,11 +3,20 @@
 const { CliError } = require('./envelope');
 const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
 const { acquireEventClaim, releaseEventClaim } = require('./lifecycle-claims');
-const { invokeAdapter } = require('./lifecycle-adapter');
+const { invokeAdapter, resolveProjectRoot } = require('./lifecycle-adapter');
 const { preflightAdapter } = require('./lifecycle-adapter-compatibility');
 const { failureDeliveryPatch, protocolFailure, responseDeliveryPatch } = require('./lifecycle-retry');
 
 const ACTIVE_DELIVERY_STATUSES = new Set(['pending', 'retryable', 'claimed', 'reconciling']);
+// Fail-closed preflight: the event stays at its current delivery status.
+// Counting these as attempts would turn a missing or mismatched adapter
+// into a terminal event and block later replay of the original ID.
+const NON_BURNING_ADAPTER_CODES = new Set([
+  'ADAPTER_NOT_REGISTERED',
+  'ADAPTER_MAJOR_UNVERIFIED',
+  'ADAPTER_MAJOR_UNSUPPORTED',
+  'ADAPTER_MAJOR_MISMATCH',
+]);
 
 function highestContiguousSucceededRevision(doc) {
   const byRevision = new Map(doc.events.map((event) => [event.revision, event]));
@@ -79,7 +88,22 @@ function recordHeldClaim(event, deliveries) {
   });
 }
 
-function attemptDelivery(specDir, event, adapter) {
+function recordUnavailable(event, adapterError, deliveries) {
+  deliveries.push({
+    event_id: event.event_id,
+    revision: event.revision,
+    status: event.delivery.status,
+    deferred: true,
+    reason: 'adapter-unavailable',
+    error: {
+      code: adapterError.code,
+      retryable: true,
+      message: adapterError.message,
+    },
+  });
+}
+
+function attemptDelivery(specDir, event, adapter, projectRoot) {
   const attempts = event.delivery.attempts + 1;
   const attempted = updateEventDelivery(specDir, event.event_id, {
     status: 'claimed',
@@ -97,7 +121,7 @@ function attemptDelivery(specDir, event, adapter) {
   }
   if (!failure) {
     try {
-      response = invokeAdapter(attempted.event, adapter.registration);
+      response = invokeAdapter(attempted.event, adapter.registration, projectRoot);
     } catch (err) {
       failure = err && typeof err.code === 'string'
         ? protocolFailure(err.code, 'registered lifecycle adapter failed protocol validation', err.retryable !== false)
@@ -126,14 +150,14 @@ function persistedDeliveryResult(persisted) {
   return { result, delivery };
 }
 
-function processClaimedEvent(specDir, eventId, claim, adapter, deliveries, gaps) {
+function processClaimedEvent(specDir, eventId, claim, adapter, projectRoot, deliveries, gaps) {
   let releaseClaim = true;
   try {
     const inspection = inspectEvent(specDir, eventId, deliveries, gaps);
     if (inspection.action === 'skip') return 'continue';
     if (inspection.action !== 'ready') return 'stop';
 
-    const persisted = attemptDelivery(specDir, inspection.event, adapter);
+    const persisted = attemptDelivery(specDir, inspection.event, adapter, projectRoot);
     if (!persisted.ok) {
       releaseClaim = false;
       throw new CliError(persisted.code, persisted.message);
@@ -154,7 +178,9 @@ function runDrain({ specDir } = {}) {
 
   const doc = readLifecycleDoc(specDir);
   if (!doc) throw new CliError('LIFECYCLE_NOT_FOUND', `lifecycle document not found: ${specDir}`);
-  const adapter = preflightAdapter(process.cwd());
+  const projectRoot = resolveProjectRoot(specDir);
+  const adapter = preflightAdapter(projectRoot);
+  const holdForAdapter = Boolean(adapter.error && NON_BURNING_ADAPTER_CODES.has(adapter.error.code));
   const events = doc.events
     .filter((event) => ACTIVE_DELIVERY_STATUSES.has(event.delivery.status))
     .sort((left, right) => left.revision - right.revision);
@@ -165,13 +191,17 @@ function runDrain({ specDir } = {}) {
     const inspection = inspectEvent(specDir, queuedEvent.event_id, deliveries, gaps);
     if (inspection.action === 'skip') continue;
     if (inspection.action !== 'ready') break;
+    if (holdForAdapter) {
+      recordUnavailable(inspection.event, adapter.error, deliveries);
+      break;
+    }
 
     const claim = acquireEventClaim(specDir, inspection.doc.plan.plan_id, inspection.event.event_id);
     if (!claim) {
       recordHeldClaim(inspection.event, deliveries);
       break;
     }
-    if (processClaimedEvent(specDir, queuedEvent.event_id, claim, adapter, deliveries, gaps) === 'stop') break;
+    if (processClaimedEvent(specDir, queuedEvent.event_id, claim, adapter, projectRoot, deliveries, gaps) === 'stop') break;
   }
 
   return {

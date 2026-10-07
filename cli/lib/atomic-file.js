@@ -27,6 +27,9 @@ function writeFileAtomicSync(targetPath, content, opts = {}) {
   const unlink = opts.unlink || fs.unlinkSync;
   const stat = opts.stat || fs.statSync;
   const chmod = opts.chmod || fs.chmodSync;
+  const open = opts.open || fs.openSync;
+  const close = opts.close || fs.closeSync;
+  const fsync = opts.fsync || fs.fsyncSync;
   const nonce = opts.nonce || defaultNonce;
 
   const dir = path.dirname(targetPath);
@@ -44,7 +47,16 @@ function writeFileAtomicSync(targetPath, content, opts = {}) {
     } catch (modeErr) {
       if (!modeErr || modeErr.code !== 'ENOENT') throw modeErr;
     }
+    // Durability: the temp file must reach disk before rename publishes it.
+    // A crash between write and fsync must not leave a renamed empty journal.
+    const fileFd = open(tmpPath, 'r+');
+    try {
+      fsync(fileFd);
+    } finally {
+      close(fileFd);
+    }
     rename(tmpPath, targetPath);
+    fsyncDirectory(dir, open, close, fsync);
   } catch (err) {
     try {
       unlink(tmpPath);
@@ -54,6 +66,23 @@ function writeFileAtomicSync(targetPath, content, opts = {}) {
     throw err;
   }
   return targetPath;
+}
+
+// Directory fsync persists the rename itself. Some platforms reject it;
+// the file fsync above is the mandatory half, so a directory failure
+// must not turn a published document into a reported persistence error.
+function fsyncDirectory(dir, open, close, fsync) {
+  let dirFd;
+  try {
+    dirFd = open(dir, 'r');
+    fsync(dirFd);
+  } catch {
+    // Best-effort. The renamed file content is already fsynced.
+  } finally {
+    if (dirFd !== undefined) {
+      try { close(dirFd); } catch { /* already closed or unsupported */ }
+    }
+  }
 }
 
 module.exports = { writeFileAtomicSync };

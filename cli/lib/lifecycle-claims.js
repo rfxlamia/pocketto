@@ -8,16 +8,6 @@ const { acquireLifecycleGuard: acquireGuard, releaseLifecycleGuard: releaseGuard
 
 const CLAIM_LEASE_MS = 60_000;
 
-function ownerProcessIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid < 1) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return !err || !['ESRCH', 'EINVAL'].includes(err.code);
-  }
-}
-
 function acquireClaimGuard(lockPath) {
   try {
     return acquireGuard(lockPath);
@@ -44,7 +34,9 @@ function recoverExpiredEventClaim(lockPath, now) {
   }
   if (!existing) return true;
   const expiresAt = Date.parse(existing.lease_expires_at);
-  if (!Number.isFinite(expiresAt) || expiresAt > now || ownerProcessIsAlive(existing.owner_pid)) return false;
+  // Lease expiry is the reclaim gate. owner_pid liveness is not: the kernel
+  // can reuse that pid, and a live lookalike would pin the event forever.
+  if (!Number.isFinite(expiresAt) || expiresAt > now) return false;
   fs.unlinkSync(lockPath);
   return true;
 }
