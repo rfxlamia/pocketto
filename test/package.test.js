@@ -151,6 +151,9 @@ test("packed package keeps moved review files and drops deprecated skills", () =
 		for (const rel of MOVED_REVIEW_FILES) {
 			assert.ok(files.has(rel), `missing packed file: ${rel}`);
 		}
+		assert.ok(files.has("surfaces.json"), "npm pack must ship surfaces.json so installedCoreMajor() can verify the release");
+		const packageFiles = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")).files;
+		assert.ok(packageFiles.includes("surfaces.json"), "package.json files must include surfaces.json");
 
 		const leaked = [...files].filter((rel) =>
 			DELETED_SKILL_PREFIXES.some((prefix) => rel.startsWith(prefix)),

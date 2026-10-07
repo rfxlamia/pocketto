@@ -28,6 +28,7 @@
     "node": ">=18"
   },
   "files": [
+    "surfaces.json",
     "skills/**",
     "!skills/**/__pycache__/**",
     "cli/**",

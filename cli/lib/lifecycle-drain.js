@@ -2,7 +2,7 @@
 
 const { CliError } = require('./envelope');
 const { readLifecycleDoc, updateEventDelivery } = require('./lifecycle-store');
-const { acquireEventClaim, releaseEventClaim } = require('./lifecycle-claims');
+const { CLAIM_LEASE_MS, CLAIM_RELEASE_MARGIN_MS, acquireEventClaim, extendEventClaim, releaseEventClaim } = require('./lifecycle-claims');
 const { invokeAdapter, resolveProjectRoot } = require('./lifecycle-adapter');
 const { preflightAdapter } = require('./lifecycle-adapter-compatibility');
 const { failureDeliveryPatch, protocolFailure, responseDeliveryPatch } = require('./lifecycle-retry');
@@ -150,12 +150,28 @@ function persistedDeliveryResult(persisted) {
   return { result, delivery };
 }
 
+function inFlightHoldMs(adapter) {
+  if (!adapter || adapter.error || !adapter.registration) return null;
+  const timeout = adapter.registration.timeout_ms;
+  if (!Number.isInteger(timeout) || timeout < 1) return null;
+  // The idle lease stays 60s. Cover the granted timeout when it is longer,
+  // plus a margin for the delivery write that follows spawnSync.
+  return Math.max(CLAIM_LEASE_MS, timeout + CLAIM_RELEASE_MARGIN_MS);
+}
+
 function processClaimedEvent(specDir, eventId, claim, adapter, projectRoot, deliveries, gaps) {
   let releaseClaim = true;
   try {
     const inspection = inspectEvent(specDir, eventId, deliveries, gaps);
     if (inspection.action === 'skip') return 'continue';
     if (inspection.action !== 'ready') return 'stop';
+
+    const holdMs = inFlightHoldMs(adapter);
+    if (holdMs !== null && !extendEventClaim(claim, holdMs)) {
+      releaseClaim = false;
+      recordHeldClaim(inspection.event, deliveries);
+      return 'stop';
+    }
 
     const persisted = attemptDelivery(specDir, inspection.event, adapter, projectRoot);
     if (!persisted.ok) {
