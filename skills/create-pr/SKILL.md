@@ -7,9 +7,11 @@ description: User-triggered Enterprise PR recorder for a completed phase. Create
 
 Enterprise-owned recorder for opening or reusing a pull request on the **current branch** for a completed development phase. It does not manage branches and does not own phase-verdict reporting.
 
-**Core principle:** This is an explicit user-triggered recorder. It creates or discovers a PR, records its identity, and surfaces non-blocking warnings. Phase summaries and inline verdicts belong to `skills/pocket-development/references/enterprise-reporting.md`.
+**Core principle:** This is an explicit user-triggered recorder. It creates or discovers a PR, records its identity, and surfaces non-blocking warnings. Phase summaries and inline verdicts belong to the Enterprise adapter, not this skill or Core.
 
-**Use this when:** The user requests a phase PR, or confirms the offer in Enterprise phase reporting, and the target phase is in `REVIEW`.
+**v4 boundary:** Package `4.0.0` uses `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `1`, adapter contract `1`, and surface manifest `1`. This skill is part of the additive Enterprise role and requires matching Core. Core is local-first: it does not call `gh`, it does not merge pull requests, and it does not close issues. This recorder may call GitHub only after explicit user invocation and successful Enterprise preflight; it never merges a PR or closes an issue.
+
+**Use this when:** The user requests a phase PR, or explicitly confirms an Enterprise offer, and the target phase is in `REVIEW`.
 
 **Do NOT use when:** Enterprise is disabled, a compatible Core/adapter preflight fails, or there is no linked issue.
 
@@ -38,6 +40,7 @@ Examples:
 2. **Preflight before GitHub** — verify Enterprise mode, compatible Core contract 3, lifecycle schema 1, and registered adapter contract 1 before any GitHub operation.
 3. **Traveling state before PR creation** — commit `log.json`, plan docs, and spec docs before `gh pr create`.
 4. **Always `--body-file`** — never pass a multiline PR body inline.
+5. **Recorder only** — never merge the PR or close the linked issue; `closes #N` is a GitHub link that takes effect only if a human later merges the final PR.
 5. **Recorder only** — do not post verdict summaries, inline findings, or tasklist comments from this skill.
 </HARD-GATE>
 
@@ -48,7 +51,7 @@ Run these checks before staging files or making a GitHub call.
 ### Step 1: Enterprise mode
 
 ```bash
-npx -y pocketto-pi mode --json --contract 2
+npx -y pocketto-pi mode --json --contract 3
 ```
 
 Stop unless the envelope succeeds and `data.enterprise` is strictly `true`.
@@ -82,7 +85,7 @@ Read `<plan_dir>/log.json`. Resolve `phase_file` and `phase_key` from the matchi
 Read the linked issue:
 
 ```bash
-npx -y pocketto-pi meta get <spec_dir> github_issue.number --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> github_issue.number --json --contract 3
 ```
 
 If no positive issue number exists, stop. Run the approved-spec issue reconciliation through the Enterprise lifecycle adapter before requesting a phase PR.
@@ -100,7 +103,7 @@ Record the result as `<branch>`. Do not change branches.
 First check Enterprise metadata:
 
 ```bash
-npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 3
 ```
 
 If it contains a positive number, read its URL and reuse it. Otherwise search for a PR on the current branch:
@@ -138,7 +141,7 @@ Write a temporary structured input file using Node `fs` (not a shell heredoc) wi
 Format the body:
 
 ```bash
-npx -y pocketto-pi format pr --input <pr-input.json> --json --contract 2
+npx -y pocketto-pi format pr --input <pr-input.json> --json --contract 3
 ```
 
 Read `data.bodyFile` and `data.fileWarning`. If `fileWarning` is true, tell the user but continue; it is not a creation gate.
@@ -147,15 +150,15 @@ Read `data.bodyFile` and `data.fileWarning`. If `fileWarning` is true, tell the 
 gh pr create --head <branch> --title "<phase title>" --body-file <data.bodyFile>
 ```
 
-Use `closes #N` for the final phase and `refs #N` for an earlier phase. Parse the resulting PR number and URL.
+Use `closes #N` for the final phase and `refs #N` for an earlier phase. The reference does not close the issue when the PR is created; a human-controlled merge is required. Parse the resulting PR number and URL.
 
 ## Record PR Identity
 
 Only after a successful create or discovery, record the PR under the phase key:
 
 ```bash
-npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.github_pr.number <N> --json --contract 2
-npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.github_pr.url "<url>" --json --contract 2
+npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.github_pr.number <N> --json --contract 3
+npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.github_pr.url "<url>" --json --contract 3
 ```
 
 ## Completion Report

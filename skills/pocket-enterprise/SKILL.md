@@ -5,38 +5,72 @@ description: Adds the registered Enterprise lifecycle adapter to a compatible Co
 
 # Pocket Enterprise
 
-Additive adapter surface for teams that explicitly choose remote lifecycle synchronization. Install it beside its matching Core role; this skill does not bundle or copy Core skills.
+Pocket Enterprise is an optional, additive adapter for teams that explicitly choose remote lifecycle synchronization. Install the Enterprise role beside its matching Core role; it does not bundle or copy Core skills.
 
-**Core principle:** Core commits local state and neutral lifecycle events first. This adapter validates compatibility before any external operation, reconciles events deterministically, and leaves ambiguous ownership for a human.
+**Core principle:** Core commits local state and neutral lifecycle events first. Core does not call `gh`, does not merge pull requests, and does not close issues. The adapter validates compatibility before any external operation, reconciles events deterministically, and leaves ambiguous ownership for a human.
 
-## Activation and compatibility
+## Release and compatibility
 
-1. Require the user's explicit choice to enable this layer. Do not infer consent from a project remote or existing credentials.
-2. Run the Enterprise preflight from the project root:
+The `surfaces.json` manifest has schema `1` and defines exactly `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Enterprise roles are deltas requiring their matching Core role. Release versions are package `4.0.0`, CLI `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `1`, adapter contract `1`, and surface manifest `1`; these are independent version boundaries.
 
-   ```bash
-   node enterprise/cli.js preflight <project-root> --json
-   ```
+| Core | Enterprise | Result |
+|------|------------|--------|
+| v3 | v3 | Legacy installation remains operational with a v4 warning. |
+| v4 | v4 | Supported. |
+| v4 | absent | Core remains local-first; pending events are retained without GitHub calls. |
+| v3 | v4 | Enterprise fails closed with Core upgrade guidance; v3 Core remains usable. |
+| v4 | v3 | The adapter fails closed with Enterprise upgrade guidance; pending v4 events are retained. |
 
-   Continue only when the result is successful and reports a compatible Core installation and adapter registration. Missing Core, an unsupported contract, malformed registration, or a missing executable is fail-closed: make no external call and give the install/upgrade action from the error.
-3. Follow `references/onboarding.md` for the explicit setup and registration steps.
-4. Process pending events with the Core lifecycle drain command only after preflight succeeds. Core remains locally useful if this surface is absent or temporarily unavailable; pending event identity is retained for replay.
+The v4 preflight warns about legacy v3 installations; an unchanged v3 binary cannot warn about a future release. Never infer consent from a remote or credentials. Follow `references/onboarding.md` for setup and registration.
+
+## Activation and preflight
+
+Run the Enterprise preflight from the project root:
+
+```bash
+node enterprise/cli.js preflight <project-root> --json
+```
+
+Continue only when it confirms a compatible Core installation and registered adapter. Missing Core, an unsupported contract, malformed registration, or a missing executable is fail-closed: make no GitHub call and follow the install/upgrade action in the error. Preflight is read-only.
+
+Core provides the lifecycle commands with `--json --contract 3`:
+
+```bash
+pocketto-pi lifecycle transition <spec_dir> <event-type> --artifact <root>:<kind>:<relative-path>:<sha256> --json --contract 3
+pocketto-pi lifecycle drain <spec_dir> --json --contract 3
+pocketto-pi lifecycle repair <spec_dir> --json --contract 3
+pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3
+```
+
+`transition` commits local state and a durable event before optional delivery. `drain` replays pending events in revision order and creates no event. `repair` reconciles lifecycle-owned projection fields only when task state is recoverable; it does not emit or dispatch an event. Run `drain` only after a successful Enterprise preflight. If Enterprise is absent or unavailable, Core work remains successful and event IDs remain available for replay.
 
 ## Lifecycle routing
 
-Core emits only these neutral event names:
+Core emits only neutral event names and artifact references. The event journal and protocol boundary are defined in `references/lifecycle-contract.md`.
 
 | Event | Enterprise-owned action |
 |-------|-------------------------|
 | `spec-approved` | Reconcile the approved spec with its owned issue; see `references/issue-reconciliation.md`. |
-| `phase-complete` | Reconcile the existing phase PR and its proof; see `references/phase-reconciliation.md` and `skills/pocket-development/references/enterprise-reporting.md`. |
-| `plan-closed` | Reconcile the final tasklist and closeout proof; see `references/phase-reconciliation.md`. |
+| `phase-complete` | Reconcile an existing phase PR and its proof; see `references/phase-reconciliation.md`. A missing PR is `PR_REQUIRED`; the adapter never creates one. |
+| `plan-closed` | Reconcile the final tasklist proof on the linked issue; see `references/phase-reconciliation.md`. |
 
-The event journal and protocol boundary are defined in `references/lifecycle-contract.md`. Events carry artifact references and opaque proof only; remote IDs and credentials remain outside Core lifecycle records.
+The adapter owns GitHub IDs, credentials, and remote proof in Enterprise-owned metadata. Core lifecycle records contain no GitHub IDs or credentials. Enterprise issue reconciliation may create one issue for `spec-approved`; it does not create an issue for phase or closure events. `create-pr` is a separate, explicit user-triggered recorder.
 
-## Ownership rules
+## Ownership and human gates
 
-- Issue, PR, comment, and closeout synchronization belongs to this Enterprise surface.
-- `create-pr` remains an explicit, user-triggered recorder: it may create or discover a PR and record its identity, but it does not post review verdicts.
-- Never copy or modify a Core skill to add remote behavior. Keep Core source canonical and install this role only as the declared delta requiring matching Core.
-- Do not guess when a remote issue, PR, marker, or ownership check is ambiguous. Stop with an actionable resolution request instead of mutating an uncertain target.
+- Issue, PR, comment, and remote tasklist synchronization belongs to this Enterprise adapter. Core makes no GitHub calls.
+- Never copy or modify a Core skill to add remote behavior; keep Core source canonical and install Enterprise only as its declared additive delta.
+- Do not guess when an issue, PR, marker, or owner is ambiguous. Stop with an actionable manual-resolution request and make no mutation.
+- The adapter never merges a PR or closes an issue. Those actions remain human-controlled.
+
+## Migration and rollback
+
+Active v3 plans with progress stay on the v3 CLI/Enterprise path. Migration is explicit:
+
+```bash
+pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3
+```
+
+Only a pristine v3 plan with no execution progress can migrate. Progress or a non-pristine plan returns `PIN_V3_REQUIRED` without changing files or making remote calls; finish the plan under v3. No v3 progress is silently converted.
+
+To roll back Enterprise, disable or remove the adapter while retaining Core and the authoritative `lifecycle.json`. Preserve `.pocket-meta.json`, `log.json`, pending lifecycle events, and remote markers. Core continues locally. Pin a faulty adapter to the last compatible v4 release, correct it, then replay pending events with `pocketto-pi lifecycle drain <spec_dir> --json --contract 3` using their original IDs. Do not delete lifecycle state, rewrite v3 plans, or automatically downgrade v4 state.

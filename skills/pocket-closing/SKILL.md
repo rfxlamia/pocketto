@@ -9,6 +9,12 @@ The terminal stage of the Pocket pipeline. Invoked directly by the user after po
 
 **Core principle:** Verdicts decide. pocket-closing never re-reviews and never improvises a close — it reads what pocket-development's phase-level pass wrote and translates it into an accept-and-close or a block. No clean verdict, no close.
 
+## Core v4 lifecycle boundary
+
+`pocket-closing` is a Core workflow. Core keeps plan closure local-first: `log update` and `log close` commit lifecycle state and neutral events with CLI `CONTRACT=3` and lifecycle schema `1`. Core does not call `gh`, does not merge pull requests, and does not close issues. An optional, compatible Enterprise adapter may later reconcile the `plan-closed` event. Closing locally succeeds without Enterprise, and pending events remain available for replay.
+
+If a projection write needs recovery, run `pocketto-pi lifecycle repair <spec_dir> --json --contract 3` before `pocketto-pi lifecycle drain <spec_dir> --json --contract 3`. Repair preserves task progress and fails closed when task state is unrecoverable; drain replays pending events in order without creating events. Active v3 plans with progress stay on v3 and are never silently converted.
+
 ## Position in Pocket Bundle
 
 ```text
@@ -19,7 +25,7 @@ pocket-grinding → pocket-planning → pocket-structuring → pocket-developmen
                                                                   reaches REVIEW on all tasks passing
 ```
 
-pocket-closing is always invoked **directly** by the user (`/pocketto:pocket-closing <path>`) — pocket-development never auto-chains to it. When a phase passes with all `REVIEW_PASS`, the phase-level pass advances the phase to `REVIEW` and emits a `PHASE_COMPLETE` handoff naming pocket-closing as the next step; the user then runs it. pocket-closing owns the close from scratch: the phase-level pass deliberately does NOT update `log.json` ("leave to user or pocket-closing"), so this skill still runs its full preflight, verdict gate, freshness check, and `log close`. pocket-development names `log.json` as "pocket-closing's primary input." This skill is where the loop actually closes.
+pocket-closing is always invoked **directly** by the user (`/pocketto:pocket-closing <path>`) — pocket-development never auto-chains to it. After a terminal phase-level pass, Core's lifecycle-aware transition moves the phase to `REVIEW`, commits the neutral `phase-complete` event, and updates the `log.json` projection; the user then runs this skill. pocket-closing reconciles that log and its verdict files, runs the freshness and verdict gates, advances passed state, and invokes `log close`. The local `plan-closed` event is committed before the projection update; no Enterprise adapter is required for the close and this skill performs no GitHub operation.
 
 ## Invocation
 
@@ -151,7 +157,7 @@ Non-blocking observations (`stage_2` Minor issues, strengths, out-of-scope notes
 Advance the **target** phase `REVIEW → DONE` at the phase level only (`<phase_file>` = `target.file` from `log.json`):
 
 ```bash
-npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --json --contract 2
+npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --json --contract 3
 ```
 
 [CRITICAL] Phase-level update only. NEVER pass `--task` here — task `DONE` recomputes `done_sha` from current HEAD and would corrupt the review's SHA range. Tasks were already marked DONE by pocket-development; leave them untouched. Correction commits are recorded by pocket-development's phase-level pass (via `pocketto-pi log update --correction`), never by closing — this rule is unaffected by the correction cycle.
@@ -163,7 +169,7 @@ Parse the envelope, confirm `ok: true` and `data.newStatus == "DONE"` before con
 Attempt the close once the target phase is `DONE`:
 
 ```bash
-npx -y pocketto-pi log close <plan_dir> --json --contract 2
+npx -y pocketto-pi log close <plan_dir> --json --contract 3
 ```
 
 `log close` verifies **every** phase in the plan is `DONE`. Read the envelope:

@@ -9,12 +9,18 @@ Precise subagent delegation for task-by-task development execution. POCKET ensur
 
 **Core principle:** Every delegation is a contract. The packet is the contract. No packet, no spawn. Read `execution-plan/index.md` once to understand execution flow and dependencies, then open individual task files (`execution-plan/tasks/T*-*.md`) on demand when a task is ready to execute.
 
+## Core v4 lifecycle boundary
+
+`pocket-development` is part of the local-first Core role. Core records neutral lifecycle events for approved specs, completed phases, and closed plans. Core does not call `gh`, does not merge pull requests, and does not close issues. A separately installed, optional adapter may consume durable events after a successful compatibility preflight. Core work and phase completion do not depend on that adapter; unavailable delivery leaves events pending for replay.
+
+The v4 lifecycle commands use `--json --contract 3`. `lifecycle transition` commits local state and an event, `lifecycle drain` replays pending events in revision order without creating events, and `lifecycle repair` repairs recoverable `log.json` projection fields without emitting or dispatching an event. Active v3 plans with progress remain on v3; never silently convert their progress.
+
 ## Startup: Initialize Execution Log
 
 **Run this before the first task, every session:**
 
 ```bash
-npx -y pocketto-pi log init "<plan_dir>" --json --contract 2
+npx -y pocketto-pi log init "<plan_dir>" --json --contract 3
 ```
 
 No install step, PATH setup, or shell-specific guard — `npx` resolves the cross-platform binary and `log init` is idempotent, so this is safe to run unconditionally every session. Replace `<plan_dir>` with the folder containing your execution plan (e.g. `docs/pocket/plans/2026-05-08-auth-refactor`).
@@ -510,7 +516,7 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
 
     # Merge succeeded → log THIS task NOW, before the next merge. HEAD is
     # this task's merge commit, so done_sha = that commit.
-    npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --task <task_id> --json --contract 2
+    npx -y pocketto-pi log update <plan_dir> <phase_file> DONE --task <task_id> --json --contract 3
 ```
 
 [CRITICAL] One task per loop iteration: `git merge` then `log update`, then the
@@ -647,7 +653,7 @@ After ALL tasks are marked DONE in the log, finish the phase in this exact order
 2. **Record the pass result.** The result lands at `<plan_dir>/reviews/phase-pass-<phase_key>.json` — `PHASE_PASS_CLEAN`, or `PHASE_PASS_RESOLVED` after its fix rounds, corrections, and verdict fan-out complete, all per `references/phase-level-pass.md`. Phase status is not `REVIEW` yet.
 3. **Set phase status `REVIEW`.** Only now, and only for a pass that recorded a terminal clean/resolved result:
    ```bash
-   npx -y pocketto-pi log update <plan_dir> <phase_file> REVIEW --json --contract 2
+   npx -y pocketto-pi log update <plan_dir> <phase_file> REVIEW --json --contract 3
    ```
    If the pass exceeded its round cap, this command is forbidden — the phase is `PHASE_BLOCKED` instead (see [Phase Completion Protocol](#phase-completion-protocol)).
 4. **Emit the structured PHASE_COMPLETE message below.** The lifecycle-aware `log update` that moves the phase to `REVIEW` records the neutral `phase-complete` event and its artifact references; no separate external workflow is part of this handoff.
@@ -667,9 +673,9 @@ Run: /pocketto:pocket-closing <plan_dir>/<phase_file>
 
 ### Core lifecycle events and local recovery
 
-Core uses the neutral event vocabulary `spec-approved`, `phase-complete`, and `plan-closed`. A lifecycle event stores only artifact references in `lifecycle.json`; references identify artifacts by root, kind, relative path, and SHA-256 digest.
+Core uses lifecycle schema `1` and the neutral event vocabulary `spec-approved`, `phase-complete`, and `plan-closed`. The approved-spec handoff uses `pocketto-pi lifecycle transition <spec_dir> spec-approved --artifact <root>:<kind>:<relative-path>:<sha256> --json --contract 3`; phase and closure events are committed by the lifecycle-aware `log update`/`log close` transitions. A lifecycle event stores only artifact references in `lifecycle.json`; references identify artifacts by root, kind, relative path, and SHA-256 digest. Core emits `phase-complete` only after the phase-level pass reaches `REVIEW`, not when closing later changes the phase to `DONE`.
 
-If a projection write needs recovery, first run `pocketto-pi lifecycle repair <spec_dir> --json --contract 3` to reconcile lifecycle-owned fields while preserving task state. Then run `pocketto-pi lifecycle drain <spec_dir> --json --contract 3` to replay pending events in revision order; drain does not create a new event. With no registered consumer, events remain durable locally and phase completion is not blocked.
+If a projection write needs recovery, first run `pocketto-pi lifecycle repair <spec_dir> --json --contract 3` to reconcile lifecycle-owned fields while preserving task state. Repair does not emit an event or dispatch an adapter and fails closed if task state is unrecoverable. Then run `pocketto-pi lifecycle drain <spec_dir> --json --contract 3` to replay pending events in revision order; drain does not create a new event. With no registered consumer, events remain durable locally and phase completion is not blocked.
 
 ## Status Handling
 
@@ -704,18 +710,18 @@ Every BLOCKED status must include:
 
 ## Execution Log
 
-The `pocketto-pi` CLI manages the log — the agent runs commands, no inline file editing. Applies to all plans; `log close` is Type B only. Every call takes `--json --contract 2`; parse `data` and check `ok`.
+The `pocketto-pi` CLI manages the log — the agent runs commands, no inline file editing. Applies to all plans; `log close` is Type B only. Every call takes `--json --contract 3`; parse `data` and check `ok`.
 
 ### `log update` — Update status
 
 Update a **phase**:
 ```bash
-npx -y pocketto-pi log update <plan_dir> <phase_file> <status> --json --contract 2
+npx -y pocketto-pi log update <plan_dir> <phase_file> <status> --json --contract 3
 ```
 
 Update a **task within a phase** (add `--task <task_id>`):
 ```bash
-npx -y pocketto-pi log update <plan_dir> <phase_file> <status> --task T1 --json --contract 2
+npx -y pocketto-pi log update <plan_dir> <phase_file> <status> --task T1 --json --contract 3
 ```
 
 Task status: `WAITING` → `DONE` | `BLOCKED`
@@ -724,7 +730,7 @@ Phase status: `WAITING` → `REVIEW` → `DONE` | `BLOCKED`
 ### `log close` — Close (after all phases complete)
 
 ```bash
-npx -y pocketto-pi log close <plan_dir> --json --contract 2
+npx -y pocketto-pi log close <plan_dir> --json --contract 3
 ```
 
 Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns `ok: false` (exit non-zero) if any phase is not DONE.
