@@ -85,11 +85,51 @@ function writeExecutable(filePath, source) {
   return filePath;
 }
 
+function writeAdapterPackageMetadata(adapterPath) {
+  const absoluteAdapterPath = path.resolve(adapterPath);
+  const packageRoot = path.dirname(absoluteAdapterPath);
+  const adapterRelPath = path.relative(packageRoot, absoluteAdapterPath).split(path.sep).join('/');
+  const coreRelPath = 'core.js';
+  const coreRole = (host) => ({
+    host,
+    kind: 'core',
+    includes: [coreRelPath],
+    requires: [],
+    forbidden_paths: ['enterprise/'],
+    forbidden_content: ['ENTERPRISE_ONLY_SURFACE'],
+  });
+  const enterpriseRole = (host, coreRoleName) => ({
+    host,
+    kind: 'enterprise',
+    includes: [adapterRelPath],
+    requires: [coreRoleName],
+    forbidden_paths: ['core/'],
+    forbidden_content: ['CORE_ONLY_SURFACE'],
+  });
+
+  writeFileSync(path.join(packageRoot, 'package.json'), `${JSON.stringify({
+    name: 'test-lifecycle-adapter',
+    version: '4.0.0',
+  }, null, 2)}\n`);
+  writeFileSync(path.join(packageRoot, 'surfaces.json'), `${JSON.stringify({
+    schema: 1,
+    release: { major: 4 },
+    roles: {
+      'pi/core': coreRole('pi'),
+      'pi/enterprise': enterpriseRole('pi', 'pi/core'),
+      'claude/core': coreRole('claude'),
+      'claude/enterprise': enterpriseRole('claude', 'claude/core'),
+    },
+  }, null, 2)}\n`);
+  writeFileSync(path.join(packageRoot, coreRelPath), '// Test-only Core surface marker.\n');
+}
+
 function registerAdapter(pocketDir, adapterPath, {
   adapterContract = 1,
   events = ['spec-approved', 'phase-complete', 'plan-closed'],
   timeoutMs = 30_000,
 } = {}) {
+  writeAdapterPackageMetadata(adapterPath);
   const registration = {
     schema: 1,
     adapter_contract: adapterContract,

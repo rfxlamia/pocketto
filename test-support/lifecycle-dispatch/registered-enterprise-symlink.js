@@ -142,8 +142,8 @@ function assertSymlinkEscapeRejected(fixture, trap) {
   assert.equal(delivery.revision, 1);
   assert.ok(['retryable', 'terminal'].includes(delivery.status), 'the rejected delivery must remain bounded');
   assert.equal(readFileSync(trap.callsPath, 'utf8'), '', 'the symlink escape must not invoke fake GitHub');
-  assert.equal(delivery.error.code, 'ADAPTER_PROTOCOL_HANDLER_FAILED',
-    'Enterprise must reject the physical plan-root escape before phase evidence reaches its handler');
+  assert.equal(delivery.error.code, 'PHASE_LIFECYCLE_PATH_INVALID',
+    'Enterprise must reject the physical plan-root escape with its typed lifecycle-path error before phase evidence reaches mutation');
   assert.equal(readFileSync(fixture.externalPhasePath, 'utf8'), fixture.externalPhaseBytes,
     'external phase evidence bytes must remain unchanged');
   assert.equal(readFileSync(fixture.externalLogPath, 'utf8'), fixture.externalLogBytes,
