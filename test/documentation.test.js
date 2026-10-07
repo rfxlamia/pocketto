@@ -39,7 +39,6 @@ function unnegatedCoreRemoteClaims(text) {
 	];
 	const negatedActionPrefix =
 		/(?:\b(?:do|does|did|can|could|will|would|should|must)\s+not|\b(?:never|cannot|can't|doesn't|don't)|\bnot\s+(?:allowed|supposed|authorized|permitted)\s+to)\s*$/i;
-	const newClaimConnector = /[;:]|\b(?:but|and|however|whereas|yet|while|then)\b/i;
 
 	return sentences(text).filter((sentence) => {
 		if (!/\bCore\b/i.test(sentence)) return false;
@@ -47,21 +46,29 @@ function unnegatedCoreRemoteClaims(text) {
 		const actionMatches = remoteActionPatterns
 			.flatMap((pattern) => [...sentence.matchAll(pattern)])
 			.sort((left, right) => left.index - right.index);
-		let negationCarriesToNextAction = false;
+		const firstAction = actionMatches[0];
+		const hasNegatedCoordinatedList =
+			firstAction &&
+			/\bnever\b/i.test(sentence.slice(0, firstAction.index)) &&
+			actionMatches.slice(1).some((action, index) => {
+				const previousAction = actionMatches[index];
+				const connector = sentence.slice(
+					previousAction.index + previousAction[0].length,
+					action.index,
+				);
+				return /\b(?:and|or)\s*$/i.test(connector.trim());
+			});
+
 		let previousAction;
 
 		for (const action of actionMatches) {
 			const textSincePreviousAction = previousAction
 				? sentence.slice(previousAction.index + previousAction[0].length, action.index)
 				: sentence.slice(0, action.index);
-			if (previousAction && newClaimConnector.test(textSincePreviousAction)) {
-				negationCarriesToNextAction = false;
-			}
-
 			const directlyNegated = negatedActionPrefix.test(textSincePreviousAction);
-			if (!directlyNegated && !negationCarriesToNextAction) return true;
+			const negatedAsListMember = action !== firstAction && hasNegatedCoordinatedList;
+			if (!directlyNegated && !negatedAsListMember) return true;
 
-			negationCarriesToNextAction = true;
 			previousAction = action;
 		}
 		return false;
@@ -76,6 +83,18 @@ test("Core remote-action guard rejects a gh claim despite a negated merge claim"
 
 test("Core remote-action guard rejects an issue-close claim despite a negated gh claim", () => {
 	const claim = "Core closes issues but never calls gh.";
+
+	assert.deepEqual(unnegatedCoreRemoteClaims(claim), [claim]);
+});
+
+test("Core remote-action guard rejects a merge claim after a negated gh claim separated by a comma", () => {
+	const claim = "Core does not call gh, merges pull requests.";
+
+	assert.deepEqual(unnegatedCoreRemoteClaims(claim), [claim]);
+});
+
+test("Core remote-action guard rejects a gh claim after a negated issue-close claim separated by a comma", () => {
+	const claim = "Core does not close issues, calls gh.";
 
 	assert.deepEqual(unnegatedCoreRemoteClaims(claim), [claim]);
 });
