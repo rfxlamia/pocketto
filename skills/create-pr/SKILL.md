@@ -1,17 +1,19 @@
 ---
 name: create-pr
-description: Opens a GitHub PR for the current branch linked to the Pocket issue (Pocket Enterprise). User-triggered recorder — commits traveling state, formats a structured PR body, discovers or creates the PR, and records it in .pocket-meta.json. Trigger on "create-pr", "open a PR", "create pull request", or when pocket-development offers it after a phase completes in enterprise mode.
+description: User-triggered Enterprise PR recorder for a completed phase. Creates or reuses the current-branch PR, links the tracked issue, and records PR identity; it never posts review verdicts.
 ---
 
 # Create PR
 
-Standalone Pocket Enterprise skill. Opens (or reuses) a GitHub pull request on the **current branch** for a completed development phase. Pocket does **not** manage git branches — no checkout, create, or switch.
+Enterprise-owned recorder for opening or reusing a pull request on the **current branch** for a completed development phase. It does not manage branches and does not own phase-verdict reporting.
 
-**Core principle:** Recorder only. The PR is created or discovered; warnings (e.g. >20 files) are surfaced but never block. Enforcement stays with CI and the human supervisor.
+**Core principle:** This is an explicit user-triggered recorder. It creates or discovers a PR, records its identity, and surfaces non-blocking warnings. Phase summaries and inline verdicts belong to the Enterprise adapter, not this skill or Core.
 
-**Use this when:** Pocket Enterprise is enabled, phase tasks are DONE on the current branch, and you need the structured PR gate (what / why / how-to-test, issue link via `refs` or `closes`).
+**v4 boundary:** Package `4.0.0` uses `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `1`, adapter contract `1`, and surface manifest `1`. This skill is part of the additive Enterprise role and requires matching Core. Core is local-first: it does not call `gh`, it does not merge pull requests, and it does not close issues. This recorder may call GitHub only after explicit user invocation and successful Enterprise preflight; it never merges a PR or closes an issue.
 
-**Do NOT use when:** Enterprise mode is off — run `pocketto-pi mode` first; this skill will explain and stop.
+**Use this when:** The user requests a phase PR, or explicitly confirms an Enterprise offer, and the target phase is in `REVIEW`.
+
+**Do NOT use when:** Enterprise is disabled, a compatible Core/adapter preflight fails, or there is no linked issue.
 
 ---
 
@@ -24,76 +26,71 @@ Standalone Pocket Enterprise skill. Opens (or reuses) a GitHub pull request on t
 Examples:
 
 ```text
-/pocketto:create-pr docs/pocket/plans/2026-06-09-github-trace-loop/
-/pocketto:create-pr docs/pocket/plans/2026-06-09-github-trace-loop/ execution-plan/phase-1.md
+/pocketto:create-pr docs/pocket/plans/2026-09-19-feature/
+/pocketto:create-pr docs/pocket/plans/2026-09-19-feature/ execution-plan/phase-1.md
 ```
 
-- `<plan_dir>` — directory containing `log.json` and execution plan file(s).
-- `<phase_file>` — optional. When omitted, select the unique `log.phases[]` entry with `status == REVIEW`. Zero or multiple REVIEW phases → **STOP** and request an explicit phase file.
-
----
+- `<plan_dir>` contains `log.json` and the execution-plan files.
+- `<phase_file>` is optional. When omitted, select the unique `log.phases[]` entry with `status == REVIEW`; zero or multiple matches require an explicit phase file.
 
 ## Hard Constraints
 
 <HARD-GATE>
-1. **NO branch management** — never `git checkout`, `git switch`, `git branch`, or `git worktree` for PR creation. PR opens on whatever branch `git rev-parse --abbrev-ref HEAD` returns.
-2. **Traveling state BEFORE `gh pr create`** — `git add -f` + commit `log.json`, plan docs, and spec docs first (no-op if nothing to commit).
-3. **Always `--body-file`** — never inline multi-line `gh pr create --body "…"` (cross-shell quoting hazard).
-4. **Recorder / non-blocking** — `fileWarning` (>20 files) is surfaced to the user; PR creation still proceeds.
+1. **No branch management** — never check out, create, switch, or remove a branch. Use the current branch.
+2. **Preflight before GitHub** — verify Enterprise mode, compatible Core contract 3, lifecycle schema 1, and registered adapter contract 1 before any GitHub operation.
+3. **Traveling state before PR creation** — commit `log.json`, plan docs, and spec docs before `gh pr create`.
+4. **Always `--body-file`** — never pass a multiline PR body inline.
+5. **Recorder only** — never merge the PR or close the linked issue; `closes #N` is a GitHub link that takes effect only if a human later merges the final PR.
+5. **Recorder only** — do not post verdict summaries, inline findings, or tasklist comments from this skill.
 </HARD-GATE>
-
----
 
 ## Preflight
 
-Run ALL steps before any git add or `gh` call.
+Run these checks before staging files or making a GitHub call.
 
 ### Step 1: Enterprise mode
 
 ```bash
-npx -y pocketto-pi mode --json --contract 2
+npx -y pocketto-pi mode --json --contract 3
 ```
 
-Parse the JSON envelope:
+Stop unless the envelope succeeds and `data.enterprise` is strictly `true`.
 
-- If `ok` is `false` → **STOP.** Explain the mode error and how to fix Pocket Enterprise config.
-- If `data.enterprise` is not strictly `true` → **STOP.** Explain that `create-pr` requires Pocket Enterprise (`pocketto-pi mode init` or a `## Pocket Enterprise` heading in `AGENTS.md`). Do not call `gh`.
+### Step 2: Core and adapter compatibility
 
-### Step 2: gh authentication (skill layer)
+`enterprise/cli.js` is in the pocketto-pi package root, not in the project being checked. A checkout of this repository runs:
+
+```bash
+node enterprise/cli.js preflight <project-root> --json
+```
+
+A project that depends on the npm package runs `node node_modules/pocketto-pi/enterprise/cli.js preflight <project-root> --json`.
+
+Continue only when preflight succeeds and confirms the compatible Core contract, lifecycle schema, adapter contract, and registration. On failure, stop before GitHub and follow the actionable install/upgrade guidance.
+
+### Step 3: Authentication
 
 ```bash
 gh auth status
 ```
 
-If not authenticated → **STOP** with an actionable `gh auth login` error. No partial meta write, no commit, no PR.
+If authentication is unavailable, stop with the `gh auth login` corrective action. Do not stage or commit traveling state before preflight and authentication pass.
 
-### Step 3: Resolve paths
+### Step 4: Resolve paths and linked issue
 
-Read `<plan_dir>/log.json` first. Canonical phase identity:
+Read `<plan_dir>/log.json`. Resolve `phase_file` and `phase_key` from the matching log entry; require that the phase status is `REVIEW`.
 
-```text
-phase_file = phase.file
-phase_key  = phase-${phase.order}
-```
+- `spec_dir` is `docs/pocket/spec/<slug>/`, with `<slug>` matching the plan directory basename.
+- `phase_key` is `phase-${phase.order}` from `log.json`.
+- Use `log.phases[]` order to determine whether this is the final phase.
 
-| Input | Resolution |
-|-------|------------|
-| `plan_dir` | Absolute path to the plan directory |
-| `phase_file` | Explicit arg → resolve to `log.phases[].file` (exact or basename) and require `status == REVIEW`. Omitted → the unique `log.phases[]` entry with `status == REVIEW`. Zero matches → **STOP** ("No phase in REVIEW"). Multiple matches → **STOP** and request an explicit phase file. Never infer from a root `execution-plan.md` or a legacy `execution-plan-phase-N.md` filename. |
-| `spec_dir` | `docs/pocket/spec/<slug>/` where `<slug>` matches the plan directory basename (e.g. `2026-06-09-github-trace-loop`) |
-| `phase_key` | `phase-${phase.order}` from the resolved `log.json` entry |
-
-Confirm `log.json` exists under `plan_dir`. Use `log.phases[]` order to determine `finalPhase` (last phase in the array).
-
-### Step 4: Linked issue
+Read the linked issue:
 
 ```bash
-npx -y pocketto-pi meta get <spec_dir> github_issue.number --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> github_issue.number --json --contract 3
 ```
 
-If no issue number → **STOP.** Explain that issue creation must run first (pocket-grinding Story 1 handoff). No PR without a linked issue.
-
----
+If no positive issue number exists, stop. Run the approved-spec issue reconciliation through the Enterprise lifecycle adapter before requesting a phase PR.
 
 ## Current Branch
 
@@ -101,94 +98,74 @@ If no issue number → **STOP.** Explain that issue creation must run first (poc
 git rev-parse --abbrev-ref HEAD
 ```
 
-Record as `<branch>`. This is the **only** branch reference used for PR discovery and creation. Do not change branches.
+Record the result as `<branch>`. Do not change branches.
 
----
+## PR Discovery
 
-## PR Discovery (idempotent — no duplicates)
-
-**Step A — meta:**
+First check Enterprise metadata:
 
 ```bash
-npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 2
+npx -y pocketto-pi meta get <spec_dir> phases.<phase_key>.github_pr.number --json --contract 3
 ```
 
-If `data.value` is a positive PR number → fetch URL via `meta get … phases.<phase_key>.github_pr.url` (or `gh pr view <N> --json url`) and report reuse. **Stop** — do not create a duplicate.
-
-**Step B — GitHub by branch (recovery when meta write was lost):**
+If it contains a positive number, read its URL and reuse it. Otherwise search for a PR on the current branch:
 
 ```bash
 gh pr list --head <branch> --json number,url
 ```
 
-If any PR is returned → reuse the first match, record via [Record PR](#record-pr) below, report reuse. **Stop** — do not create a duplicate.
+Reuse one exact match and record its identity. If no match exists, continue to explicit creation. If the target is ambiguous or belongs to a different plan/phase, stop for manual resolution.
 
----
+## Commit Traveling State
 
-## Commit Traveling State (before `gh pr create`)
-
-Enterprise mode requires `log.json` and plan/spec docs on the PR so pocket-development's phase-level pass can compute per-task SHA scope.
+Before creating a PR, include the plan and its review evidence:
 
 ```bash
 git add -f <plan_dir>/log.json <plan_dir> <spec_dir>
 git diff --cached --quiet || git commit -m "chore(pocket): traveling state for <phase_key>"
 ```
 
-- Use `git add -f` so gitignored paths (e.g. `log.json` under `docs/`) are included.
-- If the index is unchanged after `git add`, skip commit (no-op).
-- Push is **not** required by this skill — the recorder commits locally; the user or CI may push. If `gh pr create` needs the branch on the remote, surface that as a prerequisite failure from `gh`, not by branching.
+If no staged change exists, skip the commit. Push is not performed by this skill.
 
----
+## Build and Create the PR
 
-## Build PR Body
-
-### Structured input
-
-Write a temp JSON file (Node `fs` — no shell heredocs):
+Write a temporary structured input file using Node `fs` (not a shell heredoc) with:
 
 | Field | Source |
 |-------|--------|
-| `issue` | Issue number from meta (Step 4) |
-| `finalPhase` | `true` if this is the **last** phase in `log.json` (or the only phase in a flat plan); `false` for non-final phases in a multi-phase plan |
-| `fileCount` | Count of files changed for this phase: `git diff --name-only <phase_baseline>..HEAD` (use `log.json` phase `baseline_sha` or first task's range; dedupe paths) |
-| `what` | What this phase delivers — from phase file / task summaries |
-| `why` | Why this work — from spec or plan context |
-| `howToTest` | Verification steps — from plan acceptance criteria / test commands |
+| `issue` | Linked issue number from metadata |
+| `finalPhase` | Whether this is the last phase in `log.json` |
+| `fileCount` | Deduplicated paths changed in this phase |
+| `what` | Phase file and task summaries |
+| `why` | Approved spec or plan context |
+| `howToTest` | Acceptance criteria and task verification commands |
 
-`finalPhase` drives the issue link keyword: `closes #N` (final/sole phase) vs `refs #N` (non-final multi-phase).
-
-### Format and create
+Format the body:
 
 ```bash
-npx -y pocketto-pi format pr --input <pr-input.json> --json --contract 2
+npx -y pocketto-pi format pr --input <pr-input.json> --json --contract 3
 ```
 
-Parse `data.bodyFile` and `data.fileWarning`.
-
-If `data.fileWarning` is `true` → surface a one-line warning to the user (≤20-file-per-PR rule). **Continue** — non-blocking.
+Read `data.bodyFile` and `data.fileWarning`. If `fileWarning` is true, tell the user but continue; it is not a creation gate.
 
 ```bash
 gh pr create --head <branch> --title "<phase title>" --body-file <data.bodyFile>
 ```
 
-Derive `--title` from the phase file heading or plan slug. Parse `gh` output for PR number and URL.
+Use `closes #N` for the final phase and `refs #N` for an earlier phase. The reference does not close the issue when the PR is created; a human-controlled merge is required. Parse the resulting PR number and URL.
 
----
+## Record PR Identity
 
-## Record PR
-
-Only after successful create or reconcile — never before:
+Only after a successful create or discovery, record the PR under the phase key:
 
 ```bash
-npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.github_pr.number <N> --json --contract 2
-npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.github_pr.url "<url>" --json --contract 2
+npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.github_pr.number <N> --json --contract 3
+npx -y pocketto-pi meta set <spec_dir> phases.<phase_key>.github_pr.url "<url>" --json --contract 3
 ```
-
----
 
 ## Completion Report
 
-```
+```text
 PR_READY: <phase_key>
 Branch: <branch>
 PR: #<N> <url>
@@ -196,16 +173,14 @@ Issue link: <refs|closes> #<issue>
 fileWarning: <true|false>
 ```
 
-If reused (meta or `gh pr list`): report `PR_REUSED` instead of `PR_READY`.
-
----
+If the PR was reused, report `PR_REUSED` instead of `PR_READY`.
 
 ## Red Flags
 
 | Thought | Counter |
 |---------|---------|
-| "I'll create a feature branch first" | **STOP.** This skill never manages branches. PR opens on the current branch. |
-| "Skip the traveling-state commit" | **STOP.** Review needs `log.json` + docs on the PR. Commit before `gh pr create`. |
-| "23 files — don't open the PR" | Recorder is non-blocking. Warn and create anyway. |
-| "I'll inline the PR body" | Always `format pr` → `--body-file`. Deterministic and cross-OS safe. |
-| "No issue yet — create PR anyway" | **STOP.** Issue-first is a hard gate. Run pocket-grinding issue creation first. |
+| "I'll create a feature branch first" | **STOP.** This recorder never manages branches. |
+| "Skip the traveling-state commit" | **STOP.** Review needs the plan log and artifacts on the PR. |
+| "The Enterprise reporting file can post verdicts here" | **STOP.** Verdict reporting remains in `enterprise-reporting.md`. |
+| "I'll inline the PR body" | Use `format pr` and `--body-file`. |
+| "No issue yet — create the PR anyway" | **STOP.** Reconcile the approved spec issue first. |

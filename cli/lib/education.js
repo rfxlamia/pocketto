@@ -2,7 +2,7 @@
 
 // Pocket Education learner profile — a `## Pocket Education` heading followed
 // by a fenced `key: value` block in AGENTS.md / CLAUDE.md, the same memory
-// files (and the same AGENTS.md < CLAUDE.md precedence) as Pocket Enterprise.
+// files with AGENTS.md < CLAUDE.md precedence, independent of optional adapters.
 //
 //   education: true
 //   profile_schema: 1
@@ -70,7 +70,7 @@ function isFence(line) {
 
 // Lenient scan used by both the strict parser and the writer. The fence must
 // open before the next H1/H2 heading, so a profile whose fence was deleted can
-// never borrow the fence of a following section (e.g. ## Pocket Enterprise).
+// never borrow the fence of a following section (e.g. an adapter config block).
 // `end` is the last line the block owns, even when the block is malformed, so
 // `edu init --reset` can repair it.
 function scanBlock(lines) {

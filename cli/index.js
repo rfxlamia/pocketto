@@ -29,13 +29,68 @@ const { CLI_VERSION, CONTRACT } = require('./lib/version');
 const structure = require('./commands/structure');
 const log = require('./commands/log');
 const meta = require('./commands/meta');
+const lifecycle = require('./commands/lifecycle');
 const doctor = require('./commands/doctor');
-const mode = require('./commands/mode');
 const edu = require('./commands/edu');
 const setupExtensions = require('./commands/setup-extensions');
-const format = require('./commands/format');
 const reconcile = require('./commands/reconcile');
 const scaffold = require('./commands/scaffold');
+
+// Core-safe lazy command registry (T3 cycle 4; boundary declared by the T5
+// manifest `cli_boundary`): Enterprise-only command modules (`mode`,
+// `format`) must never break Core startup when absent from a Core role. They
+// load on first use through `loadEnterpriseCommand`, which treats ONLY
+// "module not found for the target path" as "not installed" — any other
+// error (syntax error, missing nested dependency, throw at require time)
+// propagates unchanged so real breakage is never misreported as missing.
+//
+// Enterprise installs may override resolution explicitly via
+// `registerEnterpriseCommand(name, loader)`; the default loader resolves the
+// sibling `./commands/<name>` module. Core commands above stay eagerly
+// required: they are present in every role.
+const enterpriseRegistry = new Map();
+
+function registerEnterpriseCommand(name, loader) {
+  if (typeof loader !== 'function') {
+    throw new TypeError(`registerEnterpriseCommand('${name}') requires a loader function.`);
+  }
+  enterpriseRegistry.set(name, loader);
+}
+
+// `require.resolve` probes existence WITHOUT populating the require cache,
+// so a genuinely missing Enterprise module leaves no cache residue, while a
+// present-but-broken module still throws its real error from `require`.
+function loadCommandModule(spec) {
+  let resolved;
+  try {
+    resolved = require.resolve(spec);
+  } catch (err) {
+    if (err && err.code === 'MODULE_NOT_FOUND') return null;
+    throw err;
+  }
+  return require(resolved);
+}
+
+const ENTERPRISE_SPECS = {
+  mode: './commands/mode',
+  format: './commands/format',
+};
+
+function loadEnterpriseCommand(name) {
+  if (enterpriseRegistry.has(name)) return enterpriseRegistry.get(name)();
+  return loadCommandModule(ENTERPRISE_SPECS[name]);
+}
+
+function requireEnterpriseCommand(name) {
+  const mod = loadEnterpriseCommand(name);
+  if (!mod) {
+    throw new CliError(
+      'ENTERPRISE_COMMAND_UNAVAILABLE',
+      `'${name}' is not available in this Core installation (Enterprise-only command).`,
+    );
+  }
+  return mod;
+}
 
 function parseArgs(argv) {
   const positionals = [];
@@ -67,6 +122,8 @@ function parseArgs(argv) {
     forTask: null,
     sha: null,
     allowDuplicateSha: false,
+    artifact: [],
+    from: null,
   };
 
   // A flag that takes a value must actually have one — guard against it being
@@ -125,6 +182,10 @@ function parseArgs(argv) {
     else if (a === '--sha') flags.sha = requireValue(argv[++i], '--sha');
     else if (a.startsWith('--sha=')) flags.sha = requireValue(a.slice('--sha='.length), '--sha');
     else if (a === '--allow-duplicate-sha') flags.allowDuplicateSha = true;
+    else if (a === '--artifact') flags.artifact.push(requireValue(argv[++i], '--artifact'));
+    else if (a.startsWith('--artifact=')) flags.artifact.push(requireValue(a.slice('--artifact='.length), '--artifact'));
+    else if (a === '--from') flags.from = requireValue(argv[++i], '--from');
+    else if (a.startsWith('--from=')) flags.from = requireValue(a.slice('--from='.length), '--from');
     else if (a.startsWith('--')) throw new CliError('UNKNOWN_FLAG', `Unknown flag: ${a}`);
     else positionals.push(a);
   }
@@ -164,6 +225,10 @@ Usage:
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
   pocketto-pi log update <plan_dir> <phase_file> --correction <sha> [--for-task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
+  pocketto-pi lifecycle transition <spec_dir> <event-type> --artifact <root>:<kind>:<path>:<sha256> [--json]
+  pocketto-pi lifecycle drain <spec_dir>                  [--json]
+  pocketto-pi lifecycle repair <spec_dir>                 [--json]
+  pocketto-pi lifecycle migrate <spec_dir> --from v3      [--json] [--contract 3]
   pocketto-pi meta get   <dir> <field>                    [--json]
   pocketto-pi meta set   <dir> <field> <value>            [--json]
   pocketto-pi doctor                                      [--strict] [--json]
@@ -222,7 +287,12 @@ function emitError(command, err, json) {
   const message = err.message || String(err);
   const exitCode = err instanceof CliError ? err.exitCode : 1;
   if (json) {
-    process.stdout.write(JSON.stringify(fail(command, code, message)) + '\n');
+    process.stdout.write(JSON.stringify(fail(
+      command,
+      code,
+      message,
+      err instanceof CliError ? err.details : undefined,
+    )) + '\n');
   } else {
     process.stderr.write((err.human || `Error: ${message}`) + '\n');
   }
@@ -269,14 +339,21 @@ function main() {
         allowDuplicateSha: flags.allowDuplicateSha,
       });
       emitSuccess(result.command, result, flags.json);
-    } else if (command === 'meta') {
-      const result = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
+    } else if (command === 'lifecycle') {
+      const result = lifecycle.run({
+        positionals: positionals.slice(1),
+        artifacts: flags.artifact,
+        from: flags.from,
+      });
       emitSuccess(result.command, result, flags.json);
+    } else if (command === 'meta') {
+      const metaResult = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
+      emitSuccess(metaResult.command, metaResult, flags.json);
     } else if (command === 'doctor') {
       const result = doctor.run({ strict: flags.strict });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'mode') {
-      const result = mode.run({
+      const result = requireEnterpriseCommand('mode').run({
         positionals: positionals.slice(1),
         enterprise: flags.enterprise,
         branchStrategy: flags.branchStrategy,
@@ -297,7 +374,7 @@ function main() {
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'format') {
-      const result = format.run({ kind: positionals[1], inputPath: flags.input, positionals: positionals.slice(2) });
+      const result = requireEnterpriseCommand('format').run({ kind: positionals[1], inputPath: flags.input, positionals: positionals.slice(2) });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'scaffold') {
       const result = scaffold.run({ target: positionals[1], targetDir: positionals[2], dryRun: flags.dryRun });
@@ -309,11 +386,15 @@ function main() {
       const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
       emitSuccess(result.command, result, flags.json);
     } else {
-      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | meta | doctor | mode | edu | format | scaffold | reconcile | setup-extensions.`);
+      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | lifecycle | meta | doctor | mode | edu | format | scaffold | reconcile | setup-extensions.`);
     }
   } catch (err) {
     emitError(command, err, flags.json);
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { parseArgs, registerEnterpriseCommand, loadEnterpriseCommand };

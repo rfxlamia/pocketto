@@ -157,7 +157,7 @@ Once the commit is clean, it is recorded via:
 npx -y pocketto-pi log update <plan_dir> <phase_file> \
   --correction <sha> \
   --for-task <task_id> \
-  --json --contract 2
+  --json --contract 3
 ```
 
 `<task_id>` is the task the finding is primarily attributed to (`for_task`); the CLI derives any additional `bleed` attribution from file ownership automatically — the main agent does not compute bleed itself. Parse `data.correction` from the envelope:

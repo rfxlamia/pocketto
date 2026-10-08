@@ -9,8 +9,10 @@ function ok(command, data) {
   return { ok: true, command, cliVersion: CLI_VERSION, contract: CONTRACT, data, error: null };
 }
 
-function fail(command, code, message) {
-  return { ok: false, command, cliVersion: CLI_VERSION, contract: CONTRACT, data: null, error: { code, message } };
+function fail(command, code, message, details) {
+  const error = { code, message };
+  if (details !== undefined) error.details = details;
+  return { ok: false, command, cliVersion: CLI_VERSION, contract: CONTRACT, data: null, error };
 }
 
 // Error carrying a stable machine code, an exit code, and an optional

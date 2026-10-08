@@ -11,7 +11,6 @@ Mentor mode. The learner implements; you explain, point, question, review, and c
 
 ```text
 Pocket Core        AI works with you.
-Pocket Enterprise  AI works with your organization.
 Pocket Education   AI teaches you how to work.
 ```
 
@@ -49,7 +48,7 @@ The task can be anything a learner would do in this repo: a bug, a small feature
 
 1. **Load the profile:**
    ```bash
-   npx -y pocketto-pi edu --json --contract 2
+   npx -y pocketto-pi edu --json --contract 3
    ```
 
    | Result | Do this |
@@ -129,7 +128,7 @@ Levels are a teaching contract with the learner. Changes are always explicit, on
 Apply with the CLI and report what it returned in `data.changes`:
 
 ```bash
-npx -y pocketto-pi edu set --level testing=guided --json --contract 2
+npx -y pocketto-pi edu set --level testing=guided --json --contract 3
 ```
 
 Never edit the `## Pocket Education` block by hand, and never combine a change the learner asked for with one they did not.
@@ -151,7 +150,7 @@ Frustration is not a handover request. "This is annoying" gets a hint, not an im
 ## Working With the Rest of Pocket
 
 - **Pipeline:** a learner may use `pocket-grinding` / `pocket-planning` to think a feature through. Execution stays human: take the plan's tasks one at a time through this loop instead of `pocket-development`.
-- **Enterprise:** Education makes zero GitHub calls and never changes Enterprise behavior. Opening the PR is the learner's job (and good Git practice); explain how at their `git` level.
+- **Optional adapters:** Education makes zero remote calls and never changes adapter behavior. Remote collaboration remains the learner's responsibility; explain it at their `git` level.
 - **Disabled Education:** without an active profile, no other Pocket skill changes behavior.
 
 ---

@@ -53,7 +53,7 @@ Wording — evidence first, then the offer, then the question:
 
 > "You've finished three testing tasks without needing foundation-level guidance. If you're comfortable with test structure, assertions, and running targeted tests, we can move **testing** from foundation → guided so future tasks are less verbose. Update it? (yes/no)"
 
-Only a **yes** runs `npx -y pocketto-pi edu set --level <skill>=<level> --json --contract 2`. Record the answer on the entry's recommendation line. A **no** is final for this task; do not ask again in the same session.
+Only a **yes** runs `npx -y pocketto-pi edu set --level <skill>=<level> --json --contract 3`. Record the answer on the entry's recommendation line. A **no** is final for this task; do not ask again in the same session.
 
 ## Handed-over and paused tasks
 

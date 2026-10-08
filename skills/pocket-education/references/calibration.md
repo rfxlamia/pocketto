@@ -82,7 +82,7 @@ npx -y pocketto-pi edu init --file <memory_file> \
   --level programming_fundamentals=guided --level repository_navigation=guided \
   --level git=guided --level testing=foundation --level debugging=guided \
   --level typescript=independent \
-  [--teaching-mode socratic] [--journal false] --json --contract 2
+  [--teaching-mode socratic] [--journal false] --json --contract 3
 ```
 
 `EDU_PROFILE_EXISTS` means a profile is already there: stop and reuse it. Only an explicit recalibration request adds `--reset`.
@@ -92,7 +92,7 @@ npx -y pocketto-pi edu init --file <memory_file> \
 When a task needs a skill that is not in the profile, ask one self-assessment question for that skill only (a / b / c), optionally one probe, propose the level, and on confirmation:
 
 ```bash
-npx -y pocketto-pi edu set --level sql=guided --json --contract 2
+npx -y pocketto-pi edu set --level sql=guided --json --contract 3
 ```
 
 The CLI reports it as `direction: "added"`.

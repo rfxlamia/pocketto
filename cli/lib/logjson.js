@@ -1,13 +1,21 @@
 'use strict';
 
-const { readFileSync, writeFileSync } = require('node:fs');
+const { readFileSync } = require('node:fs');
+const { writeFileAtomicSync } = require('./atomic-file');
 const { CliError } = require('./envelope');
+const { acquireLifecycleGuard, releaseLifecycleGuard } = require('./lifecycle-lock');
 const { PIPELINE, PIPELINE_FLOOR_CLI, MARKERLESS_FLOOR_CLI } = require('./version');
 
 // log.json is written with 2-space indent + trailing newline to match the
 // previous Python writer byte-for-byte (json.dumps(..., indent=2) + "\n").
 function readLog(logPath) {
-  return JSON.parse(readFileSync(logPath, 'utf8'));
+  const content = readFileSync(logPath, 'utf8');
+  try {
+    return JSON.parse(content);
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    throw new SyntaxError(`invalid log projection at ${logPath}: ${err.message}`, { cause: err });
+  }
 }
 
 // State-changing commands call this AFTER readLog and BEFORE any mutation or
@@ -36,7 +44,37 @@ function readLogChecked(logPath) {
 }
 
 function writeLog(logPath, log) {
-  writeFileSync(logPath, JSON.stringify(log, null, 2) + '\n');
+  // Same bytes as the historical in-place writer (2-space indent + trailing
+  // newline). Publish them with temp-file plus rename so a crash cannot
+  // leave a truncated projection.
+  writeFileAtomicSync(logPath, JSON.stringify(log, null, 2) + '\n');
+}
+
+// All log.json read-modify-write operations hold this guard from their first
+// read through persistence. Repair may probe before locking, but must re-read
+// under the guard before applying lifecycle-owned fields.
+function withProjectionMutation(logPath, mutate) {
+  let guard;
+  try {
+    guard = acquireLifecycleGuard(`${logPath}.projection-lock`, { wait: true });
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    throw new CliError('LOG_PROJECTION_LOCK_FAILED', `could not serialize log.json mutation: ${detail}`);
+  }
+  if (!guard) throw new CliError('LOG_PROJECTION_LOCK_FAILED', 'could not acquire the log.json projection guard');
+  try {
+    return mutate();
+  } finally {
+    releaseLifecycleGuard(guard);
+  }
+}
+
+// Explicit projection writer: `log.json` is a derived, repairable
+// projection of the authoritative lifecycle document — never the authority
+// itself. Callers must hold withProjectionMutation from read through write;
+// the optional writer override exists only for failure injection in tests.
+function writeProjection(logPath, log, { writer = writeLog } = {}) {
+  writer(logPath, log);
 }
 
 // Local-time YYYY-MM-DD, matching Python date.today().isoformat().
@@ -48,4 +86,12 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
-module.exports = { readLog, writeLog, todayISO, assertPipeline, readLogChecked };
+module.exports = {
+  readLog,
+  writeLog,
+  writeProjection,
+  withProjectionMutation,
+  todayISO,
+  assertPipeline,
+  readLogChecked,
+};

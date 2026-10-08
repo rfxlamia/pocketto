@@ -1,17 +1,17 @@
 ---
 name: pocket-init
-description: Onboards an existing (brownfield) project onto Pocket. Scans the codebase and writes a project memory file (CLAUDE.md or AGENTS.md), optionally enables Pocket Enterprise (mode init) and scaffolds GitHub issue/PR templates, and optionally enables Pocket Education with a lightweight learner calibration (edu init). Trigger on "pocket-init", "set up pocket", "onboard this project", "generate CLAUDE.md", "enable enterprise mode", "enable education mode".
+description: Onboards an existing project onto Pocket by scanning its local configuration, writing a merge-safe project guide, and optionally calibrating a local Pocket Education learner profile. Trigger on "pocket-init", "set up pocket", "onboard this project", "generate CLAUDE.md", "generate AGENTS.md", or "enable education mode".
 ---
 
 # Pocket Init
 
-Standalone onboarding skill. Takes an existing project from zero Pocket context to ready-to-run: a project memory file the agent can rely on, and — only when the user opts in — Pocket Enterprise mode with GitHub templates and/or Pocket Education with a persisted learner profile. The two modes are independent: Core only, Core + Enterprise, Core + Education, or all three.
+Standalone local onboarding. Takes an existing project from zero Pocket context to a useful project guide that the agent can rely on, and optionally enables Pocket Education with a persisted learner profile.
 
 **Core principle:** Read the project, never guess it. Every claim written to the memory file must come from files actually inspected in this run. User content in an existing memory file is never overwritten.
 
-**Use this when:** Adopting Pocket in an existing repo, regenerating a stale project guide, enabling Pocket Enterprise for a team, or enabling Pocket Education for a learner.
+**Use this when:** Adopting Pocket in an existing repo, regenerating a stale project guide, or enabling Pocket Education for a learner.
 
-**Do NOT use when:** The project already has a current memory file and the modes it wants — there is nothing to initialize. To change learner levels later, use `pocket-education` (it never needs a re-init). For spec work, go to `pocket-grinding`.
+**Do NOT use when:** The project already has a current memory file and the learner profile it wants. To change learner levels later, use `pocket-education` (it never needs a re-init). For spec work, go to `pocket-grinding`.
 
 ---
 
@@ -28,8 +28,8 @@ Standalone onboarding skill. Takes an existing project from zero Pocket context 
 ## Hard Constraints
 
 <HARD-GATE>
-1. **Merge, never clobber** — if the memory file exists, only the `<!-- pocket-init:start -->` … `<!-- pocket-init:end -->` managed section may be created or replaced. Everything outside it is untouched, byte for byte.
-2. **Enterprise is opt-in** — never enable enterprise mode, call `gh`, or write `.github/` files unless the user explicitly says yes at the Enterprise Gate below.
+1. **Merge, never clobber** — if the memory file exists, only the `<!-- pocket-init:start -->` … `<!-- pocket-init:end -->` managed section may be created or replaced. Everything outside it is untouched, byte for byte. The separately consented Education Gate writes only its learner profile through `edu`.
+2. **Local onboarding only** — inspect local project files and do not configure integrations or access remote services.
 3. **Evidence-based guide** — every command written to the memory file (build, test, lint) must be read from a manifest or config file, not assumed from the stack.
 4. **Education is opt-in and learner-owned** — never calibrate or write a `## Pocket Education` block unless the user says yes at the Education Gate, and never write levels the learner has not confirmed. An existing profile is reused, never recalibrated, unless the learner explicitly asks.
 </HARD-GATE>
@@ -41,10 +41,10 @@ Standalone onboarding skill. Takes an existing project from zero Pocket context 
 Inspect the project before writing anything:
 
 1. **Stack & manifests** — `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, or equivalent: language, package manager, declared scripts.
-2. **Commands** — extract the real build / test / lint / typecheck commands from the manifest scripts or CI workflows (`.github/workflows/*`). Record them verbatim.
+2. **Commands** — extract the real build / test / lint / typecheck commands from manifest scripts or local CI workflow files. Record them verbatim.
 3. **Layout** — top-level directories and what lives in each (source, tests, docs, tooling). Keep it to the directories that matter.
-4. **Conventions** — formatter/linter configs, commit style visible in `git log --oneline -10`, test file naming.
-5. **Existing memory files** — check for `CLAUDE.md` and `AGENTS.md`. Note which exist and whether they already contain a `pocket-init` managed section, a `## Pocket Enterprise` heading, or a `## Pocket Education` heading.
+4. **Conventions** — formatter/linter configs, test file naming, and commit style visible in `git log --oneline -10`.
+5. **Existing memory files** — check for `CLAUDE.md` and `AGENTS.md`. Note which exist and whether they already contain a `pocket-init` managed section or a `## Pocket Education` heading.
 
 Summarize the findings to the user in a few lines before writing.
 
@@ -56,7 +56,7 @@ Detect the platform and choose the target:
 - Running under **Pi** → `AGENTS.md`.
 - Ambiguous, or both files already exist → ask the user which file to use. Never write both.
 
-Record the choice as `<memory_file>`; it is also the `--file` value for `mode init` in Step 4.
+Record the choice as `<memory_file>`.
 
 ## Step 3: Write the managed section
 
@@ -90,67 +90,25 @@ Merge rules:
 
 Keep the section under ~60 lines — a memory file is an index, not documentation.
 
-The `## Pocket Enterprise` and `## Pocket Education` blocks live **outside** the managed section and are owned by their CLI commands (`mode init`, `edu`). Regenerating the project guide never touches them — in particular, it never resets a learner's calibration.
+The `## Pocket Education` block lives **outside** the managed section and is owned by `edu`. Regenerating the project guide never touches it and never resets a learner's calibration. Other user-owned configuration blocks also remain untouched.
 
-## Step 4: Enterprise Gate (opt-in)
+## Step 4: Education Gate (opt-in)
 
 Check current state first:
 
 ```bash
-npx -y pocketto-pi mode --json --contract 2
+npx -y pocketto-pi edu --json --contract 3
 ```
 
-If `data.enterprise` is already `true` → report the active config and skip to Step 5 (offer scaffolding only if `.github` templates are missing).
-
-Otherwise ask the user **one** question:
-
-> "Enable Pocket Enterprise for this repo? It links specs to GitHub issues, opens PRs per phase, and posts review verdicts to the PR. Requires the `gh` CLI. (yes/no)"
-
-**If no → skip to Step 6 (Education Gate).** No GitHub call, no `.github/` write. Fail-closed, identical to every other enterprise-aware skill.
-
-**If yes:**
-
-1. Prerequisites (skill layer — the CLI does not call `gh`):
-   - `gh auth status` — not authenticated → **STOP** with an actionable `gh auth login` error.
-   - `git remote get-url origin` — no remote → **STOP** with an actionable error.
-2. Ask whether merges should require an approved PR review (`require_approval`) — default no.
-3. Initialize:
-   ```bash
-   npx -y pocketto-pi mode init --enterprise true --branch-strategy branch --create-pr true [--require-approval true] --file <memory_file> --json --contract 2
-   ```
-4. Re-run `mode` preflight and confirm `enterprise=true` before continuing.
-
-## Step 5: GitHub scaffolding (enterprise only)
-
-```bash
-npx -y pocketto-pi scaffold github --json --contract 2
-```
-
-Report `data.wrote` and `data.skipped` (existing templates are never overwritten). Then ensure the label exists:
-
-```bash
-gh label create pocket-plan --description "Tracked through the Pocket pipeline" --color 1D76DB
-```
-
-If the label already exists, `gh` errors — treat that as success and continue.
-
-## Step 6: Education Gate (opt-in)
-
-Asked regardless of the Enterprise answer — the modes are independent. Check current state first:
-
-```bash
-npx -y pocketto-pi edu --json --contract 2
-```
-
-- `data.education` is `true` → a learner profile exists. Report it and **do not recalibrate** (only an explicit learner request triggers `pocket-education`'s recalibration). Skip to Step 7.
-- `data.source` set but `data.education` is `false` → a paused profile exists. Ask whether to resume it (`edu set --education true`); do not recalibrate. Skip to Step 7.
-- An error (`EDU_CONFIG_INVALID`, `EDU_SCHEMA_UNSUPPORTED`) → report it; do not overwrite the block. Skip to Step 7.
+- `data.education` is `true` → a learner profile exists. Report it and **do not recalibrate** (only an explicit learner request triggers `pocket-education`'s recalibration). Skip to Step 5.
+- `data.source` set but `data.education` is `false` → a paused profile exists. Ask whether to resume it (`edu set --education true`); do not recalibrate. Skip to Step 5.
+- An error (`EDU_CONFIG_INVALID`, `EDU_SCHEMA_UNSUPPORTED`) → report it; do not overwrite the block. Skip to Step 5.
 
 Otherwise ask the user **one** question:
 
 > "Enable Pocket Education for this repo? It keeps implementation human-owned — the agent explains, reviews, and guides while you write the code — and stores a learner profile so guidance adapts across sessions. (yes/no)"
 
-**If no → skip to Step 7.** Nothing is written.
+**If no → skip to Step 5.** Nothing is written.
 
 **If yes:**
 
@@ -158,19 +116,17 @@ Otherwise ask the user **one** question:
 2. Show the proposed profile; the learner confirms or edits every level.
 3. Write it to the same memory file:
    ```bash
-   npx -y pocketto-pi edu init --file <memory_file> --level <skill>=<level> [--level ...] [--teaching-mode socratic] [--journal false] --json --contract 2
+   npx -y pocketto-pi edu init --file <memory_file> --level <skill>=<level> [--level ...] [--teaching-mode socratic] [--journal false] --json --contract 3
    ```
-4. Re-run `edu --json --contract 2` and confirm `education=true` before continuing.
+4. Re-run `edu --json --contract 3` and confirm `education=true` before continuing.
 
-Education makes no GitHub call and does not change Enterprise behavior.
+Education makes no remote call and does not change optional adapter behavior.
 
-## Step 7: Completion report
+## Step 5: Completion report
 
 ```text
 POCKET_INIT_COMPLETE
 Memory file : <memory_file> (created | merged)
-Enterprise  : enabled (branch, create_pr=true, require_approval=<bool>) | disabled
-Scaffold    : .github/ISSUE_TEMPLATE/pocket-plan.md, .github/pull_request_template.md | skipped
 Education   : enabled (<n> skills, teaching_mode=<mode>, journal=<on|off>) | reused existing profile | disabled
 Next        : /pocketto:pocket-grinding "<your first feature>"
               (Education on → /pocketto:pocket-education "<your first task>")
@@ -184,9 +140,8 @@ Next        : /pocketto:pocket-grinding "<your first feature>"
 |---------|---------|
 | "The memory file is messy — I'll rewrite it" | **STOP.** Only the managed section is yours. Everything else is user content. |
 | "It's a Node project, tests are probably `npm test`" | Read the manifest. Write only commands that actually exist. |
-| "Enterprise would help this team — I'll enable it" | **STOP.** Enterprise is opt-in at the gate. No yes, no `gh`, no `.github/` writes. |
-| "Templates exist but look wrong — overwrite them" | `scaffold github` never overwrites; report the skip and let the user decide. |
+| "I'll run a remote setup command while onboarding" | **STOP.** This skill performs local inspection and writes only the managed guide section and, with explicit consent, the local learner profile. |
 | "I'll write both CLAUDE.md and AGENTS.md to be safe" | One memory file per project. Two copies drift apart. |
-| "They're a beginner — I'll enable Education for them" | **STOP.** Education is opt-in at the gate, like Enterprise. |
+| "They're a beginner — I'll enable Education for them" | **STOP.** Education is opt-in at the gate. |
 | "A profile exists, but a fresh calibration would be more accurate" | Reuse it. Recalibration is the learner's call, not yours. |
 | "Their answers say testing is guided — I'll write that without asking" | Show the proposal. The learner confirms every level. |

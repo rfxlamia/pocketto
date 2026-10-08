@@ -22,7 +22,7 @@ Bugs have root causes. Symptoms have patches. Patches create future bugs.
 
 Both modes follow the same 5 phases. Entry point differs; discipline does not.
 
-**Pocket Education guard (reactive mode).** If the memory file in your context (`CLAUDE.md` / `AGENTS.md`) has **no** `## Pocket Education` heading, ignore this paragraph. If it has one, confirm with `npx -y pocketto-pi edu --json --contract 2`; when `data.education` is `true` (or the command errors), ask before Phase 0: "Pocket Education is on here. Do you want to hunt this bug yourself with guidance (→ `pocket-education`), or should I fix it?" Make no fix until the user explicitly chooses. An explicit handover already given in `pocket-education` for this task counts as the answer. Proactive audits that change no code are unaffected.
+**Pocket Education guard (reactive mode).** If the memory file in your context (`CLAUDE.md` / `AGENTS.md`) has **no** `## Pocket Education` heading, ignore this paragraph. If it has one, confirm with `npx -y pocketto-pi edu --json --contract 3`; when `data.education` is `true` (or the command errors), ask before Phase 0: "Pocket Education is on here. Do you want to hunt this bug yourself with guidance (→ `pocket-education`), or should I fix it?" Make no fix until the user explicitly chooses. An explicit handover already given in `pocket-education` for this task counts as the answer. Proactive audits that change no code are unaffected.
 
 ## The Three Iron Laws
 
