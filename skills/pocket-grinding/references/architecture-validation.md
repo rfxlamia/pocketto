@@ -1,6 +1,6 @@
 # Architecture Validation — Deep Protocol
 
-Load this during Phase 6 when: complex systems, major refactors, ambiguous constraint violations, or when the quick checklist surfaces a potential failure.
+Load this during Phase 6 for complex systems, major refactors, ambiguous constraints, or any time the quick checklist surfaces a potential failure. This protocol supplements Phase 6's required evidence gathering; it does not replace direct codebase inspection or current external documentation.
 
 ## Contents
 - [When the Quick Checklist Is Not Enough](#when-the-quick-checklist-is-not-enough)
@@ -19,6 +19,44 @@ Use this reference when any of these are true:
 - The change crosses service/domain boundaries
 - The constraint violation is "maybe" — not clearly pass or fail
 - The feature involves shared state, events, or distributed concerns
+
+The checklist is a reminder of what to inspect, not evidence that a design is valid.
+Do not mark a check as passing from memory, a high-level Phase 1 summary, or an
+unchecked assumption.
+
+---
+
+## Evidence-Based Validation
+
+For every material architecture or feasibility claim in the recommended design:
+
+1. **Inspect the repository.** Read the affected modules, interfaces, callers,
+   schemas/models, configuration, tests, migrations, and relevant dependency
+   manifests or lockfiles. Search for references before concluding a pattern or
+   capability does not exist.
+2. **Check version-dependent claims.** Identify the installed or proposed version
+   from the lockfile. Resolve the exact library with Context7 and query the relevant
+   behavior for that version. If Context7 is unavailable or inconclusive, use the
+   vendor's official documentation, API reference, or release notes. For changing
+   external standards or platform behavior, consult current primary sources.
+3. **Record evidence with each result.** Cite repository paths and symbols (line
+   references where stable). For external sources, include the direct URL, version
+   or publication date, and the specific behavior it confirms or contradicts.
+4. **Separate findings from assumptions.** Mark a claim `PASS`, `FAIL`,
+   `UNVERIFIED`, or `N/A`. `PASS` requires supporting evidence. Explain every `N/A`.
+   Never turn missing evidence into a pass.
+5. **Change the investigation when evidence stalls.** Search another relevant
+   module, test, official source, or version-specific reference. Do not repeat the
+   same query unchanged or stop only because a retry count was reached.
+
+Context7 can establish external library behavior; it cannot establish how this
+repository is structured. Repository inspection and version-matched external docs
+answer different questions, so use both whenever a design claim depends on both.
+
+If distinct sources still do not establish a material claim, mark it `UNVERIFIED`,
+state its effect on the design, and carry it as an open question or explicit
+assumption. Do not claim full validation. Ask the user only when accepting the risk,
+changing scope, or choosing the behavior requires their judgment.
 
 ---
 
@@ -92,7 +130,7 @@ Check the proposed design against these known failure modes:
 
 ```
 Is the design change contained within one module/layer?
-  YES → quick checklist is sufficient, proceed
+  YES → inspect the affected module and its callers; use the evidence procedure above
   NO  → continue below
 
 Does it cross a domain/service boundary?
@@ -108,11 +146,11 @@ Does it change a public contract (API, schema, event shape)?
   NO  → proceed if above checks pass
 ```
 
-**If any check fails:**
+**If evidence contradicts the design:**
 1. Name the specific anti-pattern or constraint violated
 2. Describe exactly which part of the proposed design triggers it
 3. Propose a minimal correction
-4. Loop back to Phase 5 with the correction as a constraint on Option proposals
+4. Loop back to Phase 5 with the correction as a constraint, then re-check the affected claims
 
 ---
 
@@ -122,15 +160,17 @@ Document validation result in the handoff package:
 
 ```
 ARCHITECTURE VALIDATION RESULT
-Status: PASS | FAIL | CONDITIONAL PASS
+Status: PASS | FAIL | CONDITIONAL PASS | UNVERIFIED
 
-Checks run: <list which checklists were applied>
+Checks run: <list codebase, architecture, and external-doc checks performed>
+Versions and sources: <dependency versions, direct documentation links, publication dates>
 Anti-patterns reviewed: <list which were checked>
 
 Findings:
-  ✓ <constraint name> — satisfied because <reason>
-  ✗ <constraint name> — violated because <specific reason>
-  ⚠ <constraint name> — conditional: requires <mitigation>
+  ✓ <claim> — <what evidence supports it>; code: <path:symbol>; docs: <URL + version/date, or N/A>
+  ✗ <claim> — <contradicting evidence>; code/docs: <specific source>
+  ⚠ <claim> — conditional on <mitigation>; evidence: <specific source>
+  ? <claim> — unverified because <specific evidence gap and impact>; sources tried: <list>
 
 Mitigations required before handoff (if any):
   - <mitigation 1>

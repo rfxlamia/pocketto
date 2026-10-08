@@ -22,30 +22,14 @@ Do NOT use for:
 - Small, well-understood changes touching only **1–4 files** and resolvable in **1–2 requests** → use `hotfix` instead (Phase 1.5 surfaces this off-ramp mid-flow)
 - Work that already has an approved spec
 
-## Hard Gates
+## Operating Rules
 
-```
-GATE 1: NO IMPLEMENTATION until Phase 7 handoff is complete and user approves.
-        No code, no scaffolding, no migrations — regardless of perceived simplicity.
-
-GATE 2: NO PHASE 3 without confirmed scope.
-        Phase 2 must be user-confirmed before questioning starts.
-        Unconfirmed scope = wasted questions.
-
-GATE 3: NO HANDOFF if architecture validation fails (Phase 6).
-        Loop back to Phase 5, revise design, re-validate.
-
-GATE 4: POCKET-PLANNING MUST BE INVOKED after user approves spec.
-        Pocket-grinding is not done until pocket-planning receives the spec.
-        Do not stop at "spec written" — invoke pocket-planning immediately.
-
-GATE 5: EDGE CASE HUNTER MUST RUN before Phase 5 and before handoff.
-        After GWT scenarios (Phase 4), dispatch the read-only edge case hunter
-        subagent — this is mandatory, not optional. Do NOT offer handoff to
-        pocket-planning until the hunter has run and its blocking findings are
-        resolved. If you catch yourself moving toward handoff without an edge
-        case hunter result, STOP and dispatch it first.
-```
+- **Follow the user's stated scope.** Treat clear instructions, corrections, and approvals already given as authorization. Ask only when a consequential product decision remains open; do not ask the user to repeat a decision or choose a numbered option.
+- **Keep grinding in discovery.** Do not implement product code, scaffolding, or migrations as part of this skill. Hand off an approved or already-authorized spec to pocket-planning for implementation planning.
+- **Ground validation in evidence.** A checklist item passes only when supported by inspected codebase evidence or, for version-dependent external behavior, current documentation for the relevant version. Record the evidence with the result.
+- **Keep independent review.** Run the edge-case hunter after writing GWT scenarios. If a review is inconclusive or its dispatch fails, change the prompt or dispatch route and try again; a cycle count alone is not a reason to stop.
+- **Resolve failed validation with a changed action.** When evidence contradicts a design, revise the proposal and re-check the affected claims. When evidence is missing, inspect another relevant source or record the specific unresolved question; do not mark it PASS by assumption.
+- **Honor the authorized handoff.** If the user asked for the full spec-to-planning flow, that instruction authorizes the handoff once the required artifacts are ready. Otherwise, present the completed spec and wait for approval before invoking pocket-planning.
 
 ---
 
@@ -98,7 +82,7 @@ AND none of these complexity signals are present:
 
 ### Action When Triggered
 
-Recommend `hotfix`, explain why, then let the user decide:
+If the user explicitly requested `pocket-grinding`, recommend `hotfix` briefly but continue with grinding unless the user switches. If the skill was selected from a general request, present the choice once and wait:
 
 > "This looks small — roughly **<N> files**, resolvable in 1–2 requests, with no new architecture. The full Pocket flow is likely overkill here. I'd recommend **`hotfix`** instead: it still enforces a brief-plan + subagent-review gate, so accuracy is preserved, but it skips the multi-phase ceremony.
 >
@@ -115,18 +99,18 @@ This mirrors the existing `hotfix → pocket-grinding` off-ramp ("Use pocket-gri
 
 ## Phase 2: Scope + Boundaries
 
-**Goal:** Lock what's in and out BEFORE questioning starts.
+**Goal:** Make the proposed scope and boundaries explicit before discovery.
 
 ### Scope Definition Template
 
-Draft and present to user for confirmation:
+Draft the scope from the user's request and project context. Present it for correction when it adds a consequential assumption or leaves a product decision open. If it preserves the user's stated intent, continue without asking for redundant confirmation.
 
 ```
 IN-SCOPE:
   - <explicit behavior 1>
   - <explicit behavior 2>
 
-OUT-OF-SCOPE (intentionally excluded):
+OUT-OF-SCOPE (intentionally excluded; write "none identified" if applicable):
   - <excluded concern 1>
   - <excluded concern 2>
 
@@ -137,11 +121,9 @@ ARCHITECTURE CONSTRAINTS:
 ```
 
 **Rules:**
-- If scope is unclear → ask ONE clarifying question, then draft scope
-- If scope spans multiple independent subsystems → decompose first, brainstorm one piece at a time
-- Each sub-scope gets its own brainstorm → spec → pocket-planning cycle
-
-**HARD GATE:** User must explicitly confirm scope. Do not proceed on silence or vague approval.
+- Ask a focused question only when the answer could materially change scope. Ask one question per message in the conversation; do not depend on a specific question UI or tool.
+- If scope spans independent subsystems, identify the boundaries and propose a useful sequence. Work through the requested scope without forcing a separate approval cycle for each part.
+- Do not treat silence as approval for a consequential choice the user has not made. When the user's request already settles the choice, proceed.
 
 ---
 
@@ -149,17 +131,17 @@ ARCHITECTURE CONSTRAINTS:
 
 **Goal:** Surface requirements, constraints, and risks through structured questioning from three expert lenses.
 
-Ask **as many questions as needed** until behavior is clear enough to write concrete GWT scenarios. **5 questions is a floor, not a ceiling.** Ask **one question per message**. Rotate across lenses — don't exhaust one lens before touching the others.
+Use the three lenses to find missing behavior, constraints, and risks. Ask only questions whose answers could change the scenarios, acceptance criteria, or design. There is no minimum question count. Use facts already present in the conversation and codebase; do not ask for them again. Ask one focused question per message and rotate lenses when useful.
 
 **Discovery Sufficiency Gate:** Do NOT advance to Phase 4 until each in-scope behavior has:
 - User / actor identified
 - Trigger/action identified
 - Expected successful outcome identified
-- At least one failure/edge case identified
-- Data/input boundaries identified
+- At least one relevant failure/edge case identified, or a reason it does not apply
+- Data/input boundaries identified, or a reason they do not apply
 - Acceptance signal identified (how we know it works)
 
-If any item is missing → keep asking. Do not convert missing behavior into assumptions unless user explicitly says to proceed with an assumption.
+If an item is missing, first check the conversation and project evidence. Ask the user only when the missing detail is a consequential product decision. For non-blocking details, use an evidence-based default, label it as an assumption, and record the risk in the spec. Never invent a requirement or silently turn a guess into a confirmed behavior.
 
 ### Business Lens — WHY + VALUE
 
@@ -193,11 +175,11 @@ Pick the most relevant:
 - "Are there security implications? (auth, authorization, input validation, data exposure)"
 
 ### Iteration Rules
-- After 5 questions: run the Discovery Sufficiency Gate — if behavior is still unclear, continue asking
-- If an answer reveals new unknowns → ask follow-up questions until the specific behavior is clear
-- If user says "I don't know" → ask whether to (a) choose a safe default, (b) document an assumption, or (c) exclude that behavior from scope
-- Never ask two questions in one message
-- Do not advance because a question count was reached; advance only when GWT scenarios can be written with concrete Given/When/Then values
+- Re-run the Discovery Sufficiency Gate whenever new information changes a behavior; do not wait for a question-count threshold.
+- If an answer reveals a consequential unknown, ask a focused follow-up. Otherwise record the uncertainty and proceed with a clearly labeled assumption.
+- If the user says "I don't know," recommend a safe default when evidence supports one. Ask the user only if the choice changes product behavior, scope, or risk tolerance.
+- Ask one question per message. Do not call a dedicated question UI/tool unless the environment supports it and the user has not asked to avoid it.
+- Advance when the in-scope behaviors can be written as concrete Given/When/Then scenarios, not when a question count is reached.
 
 ---
 
@@ -255,21 +237,22 @@ Scenario: <descriptive name>
 
 **Hard rule:** Never write GWT scenarios with vague placeholders to bypass unanswered behavioral questions.
 
-### Edge Case Hunter Review (GATE 5 — MANDATORY)
+### Edge Case Hunter Review (Required)
 
-**This is the Phase 4→5 transition step. It is not optional and must not be skipped — see GATE 5 in Hard Gates.** The moment GWT scenarios are written, your next action is to dispatch the edge case hunter — before anything else, and well before any mention of handoff.
+Run this review after writing GWT scenarios and before proposing designs. It is an independent review step; do not replace it with your own self-review.
 
-Dispatch a read-only edge case hunter subagent to review the Phase 4 stories, rules, examples, and GWT scenarios.
+Dispatch a read-only subagent named `edge-case-hunter` to review the Phase 4 stories, rules, examples, and GWT scenarios.
 
 → Load `references/edge-case-hunter-prompt.md` for the full dispatch prompt.
 
 **Purpose:** catch missing in-scope edge cases and blocking behavior ambiguity before design proposals.
 
-**Gate:**
-- Status = `Clear` → proceed to Phase 5
-- Status = `Needs Clarification` → ask blocking clarification questions one at a time, update scenarios, re-run once if material behavior changed
-- Do NOT proceed to design while blocking behavior questions remain unresolved
-- Do NOT offer handoff to pocket-planning if this step has not run — that is a GATE 5 violation
+**Next action:**
+- `Clear` → proceed to Phase 5.
+- `Needs Clarification` → resolve consequential behavior questions, update the affected scenarios, and run a focused independent review of the changes.
+- Review is inconclusive or dispatch fails → improve the review prompt or try another available subagent route. Do not repeat an unchanged attempt or treat a retry count as a terminal limit.
+- If no independent reviewer can run, state that limitation and leave the review status unresolved. Do not claim it passed; ask the user only if they want to proceed without the required independent review.
+- Do not move to design or handoff while blocking behavior questions remain unresolved.
 
 ---
 
@@ -301,31 +284,49 @@ Recommendation: Option <X>
 - An option that fails critical scenarios must be flagged, not softened
 - Recommendation must cite scenarios, not just preference
 - **Build-vs-buy:** for commodity problems (crypto, auth, parsing, retry/backoff, date/time, validation, caching, …) at least one option must be library-based — prefer dependencies already installed (Phase 1 manifest scan). If no library option is proposed, state explicitly why none is viable. Never hand-roll crypto or auth without naming the rejected library and the reason.
-- Unknown library capability → quick check first (context7 / web search — see pocket-pitching's spike protocol), don't guess
+- For every external library, framework, API, or platform capability that materially affects an option, verify the behavior before recommending it. Identify the exact installed or proposed version from the manifest/lockfile. Use Context7 MCP in order: `resolve-library-id`, then `query-docs` with the matching version when available. If Context7 has no relevant result, check the vendor's official documentation or release notes with web search. Do not rely on memory or latest-version docs when the project uses a different version; record the source, version, and finding.
 
 ---
 
 ## Phase 6: Architecture Validation
 
-**Goal:** Confirm the chosen design does not violate constraints from Phase 2.
+**Goal:** Verify the recommended design against the actual codebase, stated constraints, and current version-matched external documentation.
+
+Do not mark this phase complete from the Phase 1 summary or a checklist alone. Re-open the relevant source files and verify each material claim directly.
+
+### Validation Procedure
+
+1. **List the claims to verify.** Include the recommended design, affected GWT scenarios, architecture constraints, integration points, dependencies, and any assumptions that could change implementation.
+2. **Inspect the codebase.** Read the affected modules and their callers, interfaces, data models or schemas, configuration, tests, migrations, and existing patterns. Use repository search to find all relevant references; do not infer that a pattern is absent from one empty search result.
+3. **Verify external behavior.** For each version-dependent library/framework/API/platform claim, identify the version in the lockfile or the version proposed for adoption. Use Context7 MCP's `resolve-library-id` followed by `query-docs`, selecting the matching version ID when available. If Context7 is unavailable or inconclusive, use the vendor's versioned documentation, API reference, or release notes. For standards or other changing external constraints, use current primary sources. Record the direct source, version, and publication or access date.
+4. **Compare evidence with the spec.** For each claim, state whether the code or documentation supports it, contradicts it, or leaves it unresolved. Use file paths and symbols (or line references where stable) for code evidence, and direct source links plus version/date for external evidence.
+5. **Resolve findings.** Revise the proposal when evidence contradicts it, then re-check the changed claims. If a source is unavailable or inconclusive, try a different relevant source or mode. Do not repeat an unchanged search or stop solely because a retry count was reached.
+
+Use Context7 for library documentation; it cannot validate this repository's internal architecture. Use the codebase for internal structure and official current sources for external behavior. If a claim cannot be verified after distinct sources, mark it `UNVERIFIED`, explain its impact, and carry it as an open question or explicit assumption. Never mark it `PASS` by inference.
 
 ### Quick Validation Checklist
 
-```
-[ ] Respects layer boundaries defined in Phase 2?
-[ ] Follows existing patterns found in Phase 1 context scan?
-[ ] No new dependencies that violate architecture constraints?
-[ ] Build-vs-buy considered — not hand-rolling a commodity problem an installed or established dependency already solves?
-[ ] Rollback / undo strategy is defined?
-[ ] No silent data migrations or breaking changes to contracts?
-[ ] Performance characteristics acceptable for this layer?
-[ ] No security regressions introduced?
-```
+For each applicable item, record `PASS`, `FAIL`, `UNVERIFIED`, or `N/A` with evidence. Use `N/A` only with a reason. A `PASS` requires specific supporting evidence; an unchecked box is not a pass.
 
-**PASS** (all checked) → Proceed to Phase 7
-**FAIL** (any unchecked) → Document which constraint is violated → loop back to Phase 5
+| Check | Evidence to inspect | Result | Evidence / finding |
+|---|---|---|---|
+| Respects stated layer and module boundaries | Relevant modules, imports, interfaces, and constraints | | |
+| Fits existing patterns and contracts | Callers, models/schemas, APIs/events, tests, and migrations | | |
+| Dependencies and build-vs-buy are justified | Manifest/lockfile and version-matched official docs | | |
+| Rollback, compatibility, and data changes are defined | Migration, deployment, and contract behavior | | |
+| Performance and security risks are addressed | Relevant code paths, tests, and current requirements | | |
 
-For complex systems, major refactors, or ambiguous constraint violations:
+**PASS** → Every applicable material claim is supported and no blocking finding remains.
+**FAIL** → Evidence contradicts the proposal; revise Phase 5 and re-check affected claims.
+**UNVERIFIED** → Evidence is missing or inconclusive; try another relevant source, then document the exact gap and its impact.
+**N/A** → Explain why the check does not apply.
+
+Do not describe the design as fully validated while a material claim remains
+`UNVERIFIED`. Resolve it with another source, revise the design to remove the
+dependency, or present the risk for the user's decision. Non-material gaps may be
+carried as explicit assumptions with a mitigation.
+
+For complex systems, major refactors, or ambiguous constraint violations, also load the deep protocol. It supplements this evidence-based procedure; it does not replace codebase or documentation checks:
 → Load `references/architecture-validation.md`
 
 ---
@@ -375,29 +376,35 @@ OUT-OF-SCOPE (remind pocket-planning):
   - <excluded concern>
 ```
 
-### Pre-Handoff Checkpoint (GATE 5 backstop)
+### Pre-Handoff Checkpoint
 
-Before presenting the User Approval Gate, verify the GATE 5 requirement was met:
+Before handoff, verify that the independent review and evidence-based architecture validation are complete:
 
 ```
-[ ] Edge case hunter was dispatched after Phase 4 GWT scenarios
-[ ] Its findings were reviewed; all BLOCKING findings are resolved
-[ ] Scenarios/acceptance criteria reflect any edge cases it surfaced
+[ ] Edge-case hunter reviewed the Phase 4 GWT scenarios
+[ ] Blocking review findings are resolved and reflected in the scenarios
+[ ] Phase 6 validation evidence is recorded in the spec
+[ ] All blocking architecture findings are resolved
+[ ] Any remaining material unverified claim and its impact are explicit for the user
 ```
 
-If the edge case hunter never ran → **STOP. Do not offer handoff.** Loop back to
-Phase 4's Edge Case Hunter Review, dispatch it now, resolve blocking findings, then
-return here. This checkpoint is the last line of defense against the GATE 5 bypass.
+If any item is incomplete, return to the relevant phase and take the next available
+verification or review step. If an independent reviewer or required evidence source
+is unavailable after trying alternatives, state the exact gap and impact. Ask the
+user only when their decision is required to accept or exclude that risk.
 
-### User Approval Gate
+### User Approval and Handoff
 
 > "Spec written to `docs/pocket/spec/<path>`. Acceptance criteria above — anything to adjust before I hand this to pocket-planning?"
 
-Wait for confirmation. Apply any changes.
+If the user has not already authorized the spec-to-planning handoff, wait for
+approval and apply requested changes. A clear earlier instruction to complete that
+flow counts as authorization; do not ask for the same approval again. If the user
+asked only for a spec, stop after delivering it unless they authorize planning.
 
 ### Neutral spec approval handoff
 
-After the user approves the spec, emit the neutral lifecycle event before invoking pocket-planning. The event records local artifact references; it does not require an external consumer and does not block the local planning handoff when no consumer is installed.
+After the user approves or has already authorized the spec handoff, emit the neutral lifecycle event before invoking pocket-planning. The event records local artifact references; it does not require an external consumer and does not block the local planning handoff when no consumer is installed.
 
 ```bash
 pocketto-pi lifecycle transition <spec_dir> spec-approved --artifact spec:<kind>:<relative-path>:<sha256> --json --contract 3
@@ -417,7 +424,7 @@ Determine how skills or agents are dispatched in your current environment.
 - If no dispatch mechanism exists: load and follow the `pocket-planning` skill directly in this session.
 
 **Step 2 — Load pocket-planning skill:**
-Load the `pocket-planning` skill (already loaded at session start) and follow it completely.
+Load the `pocket-planning` skill if it is not already available, then follow it completely.
 Do NOT skip phases. Do NOT stop at Phase 1.
 
 **Step 3 — Pass this context to pocket-planning:**

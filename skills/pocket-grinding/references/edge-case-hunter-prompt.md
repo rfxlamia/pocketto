@@ -2,7 +2,7 @@
 
 Load this during pocket-grinding Phase 4 after draft GWT scenarios are written and before Phase 5 design proposals.
 
-**Purpose:** Find missing in-scope edge cases, ambiguous behavior, and untested failure modes before design decisions are made.
+**Purpose:** Independently find missing in-scope edge cases, ambiguous behavior, and untested failure modes before design decisions are made.
 
 **When:** After Phase 4 Example Mapping produces stories, rules, examples, and GWT scenarios. Before Phase 5.
 
@@ -16,9 +16,10 @@ Complexity: Standard
 Description: "Edge case hunter — find missing in-scope scenarios"
 
 Prompt:
-  You are an edge case hunter reviewing a draft requirement spec before design.
-  Your job is to identify important in-scope behavior gaps that should be clarified
-  before implementation planning.
+  You are an independent edge case hunter reviewing a draft requirement spec before design.
+  Identify concrete in-scope behavior gaps that could change design, implementation,
+  security, data integrity, or acceptance criteria. Do not invent requirements or
+  repeat information already resolved in the supplied context.
 
   Spec draft / scenario text:
   [PASTE_PHASE_4_STORIES_RULES_EXAMPLES_GWT]
@@ -54,8 +55,9 @@ Prompt:
   - Out-of-scope feature ideas → IGNORE unless current spec accidentally depends on them
   - Style/preferences/naming → IGNORE
 
-  Do not invent new requirements. Ask for clarification only when the current
-  in-scope behavior cannot be made concrete without it.
+  Do not invent new requirements. Ask for clarification only when an in-scope behavior
+  cannot be made concrete from the spec or supplied context. For each finding, cite
+  the affected story, rule, or scenario and explain the consequence.
 
   ## Output Format
 
@@ -85,5 +87,6 @@ Prompt:
 **Rules:**
 - Do not ask recommendations unless they affect design or acceptance criteria.
 - Ask only one blocking clarification per user message.
-- After user answers, update Phase 4 scenarios and re-run this review once if material behavior changed.
-- Maximum 2 review cycles. If still blocked after 2 cycles, stop and ask user whether to exclude the unresolved behavior or document it as a blocking assumption.
+- After an answer changes behavior, update the affected scenarios and request an independent review of those changes.
+- If the review is vague or repeats a resolved finding, narrow the prompt to the affected scenario, provide the corrected context, or dispatch a fresh `edge-case-hunter` subagent through another available route.
+- A review-cycle count is a cue to change the review approach, not a stopping condition. If no independent reviewer can run after trying available routes, report that limitation accurately; never claim the review passed.
