@@ -4,7 +4,7 @@ How pocket-closing maps each reviewable task to its review verdict, decides the 
 
 ## The review file contract
 
-pocket-development's phase-level pass writes one file per reviewed task (batch mode):
+pocket-development writes one file per task verdict:
 
 ```text
 <plan_dir>/reviews/<task_id>-review.json
@@ -27,15 +27,15 @@ pocket-closing reads these fields only. It does NOT open the files the review re
 ## Reconciliation algorithm
 
 ```text
-reviewable = []   # tasks that gate the close
-skipped    = []   # not reviewable, excluded from gate
+reviewable = []   # DONE tasks with a pinned SHA and a current verdict
+incomplete = []   # phase task is not DONE or has no done_sha → blocks
 missing    = []   # reviewable but no verdict → blocks
 stale      = []   # verdict does not cover latest owned sha → blocks
 
 for phase in target_phases:
     for task in phase.tasks:
         if task.status != "DONE" or not task.done_sha:
-            skipped.append(task)                 # the phase-level pass skipped it too
+            incomplete.append(task)              # REVIEW requires every task complete
             continue
         verdict_file = reviews/<task.id>-review.json
         if not exists(verdict_file):
@@ -65,22 +65,23 @@ for phase in target_phases:
 
         reviewable.append((task, review.overall))
 
-if missing or stale: CLOSE_BLOCKED                 # Iron Law 2
+if incomplete or missing or stale: CLOSE_BLOCKED  # Do not advance an incomplete phase
 ```
 
 Two dangerous cases, both blocked — never assume PASS:
 
-- **No review file** for a `DONE` task: it looks finished but was never independently reviewed.
+- **No review file** for a `DONE` task: it looks finished but has no recorded verdict.
 - **Stale review** for a `DONE` task: a verdict exists, but the code boundary advanced *after* the review was written — either the `done_sha` moved or a correction was attributed to the task after review. **Primary check:** `review.reviewed_sha` must exactly equal `latest_owned_sha(T)` (see definition in pseudocode above). If `reviewed_sha` is absent (legacy review), fall back to comparing the review's `timestamp` against the committer time of `latest_owned_sha(T)` (`git show -s --format=%cI <latest_owned_sha>`, compared as UTC instants). In either case, a mismatch is stale — never close on it.
+- A task without `DONE` and `done_sha` means the phase is not ready to close. A no-change task with a valid `REVIEW_PASS` skip stub is still included and must have its exact `reviewed_sha` checked.
 
 ## Gate decision per phase
 
-A phase passes only when **every** reviewable task in it is `REVIEW_PASS`.
+A phase passes only when **every task** is `DONE`, has a `done_sha`, and has a current `REVIEW_PASS` verdict. A valid empty-diff skip stub counts as a verdict and remains in the task list.
 
 | Verdict present in phase | Phase result |
 |--------------------------|--------------|
 | any `REVIEW_FAIL` | BLOCKED — print that task's `fix_instructions` |
-| any `REVIEW_BLOCKED` with `blocked_category: "auditor-unavailable"` | BLOCKED — `CLOSE_BLOCKED` with infrastructure message (re-run pocket-development on the blocked task(s); do NOT print `ESCALATE:` instructions) |
+| any `REVIEW_BLOCKED` with `blocked_category: "auditor-unavailable"` | BLOCKED — `CLOSE_BLOCKED`; report the exact human capability or access recorded in the artifact, then resume pocket-development when available (do NOT print unrelated `ESCALATE:` instructions) |
 | any other `REVIEW_BLOCKED` with `fix_instructions` starting with `ESCALATE:` or `blocked_category: "audit-failed"` | BLOCKED — print the escalation `fix_instructions` |
 | `REVIEW_BLOCKED` with no `blocked_category` and no `ESCALATE:` prefix | BLOCKED — stale/incomplete stub; re-run pocket-development's phase-level pass to regenerate verdicts (do not close) |
 | all `REVIEW_PASS` | PASS — eligible for `log update … DONE` |
@@ -88,12 +89,12 @@ A phase passes only when **every** reviewable task in it is `REVIEW_PASS`.
 `REVIEW_FAIL` vs `REVIEW_BLOCKED`:
 
 - `REVIEW_FAIL` — issues were found. Path: fix the code → re-run pocket-development's phase-level pass (overwrites the verdict) → re-run pocket-closing.
-- `REVIEW_BLOCKED` — the reviewer could not complete or escalated (e.g. plan/spec unreadable, repeated failures). `fix_instructions` starts with `ESCALATE:`. This needs a human decision, not just a code fix. Surface it and stop.
+- `REVIEW_BLOCKED` — the current verdict records a human dependency or an unavailable independent-review capability. Repeated failures or a retry counter alone do not qualify. Follow the recorded unblock action; ask the user only for a decision, access, information, or authorization that is genuinely unavailable.
 
 A `REVIEW_BLOCKED` **stub** may also appear when the phase-level pass's subagent could not run at all. Block closure until a valid verdict exists; disposition depends on `blocked_category` (below).
 
 **Distinguishing infra stubs from genuine escalations:**
-- `blocked_category: "auditor-unavailable"` — infra failure (subagent died/timed out). The bounded retry ladder was exhausted. Closure stays blocked, but this is NOT a quality escalation: do NOT print `ESCALATE:` instructions or frame it as a plan/spec human decision. Report `CLOSE_BLOCKED` naming re-run pocket-development (resume or re-dispatch the blocked task's audit ladder) as the unblock path.
+- `blocked_category: "auditor-unavailable"` — no independent audit route is available without a human restoring or authorizing a capability. A timeout, tool failure, or exhausted counter alone is insufficient. Closure stays blocked; report the specific capability or access recorded in the artifact, then resume pocket-development when it is available. Do NOT print unrelated `ESCALATE:` instructions.
 - `blocked_category: "audit-failed"` or `fix_instructions` starts with `ESCALATE:` — genuine quality escalation. This needs a human decision.
 
 ## Carried-forward observations (PASS only)
@@ -110,11 +111,12 @@ These never block a close. They are recorded so the next person sees what review
 
 | Situation | Handling |
 |-----------|----------|
-| Header `status` already `DONE` | `ALREADY_CLOSED` — idempotent no-op, do not re-run CLI |
-| `reviews/` absent or empty | `CLOSE_BLOCKED: "No reviews found. Run pocket-development's phase-level pass first."` |
-| Verdict file present for a non-DONE task | Stale verdict from a prior cycle — ignore; the task is not reviewable now |
+| Header `status` already `DONE` | Do not repeat state transitions; restore any missing phase/final closeout sections from current recorded verdicts, then report `ALREADY_CLOSED` |
+| `reviews/` absent or empty | `CLOSE_BLOCKED: "No reviews found. Resume pocket-development's phase-level pass first."` |
+| Verdict file present for a non-DONE task | Do not use the verdict; the incomplete task still blocks phase advancement |
+| Any target-phase task is not DONE or lacks `done_sha` | Phase is incomplete — do not advance; resume pocket-development for that task |
 | `review.reviewed_sha` present and `!= latest_owned_sha(T)` | Stale — a correction landed after this review. `CLOSE_BLOCKED: "T{id} verdict is stale: a correction changed its files after review. Re-run pocket-development's phase-level pass."` Never close on it. |
 | `review.reviewed_sha` absent and `review.timestamp < committer_time(latest_owned_sha(T))` | Legacy stale — code boundary advanced after review (timestamp proxy). `CLOSE_BLOCKED: "T{id} verdict is stale. Re-run pocket-development's phase-level pass."` Never close on it. |
 | Review `timestamp` missing/unparseable and `reviewed_sha` absent | Cannot prove freshness → treat as stale → `CLOSE_BLOCKED`. Re-run pocket-development's phase-level pass to regenerate the verdict |
-| Phase has zero reviewable tasks (all skipped) | Cannot attest a close — `CLOSE_BLOCKED: "Phase <file> has no reviewed tasks."` |
-| Dir invocation, one phase blocks, others pass | Advance the passing phases, then `log close` returns `PHASES_NOT_DONE` → report `CLOSE_BLOCKED` for the blocked phase. Never close while any target phase is blocked. |
+| A no-change task has a valid REVIEW_PASS stub with exact `reviewed_sha` | Include it as a reviewed task; do not list it as skipped |
+| Directory invocation finds more than one phase in REVIEW | Process the lowest-order REVIEW phase first; do not skip an earlier phase |

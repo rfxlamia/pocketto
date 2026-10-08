@@ -80,7 +80,7 @@ This record SHALL live at:
 This path is chosen deliberately to satisfy two constraints at once:
 
 1. It lives under `reviews/` so it is discoverable alongside the per-task verdicts, per the design decision that phase-level state stays artifact-only (no new `log.json` fields beyond the pipeline-version marker).
-2. Its filename can never collide with `<task_id>-review.json`, because task ids are always `T<N>` and never `phase-pass-<phase_key>`. `pocket-closing`'s Step 3 reads `reviews/<task_id>-review.json` for each task id it already knows from `log.json` — it does not glob every file under `reviews/` and interpret each as a task verdict — so this record is structurally invisible to the verdict gate. `pocket-closing` MUST NOT be changed to read it; it is out of scope for this pass's consumer, not for `pocket-closing`'s gate.
+2. Its filename can never collide with `<task_id>-review.json`, because task ids are always `T<N>` and never `phase-pass-<phase_key>`. `pocket-closing` reads `reviews/<task_id>-review.json` for each task id from `log.json`; it does not treat this record as a task verdict. `pocket-closing` MUST NOT read or interpret this phase-pass artifact as a verdict. It may read the separate `phase-notes-<phase_key>.json` artifact for narrative closeout only; that note never participates in the verdict gate.
 
 Record shape (clean pass, zero findings):
 

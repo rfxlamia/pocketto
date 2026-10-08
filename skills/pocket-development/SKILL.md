@@ -95,6 +95,7 @@ For standard Pocket delegated execution, the main agent is the **Delegator + Gat
 | Run mechanical checks, then dispatch the independent auditor | Judge code quality or spec compliance itself |
 | Read task file `execution-plan/tasks/T*-*.md` on demand per task | Read full plan / all task files upfront (avoid context blowout) |
 | Emit PHASE_COMPLETE handoff | Claim a skipped or unrun review passed |
+| Compile phase notes from recorded task, review, and user-decision evidence | Add an unrecorded obstacle, decision, or verification claim |
 
 If the user explicitly chooses a different implementation mode or asks to skip a Pocket gate, honor that instruction and state which Pocket checks will not run. Keep independent review when the user still expects Pocket verification.
 
@@ -171,7 +172,7 @@ Before constructing a Pocket Packet, load the references that define requirement
 | Plan has `[parallel: TX]` annotations | `references/entry-gate.md`; then load `references/parallel-group.md` if a group is ready |
 | Status is BLOCKED/NEEDS_CONTEXT | `references/status-handling.md` |
 | Per-task in-loop audit (after implementer DONE) | `references/two-stage-review.md` |
-| Phase completion — all tasks in phase DONE | `references/phase-level-pass.md` |
+| Phase completion — all tasks in phase DONE | `references/phase-level-pass.md` and `references/phase-completion-notes.md` |
 
 ### Packet Citation
 
@@ -331,7 +332,7 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns 
 | Unresolvable BLOCKED (phase) | `log update` (phase) → `BLOCKED` |
 | All phases complete (plan has an execution log) | `log close` |
 
-**Phase-completion ordering:** dispatch the phase-level pass → record a clean or resolved result → set the phase to `REVIEW`. The `REVIEW` transition records the neutral `phase-complete` event only after `reviews/phase-pass-<phase_key>.json` carries that result (`references/phase-level-pass.md`).
+**Phase-completion ordering:** dispatch the phase-level pass → record a clean or resolved result → write the phase completion note → set the phase to `REVIEW`. The `REVIEW` transition records the neutral `phase-complete` event only after the pass result and its summary note are durable.
 
 **IMPORTANT:** NEVER set task status to `DONE` before the in-loop audit completes and `--sha <audited_head>` is passed. NEVER set task status to `REVIEW` — that status is for phases only.
 
@@ -343,7 +344,7 @@ Verifies all phases DONE, sets header `status=DONE` + `date_completed`. Returns 
 
 Runs for every plan phase, flat or phased, after all tasks reach DONE and their per-task in-loop audits pass. When a Type B phase file supplies `## Phase Completion Gate`, evaluate its conditions verbatim. For a flat Type A plan without that section, verify all tasks are DONE, their tests and commits meet the plan's requirements, and the phase-level pass has a clean or resolved result.
 
-**Ordering is fixed: dispatch the phase-level pass → record its result → set phase status `REVIEW` → emit the `PHASE_COMPLETE` handoff.** The phase transition records the neutral `phase-complete` event only after the pass result exists.
+**Ordering is fixed: dispatch the phase-level pass → record its result → write the phase completion note → set phase status `REVIEW` → emit the `PHASE_COMPLETE` handoff.** The phase transition records the neutral `phase-complete` event only after the pass result and note exist.
 
 **Step 1 — Run the phase-level pass, then evaluate the Phase Completion Gate.** Once every task is `DONE`, dispatch the phase-level pass and let it record its result at `<plan_dir>/reviews/phase-pass-<phase_key>.json` (contract: `references/phase-level-pass.md`). Then evaluate the gate — copy the phase file's `## Phase Completion Gate` conditions verbatim, plus the pass condition:
 ```
@@ -356,20 +357,24 @@ Runs for every plan phase, flat or phased, after all tasks reach DONE and their 
     (PHASE_PASS_CLEAN or PHASE_PASS_RESOLVED — references/phase-level-pass.md)
 ```
 
-**Step 2 — Set `REVIEW`, then emit the structured report:**
+**Step 2 — Write phase notes, set `REVIEW`, then emit the structured report:**
 
-If all conditions pass — set the phase to `REVIEW` (`log update` (phase) → `REVIEW`, only now that the pass result is recorded), then report:
+If all conditions pass — write `<plan_dir>/reviews/phase-notes-<phase_key>.json` per `references/phase-completion-notes.md`, then set the phase to `REVIEW` (`log update` (phase) → `REVIEW`). The note is a factual handoff for closing, not another verdict. Then report:
 ```
 PHASE_COMPLETE: Phase N of M
 Tasks: [T1, T2, T4] — all DONE
 Commits: [commit message list]
-Tests: green
+Verification: [observed checks and their results]
 Phase-level pass: <PHASE_PASS_CLEAN | PHASE_PASS_RESOLVED> at
   <plan_dir>/reviews/phase-pass-<phase_key>.json
+Phase notes: <plan_dir>/reviews/phase-notes-<phase_key>.json
+Obstacles resolved: [recorded summary, or None recorded]
+Decisions: [explicit user decisions and attributed implementation choices, or None recorded]
+Suggestions: [evidence-based optional follow-up, or None]
 Phase status: REVIEW
 Gate: PASS
 Next: run `/pocketto:pocket-closing <plan_dir>/<phase_file>`.
-→ Stop here. `pocket-closing` is invoked directly by the user; continue after it reports this phase DONE.
+→ If the user's instruction explicitly covers end-to-end closeout, continue into pocket-closing; otherwise stop at this handoff.
 ```
 
 If a condition fails, first attempt an evidence-backed correction that stays within the approved outcome, then rerun the relevant gate. Report `PHASE_BLOCKED` only when the next safe action requires a human decision, access, information, or authorization:
@@ -445,5 +450,6 @@ Load these reference files when SKILL.md says "see reference for details" or whe
 | `references/sandwich-prompt.md` | Need attention mechanic details or method selection | Sandwich structure variations |
 | `references/two-stage-review.md` | After implementer reports DONE; mechanical gate, auditor dispatch, fix/refactor, SHA pinning | Normative in-loop audit contract. Cite it; do not restate it. |
 | `references/phase-level-pass.md` | All tasks in the phase are DONE — before the phase may become `REVIEW`, or a `REVIEW_FAIL` needs its correction path | Phase-level pass contract: dispatch, result record, recovery, append-only corrections, verdict fan-out. Cite it; do not restate it. |
+| `references/phase-completion-notes.md` | Phase gate passes, before setting phase status to `REVIEW` | Durable factual handoff for per-phase closeout; does not replace task verdicts or the phase-level pass. |
 | `references/status-handling.md` | An implementer or reviewer reports NEEDS_CONTEXT/BLOCKED | Evidence gathering, recovery choices, and human-only escalation |
 | `references/parallel-group.md` | Entry Gate classifies ready tasks as PARALLEL GROUP | Worktree setup, dispatch, audit, merge, recovery, and cleanup |
