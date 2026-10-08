@@ -53,7 +53,8 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     },
     "reviewer_mode": {
       "type": "string",
-      "description": "Review mode (read-only)"
+      "enum": ["read-only", "main-agent"],
+      "description": "Use read-only when an independent auditor ran; use main-agent only for a documented no-reviewer stub such as an empty-diff skip or single-task phase fast path."
     },
     "reviewer_config": {
       "type": "string",
@@ -154,12 +155,12 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     },
     "merge_recovery_consumed": {
       "type": "boolean",
-      "description": "Parallel group merge-conflict recovery: set true before the single bounded recovery dispatch; read on resume."
+      "description": "Parallel group merge-conflict recovery has started; historical marker that does not limit materially different recovery strategies."
     },
     "merge_recovery_stage": {
       "type": "string",
       "enum": ["implementer", "gate", "auditor", "merge_retry", "parallel-conflict"],
-      "description": "In-progress merge-recovery step for resume; distinct from phase-level recovery_stage."
+      "description": "Current merge-recovery step for resume; a failed strategy may be followed by a materially different strategy. Distinct from phase-level recovery_stage."
     },
     "reviewed_sha": {
       "type": "string",
@@ -284,7 +285,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     "issues": [
       {
         "type": "missing",
-        "description": "Token expiry still not checked after 2 fix attempts",
+        "description": "The approved requirements do not specify whether an expired refresh token should revoke other active sessions or deny only this request.",
         "location": "auth_service.py:42"
       }
     ],
@@ -298,7 +299,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
   },
   "overall": "REVIEW_BLOCKED",
   "blocked_category": "audit-failed",
-  "fix_instructions": "ESCALATE: Token expiry check failed 2 cycles. Implementer consistently misses error handling. Recommend human review of error handling approach or task split.",
+  "fix_instructions": "ESCALATE: The approved requirements do not say whether an expired refresh token revokes other active sessions. A product decision is required before the auditor can determine the expected behavior. Choose whether to revoke all sessions or deny only this request.",
   "loop_info": {
     "current_cycle": 3,
     "max_cycles": 2,
@@ -369,7 +370,7 @@ Whenever pocket-development writes or rewrites this artifact — the per-task in
 | `reviewer_config` | `"batch-parallel"` |
 | `loop_info.current_cycle` | `1` on first cycle; prior cycle + 1 on re-review (mirrors `cycle`) |
 | `loop_info.max_cycles` | `2` for in-loop and phase-level audits; `1` only for the empty-diff skip stub defined by `two-stage-review.md` |
-| `loop_info.cycles_remaining` | Follow the round budget in `two-stage-review.md` or `phase-level-pass.md`; a clean first pass records `2` |
+| `loop_info.cycles_remaining` | Historical counter for resume; it may stay at `0` during recovery and does not stop work. A clean first pass records `2`. |
 | `overall` | `"REVIEW_PASS"` \| `"REVIEW_FAIL"` \| `"REVIEW_BLOCKED"` |
 | `reviewed_sha` | `done_sha` on first cycle; max-by-commit-time of `done_sha` and all owned correction SHAs on re-review |
 

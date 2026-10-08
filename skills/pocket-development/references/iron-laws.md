@@ -1,13 +1,13 @@
 # Iron Laws - Detailed Enforcement
 
-The 6 Iron Laws are non-negotiable rules that govern every delegation decision.
+The 6 Iron Laws govern the standard Pocket delegated workflow. A user may explicitly choose a different implementation mode or bypass a Pocket gate; honor that instruction, state what will be skipped, and do not claim the skipped check passed.
 
 ## The Laws
 
-### Law 1: NO PACKET = NO SPAWN
+### Law 1: PACKET FOR STANDARD DISPATCH
 
 **What it means:**
-Every subagent spawn must be accompanied by a complete Pocket Packet. No exceptions.
+Every subagent dispatched through the standard Pocket path receives a complete Pocket Packet. If the user explicitly chooses a simpler handoff, honor that choice, report that the packet gate was skipped, and do not present the run as standard Pocket execution.
 
 **Why it exists:**
 Prevents vague handoffs where subagents must guess what to do. A subagent without a packet will either:
@@ -16,30 +16,30 @@ Prevents vague handoffs where subagents must guess what to do. A subagent withou
 - Report being stuck (BLOCKED)
 
 **Enforcement:**
-- Check packet completeness before every spawn
+- Check packet completeness before every standard Pocket dispatch
 - Packet must have all 7 fields filled
 - No "handle this" or "fix X" prompts allowed
 
-### Law 2: NO SKIP THE GATE
+### Law 2: NO SILENT GATE SKIP
 
 **What it means:**
-The Entry Gate Checklist must be run and passed before any subagent spawn.
+For Pocket delegated execution, run the Entry Gate before dispatch and repair any failed item. If the user explicitly chooses another workflow or asks to bypass a gate, honor that instruction, state which checks will not run, and never report a skipped gate as passed.
 
 **Why it exists:**
-Filters what deserves delegation. Many tasks should stay local but get delegated anyway due to:
+Filters whether a task is ready for delegation. Common causes of a failed gate include:
 - Time pressure
 - Sunk cost
-- Authority override
 
 **Enforcement:**
 - Run all 6 gate questions
-- Any "no" triggers HOLD LOCAL
+- Any "no" pauses dispatch for that task and triggers HOLD LOCAL
 - Document reason for HOLD LOCAL
+- If the user explicitly chooses a different workflow, record the skipped gate and follow that choice
 
 ### Law 3: NO TRUST WITHOUT EVIDENCE
 
 **What it means:**
-Subagent reports must be verified, not assumed correct.
+In the standard Pocket workflow, verify subagent reports rather than assuming they are correct. If the user explicitly asks to skip independent review, honor that instruction and report that implementation was not independently verified.
 
 **Why it exists:**
 Subagents may:
@@ -49,7 +49,7 @@ Subagents may:
 - Be optimistic about completeness
 
 **Enforcement:**
-- Mechanical gate first (command/commit evidence only), then dispatch the read-only auditor — never trust the implementer's self-report
+- In the standard Pocket workflow, run the mechanical gate first (command/commit evidence only), then dispatch the read-only auditor — never treat the implementer's self-report as verification
 - The auditor reads the diff directly, not the implementer's summary
 - One auditor emits both spec-compliance and code-quality findings into a single verdict artifact — see `references/two-stage-review.md`
 
@@ -100,14 +100,14 @@ Without citation, decision quality cannot be audited. Agents that skip reference
 
 ---
 
-## Pressure Countermeasures
+## Recovery Under Pressure
 
 | Pressure | Countermeasure |
 |----------|----------------|
 | TIME | Cut niceties, not structure. Packet still required. |
 | SUNK COST | Rewrite packet anyway. Bad packets must be rewritten, not patched. |
-| AUTHORITY | Keep the law, not the shortcut. "Process protects quality" is the response. |
-| EXHAUSTION | Refuse delegation if packet cannot stay legible. Stop and resume when rested — an operator condition, not a task defect. Never implement the task yourself instead. |
+| USER INSTRUCTION | State material consequences briefly, then follow the explicit choice. Never claim skipped checks passed. |
+| EXHAUSTION | Simplify or split the packet, or report progress and resume. Do not turn fatigue or a cycle count into BLOCKED. |
 
 ## Red Flag Phrases
 
@@ -115,8 +115,8 @@ These phrases indicate iron law violation:
 
 | Phrase | Violation |
 |--------|-----------|
-| "Just delegate it" | Law 1: No packet |
-| "Skip the checklist" | Law 2: Skip the gate |
+| "Just delegate it" without a bounded objective | Law 1: Packet is incomplete |
+| "Skip the checklist" without noting the bypass | Law 2: Silent gate skip |
 | "They said it's done" | Law 3: Trust without evidence |
 | "Handle X" | Law 4: Ambiguous prompt |
 | "I'm stuck" | Law 5: Silent escalation |
@@ -126,13 +126,15 @@ These phrases indicate iron law violation:
 
 When a gate question fails, the task is **not delegatable yet**. `HOLD LOCAL` records that
 state; it never authorizes the main agent to implement the task. The permitted next actions
-are: repair the packet or the missing context locally and re-run the Entry Gate, or escalate
-`NEEDS_CONTEXT` / `BLOCKED`.
+are: inspect available sources, repair the packet or gather missing context, then re-run the
+Entry Gate. Ask the user only when the next safe action needs information, a decision, access,
+or authorization unavailable to the agent. If the user explicitly chooses a different
+workflow, honor that choice and report which Pocket checks will not run.
 
 ```
 HOLD LOCAL: [reason the task is not delegatable yet]
 WHY UNSAFE: [specific concern]
-NEXT ACTION: [packet/context repair to run, then re-run Entry Gate — or the escalation]
+NEXT ACTION: [source inspection or packet/context repair, then re-run Entry Gate — or the specific human dependency]
 ```
 
 Example:
@@ -140,5 +142,6 @@ Example:
 HOLD LOCAL: Cannot construct reviewable packet — task scope spans two modules.
 WHY UNSAFE: Critical constraints may be forgotten mid-prompt.
 NEXT ACTION: Re-read the task file and the plan's file map to bound scope, rewrite
-             the packet, then re-run the Entry Gate. Still unbounded → BLOCKED.
+             the packet, then re-run the Entry Gate. Ask the user only if bounding it
+             would change the approved outcome.
 ```
