@@ -12,6 +12,9 @@
 //   pocketto-pi doctor                                     [--strict] [--json]
 //   pocketto-pi mode [<dir>]                               [--json]
 //   pocketto-pi mode init [<dir>]                          [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--require-approval <bool>] [--file <AGENTS.md|CLAUDE.md>] [--json]
+//   pocketto-pi edu [<dir>]                                [--json]
+//   pocketto-pi edu init [<dir>]                           --level <skill>=<level> [--level ...] [--teaching-mode <mode>] [--journal <bool>] [--file <AGENTS.md|CLAUDE.md>] [--reset] [--json]
+//   pocketto-pi edu set  [<dir>]                           [--level <skill>=<level> ...] [--teaching-mode <mode>] [--journal <bool>] [--education <bool>] [--json]
 //   pocketto-pi format <issue|pr|comment|closeout>         [--input <json-file>] [--json]
 //   pocketto-pi format tasklist <plan_dir>                 [--json]
 //   pocketto-pi scaffold github [<dir>]                    [--dry-run] [--json]
@@ -28,6 +31,7 @@ const log = require('./commands/log');
 const meta = require('./commands/meta');
 const lifecycle = require('./commands/lifecycle');
 const doctor = require('./commands/doctor');
+const edu = require('./commands/edu');
 const setupExtensions = require('./commands/setup-extensions');
 const reconcile = require('./commands/reconcile');
 const scaffold = require('./commands/scaffold');
@@ -107,6 +111,10 @@ function parseArgs(argv) {
     createPr: null,
     requireApproval: null,
     file: null,
+    levels: [],
+    teachingMode: null,
+    journal: null,
+    education: null,
     input: null,
     prior: null,
     newInput: null,
@@ -153,6 +161,14 @@ function parseArgs(argv) {
     else if (a.startsWith('--require-approval=')) flags.requireApproval = requireValue(a.slice('--require-approval='.length), '--require-approval');
     else if (a === '--file') flags.file = requireValue(argv[++i], '--file');
     else if (a.startsWith('--file=')) flags.file = requireValue(a.slice('--file='.length), '--file');
+    else if (a === '--level') flags.levels.push(requireValue(argv[++i], '--level'));
+    else if (a.startsWith('--level=')) flags.levels.push(requireValue(a.slice('--level='.length), '--level'));
+    else if (a === '--teaching-mode') flags.teachingMode = requireValue(argv[++i], '--teaching-mode');
+    else if (a.startsWith('--teaching-mode=')) flags.teachingMode = requireValue(a.slice('--teaching-mode='.length), '--teaching-mode');
+    else if (a === '--journal') flags.journal = requireValue(argv[++i], '--journal');
+    else if (a.startsWith('--journal=')) flags.journal = requireValue(a.slice('--journal='.length), '--journal');
+    else if (a === '--education') flags.education = requireValue(argv[++i], '--education');
+    else if (a.startsWith('--education=')) flags.education = requireValue(a.slice('--education='.length), '--education');
     else if (a === '--input') flags.input = requireValue(argv[++i], '--input');
     else if (a.startsWith('--input=')) flags.input = requireValue(a.slice('--input='.length), '--input');
     else if (a === '--prior') flags.prior = requireValue(argv[++i], '--prior');
@@ -218,6 +234,9 @@ Usage:
   pocketto-pi doctor                                      [--strict] [--json]
   pocketto-pi mode [<dir>]                                [--json]
   pocketto-pi mode init [<dir>]                           [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--require-approval <bool>] [--file <AGENTS.md|CLAUDE.md>] [--json]
+  pocketto-pi edu [<dir>]                                 [--json]
+  pocketto-pi edu init [<dir>]                            --level <skill>=<level> [--level ...] [--teaching-mode <mode>] [--journal <bool>] [--file <AGENTS.md|CLAUDE.md>] [--reset] [--json]
+  pocketto-pi edu set  [<dir>]                            [--level <skill>=<level> ...] [--teaching-mode <mode>] [--journal <bool>] [--education <bool>] [--json]
   pocketto-pi format <issue|pr|comment|closeout>          [--input <json-file>] [--json]
   pocketto-pi format tasklist <plan_dir>                  [--json]
   pocketto-pi scaffold github [<dir>]                     [--dry-run] [--json]
@@ -225,6 +244,7 @@ Usage:
   pocketto-pi setup-extensions                            [--all] [--json]
 
 Status values: WAITING | REVIEW | DONE | BLOCKED
+Learner levels: foundation | guided | independent   Teaching modes: guided | socratic
 
 Flags:
   --json            Emit the stable JSON envelope to stdout
@@ -233,6 +253,11 @@ Flags:
   --force           (structure) rebuild layout + reconcile log.json when source changed with no execution progress
   --reset           (structure) rebuild layout and replace log.json even if execution progress exists
                     (discards WAITING/REVIEW/DONE/BLOCKED state; explicit restart)
+                    (edu init) replace an existing learner profile — only when the learner asks to recalibrate
+  --level <s>=<l>   (edu init/set) set one skill's teaching depth, e.g. --level testing=foundation (repeatable)
+  --teaching-mode   (edu init/set) guided (hint ladder, then full explanation) | socratic (explanations on request)
+  --journal <bool>  (edu init/set) keep a learning journal under docs/pocket/learning/
+  --education <bool> (edu set) switch Education on/off without discarding the profile
   --task <id>       (log update) update a task within a phase, e.g. --task T1
   --correction <sha> (log update) record a correction commit on a phase
   --for-task <id>   (log update) task a correction is primarily for, e.g. --for-task T1
@@ -337,6 +362,17 @@ function main() {
         file: flags.file,
       });
       emitSuccess(result.command, result, flags.json);
+    } else if (command === 'edu') {
+      const result = edu.run({
+        positionals: positionals.slice(1),
+        levels: flags.levels,
+        teachingMode: flags.teachingMode,
+        journal: flags.journal,
+        education: flags.education,
+        file: flags.file,
+        reset: flags.reset,
+      });
+      emitSuccess(result.command, result, flags.json);
     } else if (command === 'format') {
       const result = requireEnterpriseCommand('format').run({ kind: positionals[1], inputPath: flags.input, positionals: positionals.slice(2) });
       emitSuccess(result.command, result, flags.json);
@@ -350,7 +386,7 @@ function main() {
       const result = setupExtensions.run({ all: flags.all, recommended: flags.recommended });
       emitSuccess(result.command, result, flags.json);
     } else {
-      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | lifecycle | meta | doctor | mode | format | scaffold | reconcile | setup-extensions.`);
+      throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${command}. Use structure | log | lifecycle | meta | doctor | mode | edu | format | scaffold | reconcile | setup-extensions.`);
     }
   } catch (err) {
     emitError(command, err, flags.json);

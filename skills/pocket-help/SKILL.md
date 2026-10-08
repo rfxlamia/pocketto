@@ -20,9 +20,9 @@ Each stage produces an artifact (pitch doc → spec → execution plan → task 
 | Kind | Skills | Use for |
 |------|--------|---------|
 | **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-closing | Real features and non-trivial work that need a reviewed handoff between stages. |
-| **Standalone** | bug-hunting · hotfix · brand-design · structured-research · pocket-help · pocket-init | Everyday work that does not need the full pipeline. |
+| **Standalone** | bug-hunting · hotfix · brand-design · structured-research · pocket-help · pocket-init · pocket-education | Everyday work that does not need the full pipeline. |
 
-The `pocket-*` prefix marks pipeline stages, with `pocket-help` and `pocket-init` as standalone orientation/onboarding helpers. `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are also standalone.
+The `pocket-*` prefix marks pipeline stages, with `pocket-help`, `pocket-init`, and `pocket-education` as standalone orientation/onboarding/mentor helpers. `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are also standalone.
 
 ## Router — Which Skill Right Now?
 
@@ -39,7 +39,8 @@ The `pocket-*` prefix marks pipeline stages, with `pocket-help` and `pocket-init
 | Design system / brand identity / UI tokens | `brand-design` | standalone |
 | An assumption to validate before planning | `structured-research` | standalone |
 | New to Pocket or unsure which skill fits | `pocket-help` | standalone |
-| Existing repo needs a local project guide | `pocket-init` | standalone |
+| Existing repo needs a local project guide or learner calibration | `pocket-init` | standalone |
+| Learner wants to do the task themselves, with guidance and review | `pocket-education` | standalone (education) |
 
 **Routing rules of thumb:**
 - Don't know if the problem is well-formed? → `pocket-pitching`.
@@ -48,6 +49,7 @@ The `pocket-*` prefix marks pipeline stages, with `pocket-help` and `pocket-init
 - Something is broken? → `bug-hunting`.
 - Holding an unverified assumption? → `structured-research`.
 - Already have an approved spec? → `pocket-planning`.
+- Repo has Pocket Education on, or the user says "teach me / I want to do it myself"? → `pocket-education` (the human implements).
 
 ## The End-to-End Flow
 
@@ -80,6 +82,13 @@ reviewed phase
 - `pocket-pitching` does not auto-chain — the user chooses whether to start `pocket-grinding`.
 
 For the full stage-by-stage walkthrough, load `references/end-to-end-flow.md`. For concise inputs, outputs, and routing notes, load `references/skill-map.md`.
+
+## Pocket Education (opt-in mentor mode)
+
+With **Pocket Education** enabled (`/pocketto:pocket-init` Education Gate), the human writes the code and the agent teaches, reviews, and guides with progressive hints (`pocket-education`). A skill-specific learner profile (`foundation` / `guided` / `independent` per skill) is calibrated once and kept in a `## Pocket Education` block in `AGENTS.md`/`CLAUDE.md`, so later sessions reuse it instead of recalibrating. The agent may recommend a level change; only the learner decides (`pocketto-pi edu set`).
+
+- `hotfix`, `bug-hunting` (fixes), and `pocket-development` ask once before implementing in an Education repo — guide the learner, or explicitly hand the task over.
+- Education is local and independent of optional adapters. Without the block, nothing changes and no `edu` call is made.
 
 ## When Pocket Beats a Lighter Flow
 

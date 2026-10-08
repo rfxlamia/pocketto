@@ -1,17 +1,17 @@
 ---
 name: pocket-init
-description: Onboards an existing project onto Pocket by scanning its local configuration and writing a merge-safe project guide. Trigger on "pocket-init", "set up pocket", "onboard this project", or "generate AGENTS.md".
+description: Onboards an existing project onto Pocket by scanning its local configuration, writing a merge-safe project guide, and optionally calibrating a local Pocket Education learner profile. Trigger on "pocket-init", "set up pocket", "onboard this project", "generate CLAUDE.md", "generate AGENTS.md", or "enable education mode".
 ---
 
 # Pocket Init
 
-Standalone local onboarding. Takes an existing project from zero Pocket context to a useful project guide that the agent can rely on.
+Standalone local onboarding. Takes an existing project from zero Pocket context to a useful project guide that the agent can rely on, and optionally enables Pocket Education with a persisted learner profile.
 
 **Core principle:** Read the project, never guess it. Every claim written to the memory file must come from files actually inspected in this run. User content in an existing memory file is never overwritten.
 
-**Use this when:** Adopting Pocket in an existing repo or regenerating a stale project guide.
+**Use this when:** Adopting Pocket in an existing repo, regenerating a stale project guide, or enabling Pocket Education for a learner.
 
-**Do NOT use when:** The project already has a current memory file. For spec work, go to `pocket-grinding`.
+**Do NOT use when:** The project already has a current memory file and the learner profile it wants. To change learner levels later, use `pocket-education` (it never needs a re-init). For spec work, go to `pocket-grinding`.
 
 ---
 
@@ -28,9 +28,10 @@ Standalone local onboarding. Takes an existing project from zero Pocket context 
 ## Hard Constraints
 
 <HARD-GATE>
-1. **Merge, never clobber** — if the memory file exists, only the `<!-- pocket-init:start -->` … `<!-- pocket-init:end -->` managed section may be created or replaced. Everything outside it is untouched, byte for byte.
+1. **Merge, never clobber** — if the memory file exists, only the `<!-- pocket-init:start -->` … `<!-- pocket-init:end -->` managed section may be created or replaced. Everything outside it is untouched, byte for byte. The separately consented Education Gate writes only its learner profile through `edu`.
 2. **Local onboarding only** — inspect local project files and do not configure integrations or access remote services.
 3. **Evidence-based guide** — every command written to the memory file (build, test, lint) must be read from a manifest or config file, not assumed from the stack.
+4. **Education is opt-in and learner-owned** — never calibrate or write a `## Pocket Education` block unless the user says yes at the Education Gate, and never write levels the learner has not confirmed. An existing profile is reused, never recalibrated, unless the learner explicitly asks.
 </HARD-GATE>
 
 ---
@@ -43,7 +44,7 @@ Inspect the project before writing anything:
 2. **Commands** — extract the real build / test / lint / typecheck commands from manifest scripts or local CI workflow files. Record them verbatim.
 3. **Layout** — top-level directories and what lives in each (source, tests, docs, tooling). Keep it to the directories that matter.
 4. **Conventions** — formatter/linter configs, test file naming, and commit style visible in `git log --oneline -10`.
-5. **Existing memory files** — check for `CLAUDE.md` and `AGENTS.md`. Note which exist and whether they already contain a `pocket-init` managed section.
+5. **Existing memory files** — check for `CLAUDE.md` and `AGENTS.md`. Note which exist and whether they already contain a `pocket-init` managed section or a `## Pocket Education` heading.
 
 Summarize the findings to the user in a few lines before writing.
 
@@ -89,12 +90,46 @@ Merge rules:
 
 Keep the section under ~60 lines — a memory file is an index, not documentation.
 
-## Step 4: Completion report
+The `## Pocket Education` block lives **outside** the managed section and is owned by `edu`. Regenerating the project guide never touches it and never resets a learner's calibration. Other user-owned configuration blocks also remain untouched.
+
+## Step 4: Education Gate (opt-in)
+
+Check current state first:
+
+```bash
+npx -y pocketto-pi edu --json --contract 3
+```
+
+- `data.education` is `true` → a learner profile exists. Report it and **do not recalibrate** (only an explicit learner request triggers `pocket-education`'s recalibration). Skip to Step 5.
+- `data.source` set but `data.education` is `false` → a paused profile exists. Ask whether to resume it (`edu set --education true`); do not recalibrate. Skip to Step 5.
+- An error (`EDU_CONFIG_INVALID`, `EDU_SCHEMA_UNSUPPORTED`) → report it; do not overwrite the block. Skip to Step 5.
+
+Otherwise ask the user **one** question:
+
+> "Enable Pocket Education for this repo? It keeps implementation human-owned — the agent explains, reviews, and guides while you write the code — and stores a learner profile so guidance adapts across sessions. (yes/no)"
+
+**If no → skip to Step 5.** Nothing is written.
+
+**If yes:**
+
+1. Run the lightweight calibration in `<skills_root>/pocket-education/references/calibration.md`, using the Step 1 scan to choose the stack skills. It is onboarding, not an exam.
+2. Show the proposed profile; the learner confirms or edits every level.
+3. Write it to the same memory file:
+   ```bash
+   npx -y pocketto-pi edu init --file <memory_file> --level <skill>=<level> [--level ...] [--teaching-mode socratic] [--journal false] --json --contract 3
+   ```
+4. Re-run `edu --json --contract 3` and confirm `education=true` before continuing.
+
+Education makes no remote call and does not change optional adapter behavior.
+
+## Step 5: Completion report
 
 ```text
 POCKET_INIT_COMPLETE
 Memory file : <memory_file> (created | merged)
+Education   : enabled (<n> skills, teaching_mode=<mode>, journal=<on|off>) | reused existing profile | disabled
 Next        : /pocketto:pocket-grinding "<your first feature>"
+              (Education on → /pocketto:pocket-education "<your first task>")
 ```
 
 ---
@@ -105,5 +140,8 @@ Next        : /pocketto:pocket-grinding "<your first feature>"
 |---------|---------|
 | "The memory file is messy — I'll rewrite it" | **STOP.** Only the managed section is yours. Everything else is user content. |
 | "It's a Node project, tests are probably `npm test`" | Read the manifest. Write only commands that actually exist. |
-| "I'll run a remote setup command while onboarding" | **STOP.** This skill performs local inspection and writes only the managed guide section. |
+| "I'll run a remote setup command while onboarding" | **STOP.** This skill performs local inspection and writes only the managed guide section and, with explicit consent, the local learner profile. |
 | "I'll write both CLAUDE.md and AGENTS.md to be safe" | One memory file per project. Two copies drift apart. |
+| "They're a beginner — I'll enable Education for them" | **STOP.** Education is opt-in at the gate. |
+| "A profile exists, but a fresh calibration would be more accurate" | Reuse it. Recalibration is the learner's call, not yours. |
+| "Their answers say testing is guided — I'll write that without asking" | Show the proposal. The learner confirms every level. |

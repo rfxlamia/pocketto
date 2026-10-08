@@ -10,7 +10,8 @@
     "bug-hunting",
     "planning",
     "workflow",
-    "skills"
+    "skills",
+    "education"
   ],
   "author": {
     "name": "rfxlamia",
@@ -33,6 +34,7 @@
     "cli/lib/surface-manifest.js",
     "cli/commands/log.js",
     "cli/commands/doctor.js",
+    "cli/commands/edu.js",
     "cli/commands/lifecycle.js",
     "cli/commands/meta.js",
     "cli/commands/reconcile.js",
@@ -85,6 +87,8 @@
     "skills/hotfix/references/**",
     "skills/pocket-closing/SKILL.md",
     "skills/pocket-closing/references/**",
+    "skills/pocket-education/SKILL.md",
+    "skills/pocket-education/references/**",
     "skills/pocket-development/SKILL.md",
     "skills/pocket-development/references/code-quality-review.md",
     "skills/pocket-development/references/entry-gate.md",

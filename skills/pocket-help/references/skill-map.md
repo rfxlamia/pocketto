@@ -85,7 +85,14 @@ One block per Core skill: what it does, what it consumes, what it produces, and 
 - **Use when:** New to Pocket or unsure where to start.
 
 ### pocket-init
-- **What:** Scans a project and writes a merge-safe local project guide.
+- **What:** Scans a project and writes a merge-safe local project guide, then optionally calibrates a local learner profile through `edu init`.
 - **Input:** An existing project directory.
-- **Output:** A created or updated managed section in one memory file.
-- **Use when:** Adopting Pocket in an existing repository or refreshing a stale guide.
+- **Output:** A created or updated managed section in one memory file; optionally a confirmed `## Pocket Education` learner profile outside it.
+- **Use when:** Adopting Pocket in an existing repository, refreshing a stale guide, or enabling Education.
+
+### pocket-education
+- **What:** Opt-in mentor mode — the human implements, the agent teaches. Loads the persisted learner profile (`pocketto-pi edu`), maps the task to skill dimensions, then runs Understand → Investigate → learner plans → learner implements → review → guided correction → re-review → learning summary. Hints climb a ladder one rung at a time; review findings are phrased as traces that let the learner discover the failure mode. Never edits application code or tests. Recommends level changes from journal evidence; applies them only with the learner's explicit consent.
+- **Input:** A task in a repo with Pocket Education enabled (or a learner who wants to work this way).
+- **Output:** The learner's own, reviewed change; a learning summary (optionally `docs/pocket/learning/<date>-<slug>.md`); learner-approved profile updates.
+- **Use when:** "teach me", "guide me through this", "I want to do it myself", "review my change", "explain testing more slowly", "recalibrate my level".
+- **Skip when:** The user explicitly wants the agent to implement (→ hotfix / bug-hunting / pocket-development).

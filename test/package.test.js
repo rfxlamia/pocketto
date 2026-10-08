@@ -17,6 +17,8 @@ const { T10_CLOSURE_RUNTIME_FILES } = require("./surface-support/shared");
 
 const ROOT = path.join(__dirname, "..");
 
+require('../test-support/package/education');
+
 const MOVED_REVIEW_FILES = [
 	"skills/pocket-development/references/spec-compliance-review.md",
 	"skills/pocket-development/references/code-quality-review.md",
@@ -45,6 +47,7 @@ const STANDALONE_DIAGRAM_LABELS = [
 	"brand-design",
 	"structured-research",
 	"create-pr",
+	"pocket-education",
 ];
 const ALL_DIAGRAM_LABELS = [...PIPELINE_DIAGRAM_LABELS, ...STANDALONE_DIAGRAM_LABELS];
 
@@ -138,7 +141,7 @@ test("pipeline diagram inventory stays aligned across published assets", () => {
 		.map((match) => match[1])
 		.sort();
 	assert.deepEqual(svgLabels, [...ALL_DIAGRAM_LABELS].sort(), "SVG skill inventory differs");
-	assert.match(svg, />13 skills total[^<]*<\/text>/, "SVG total must be 13");
+	assert.match(svg, />14 skills total[^<]*<\/text>/, "SVG total must be 14");
 
 	const activeElements = drawing.elements.filter((element) => !element.isDeleted);
 	const drawingIds = new Set(activeElements.map((element) => element.id));
@@ -153,9 +156,9 @@ test("pipeline diagram inventory stays aligned across published assets", () => {
 	);
 	assert.ok(
 		activeElements.some(
-			(element) => element.type === "text" && element.text.startsWith("13 skills total"),
+			(element) => element.type === "text" && element.text.startsWith("14 skills total"),
 		),
-		"Excalidraw total must be 13",
+		"Excalidraw total must be 14",
 	);
 
 	for (const element of activeElements) {

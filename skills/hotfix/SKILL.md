@@ -12,6 +12,18 @@ Fast, accurate iteration. Not cowboy coding. Not full superpowers ceremony.
 
 ---
 
+## Pocket Education Guard
+
+If the project memory file already in your context (`CLAUDE.md` / `AGENTS.md`) has **no** `## Pocket Education` heading, skip this section — nothing changes and no extra call is made.
+
+If it has one, confirm with `npx -y pocketto-pi edu --json --contract 3`. When `data.education` is `true` (or the command errors), the learner implements in this repo. Before Step 1, ask once:
+
+> "Pocket Education is on here. Do you want to make this change yourself with guidance (→ `pocket-education`), or should I implement this one?"
+
+Write no implementation code until the user explicitly chooses. "Implement it" → continue with the flow below; otherwise hand off to `pocket-education`. An explicit handover already given in `pocket-education` for this task counts as the answer.
+
+---
+
 ## The 5-Step Flow
 
 **Step 1: Capture intent**

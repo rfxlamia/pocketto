@@ -22,10 +22,10 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 - **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
 - **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
 
-13 skills across a local-first Core and an optional Enterprise adapter. Use Core for the full pipeline or standalone skills without GitHub access. If your team opts in, Enterprise consumes Core's durable lifecycle events and owns GitHub reconciliation; Core itself does not call `gh`. Core does not perform remote synchronization.
+14 skills across a local-first Core and an optional Enterprise adapter. Use Core for the full pipeline or standalone skills without GitHub access. If your team opts in, Enterprise consumes Core's durable lifecycle events and owns GitHub reconciliation; Core itself does not call `gh`. Core does not perform remote synchronization. Learning? Opt into [Pocket Education](#pocket-education-opt-in) and the agent becomes a repository-aware mentor — you write the code, it teaches, reviews, and guides.
 
 <p align="center">
-  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development (in-loop audit + phase-level pass) → closing, plus standalone skills (pocket-help, pocket-init, bug-hunting, hotfix, brand-design, structured-research, create-pr)" width="100%">
+  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development (in-loop audit + phase-level pass) → closing, plus standalone skills (pocket-help, pocket-init, bug-hunting, hotfix, brand-design, structured-research, create-pr, pocket-education)" width="100%">
 </p>
 
 ## Install
@@ -102,7 +102,7 @@ Or just fix something:
 /pocketto:hotfix        "bump the rate-limit window to 60s"
 ```
 
-## The 13 skills
+## The 14 skills
 
 ### Pipeline (chained)
 
@@ -124,7 +124,8 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 | Skill | When to reach for it |
 |-------|----------------------|
 | `pocket-help` | "What is Pocket?", which skill to use, how the flow works |
-| `pocket-init` | Onboard an existing project: generate CLAUDE.md/AGENTS.md, enable enterprise |
+| `pocket-init` | Onboard an existing project: generate CLAUDE.md/AGENTS.md and optionally calibrate Education |
+| `pocket-education` | Learn by doing: you implement, the agent teaches, reviews, and guides (education mode) |
 | `bug-hunting` | Fix a bug, debug a failure, audit code for hidden bugs |
 | `hotfix` | Small-to-medium change where the full pipeline is overkill |
 | `brand-design` | Design system, creative brief, brand identity, UI tokens |
@@ -167,8 +168,12 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 **`pocket-help`** — Compact onboarding and routing guide for the whole system. Explains what Pocket is, when it beats lighter flows, and which skill to invoke — without loading every skill into context.
 *Trigger:* "what is pocket", "how do I use pocket", "which pocket skill", "pocket-help".
 
-**`pocket-init`** — Onboards an existing (brownfield) project onto Pocket. Scans the codebase and writes an evidence-based project memory file (`CLAUDE.md` on Claude Code, `AGENTS.md` on Pi) in a merge-safe managed section, then optionally enables Pocket Enterprise (`pocketto-pi mode init`) and scaffolds GitHub issue/PR templates (`pocketto-pi scaffold github`). Enterprise stays strictly opt-in.
-*Trigger:* "pocket-init", "set up pocket", "onboard this project", "generate CLAUDE.md", "enable enterprise mode".
+**`pocket-init`** — Onboards an existing (brownfield) project onto Pocket. Scans local configuration and writes an evidence-based project memory file (`CLAUDE.md` on Claude Code, `AGENTS.md` on Pi) in a merge-safe managed section, then optionally enables Pocket Education with a lightweight learner calibration (`pocketto-pi edu init`). Onboarding makes no remote calls and does not configure Enterprise integrations; those belong to the optional adapter.
+*Trigger:* "pocket-init", "set up pocket", "onboard this project", "generate CLAUDE.md", "enable education mode".
+
+**`pocket-education`** — Mentor mode. The human writes the code; the agent explains the task, points to the right files and patterns, reviews the learner's diff, and coaches with a progressive hint ladder — at a depth set per skill by a persisted learner profile. Review findings are phrased as traces ("what does `findProject()` return for an unknown id?") rather than verdicts. Ends each task with a learning summary and may *recommend* a level change; only the learner can approve it. Never edits application code or tests.
+*Trigger:* "pocket-education", "teach me", "guide me through this", "I want to do it myself", "review my change", "explain more slowly".
+*Deliverables:* the learner's own reviewed change; optional journal entries in `docs/pocket/learning/`.
 
 **`create-pr`** — Pocket Enterprise recorder that opens (or reuses) the GitHub PR for a completed development phase on the **current branch** — it never manages branches. Commits traveling state (`log.json` + plan/spec docs), formats a structured What/Why/How-to-Test body linked to the Pocket issue (`refs`/`closes`), and records the PR in `.pocket-meta.json`. Requires enterprise mode.
 *Trigger:* "create-pr", "open a PR", or offered by `pocket-development` after a phase completes in enterprise mode.
@@ -231,6 +236,54 @@ Replay only after the adapter is pinned to the last compatible v4 release or rei
 npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
 ```
 
+## Pocket Education (opt-in)
+
+```text
+Pocket Core        AI works with you.
+Pocket Enterprise  AI works with your organization.
+Pocket Education   AI teaches you how to work.
+```
+
+When an agent implements everything, it also does the parts a learner most needs to practice: navigating an unfamiliar repo, reading errors, forming debugging hypotheses, writing tests, deciding what *not* to change. **Pocket Education** keeps those with the human:
+
+```text
+task → agent explains → you investigate and implement → agent reviews
+     → agent explains findings, one hint at a time → you fix → agent re-reviews → learning summary
+```
+
+**Skill-specific depth.** Ability isn't one number. The learner profile stores a level per skill — `foundation` (fundamentals, small explicit steps), `guided` (repo patterns, debugging strategy, hints), or `independent` (constraints, edge cases, trade-offs) — so a TypeScript-fluent learner who is new to testing gets test fundamentals without a TypeScript lecture.
+
+**Calibrated once, remembered.** `pocket-init`'s Education Gate runs a short, friendly calibration (self-assessment plus two or three tiny code-reading probes) and writes the profile to a `## Pocket Education` block in the same `CLAUDE.md`/`AGENTS.md`. Later sessions read it instead of starting over:
+
+~~~markdown
+## Pocket Education
+
+```
+education: true
+profile_schema: 1
+teaching_mode: guided
+journal: true
+skill.programming_fundamentals: guided
+skill.typescript: independent
+skill.testing: foundation
+```
+~~~
+
+**The learner owns progression.** The agent may recommend "testing: foundation → guided" when the learning journal shows it; the level changes only when the learner says yes — or asks for it directly ("stop explaining git basics", "explain mocks more slowly again").
+
+**Enable it:** run `/pocketto:pocket-init` and say yes at the Education Gate, then `/pocketto:pocket-education "<task>"`. Under the hood:
+
+```bash
+npx pocketto-pi edu init --file CLAUDE.md --level testing=foundation --level typescript=independent
+npx pocketto-pi edu set --level testing=guided     # only after the learner agrees
+```
+
+Design guarantees:
+
+- **Human-owned implementation** — the agent never edits application code or tests in Education mode; `hotfix`, `bug-hunting`, and `pocket-development` ask before implementing, and a handover is always explicit.
+- **Opt-in & independent** — Core only, Core + Enterprise, Core + Education, or all three. Without the block, nothing changes and no `edu` call is made; Education never calls GitHub.
+- **Not an LMS** — no grades, scores, or dashboards. Just learning inside a real repository, through real tasks, with memory of what the learner already understands.
+
 ## CLI
 
 The cross-platform Node CLI requires Node.js ≥ 18. Core commands work locally. `mode` and GitHub body formatting are Enterprise-owned; `meta` and `scaffold` are local file operations, and `reconcile` is a shared utility. Only the optional Enterprise adapter performs remote reconciliation. JSON commands use the current envelope and contract handshake.
@@ -247,6 +300,9 @@ The cross-platform Node CLI requires Node.js ≥ 18. Core commands work locally.
 | Core | `npx pocketto-pi lifecycle migrate <spec_dir> --from v3 --json --contract 3` | Explicitly migrate only a pristine v3 plan with no execution progress. |
 | Core | `npx pocketto-pi doctor [--strict]` | Check required/recommended Pi extensions. |
 | Enterprise | `npx pocketto-pi mode [<dir>]` / `mode init …` | Read / configure explicit Enterprise opt-in. |
+| Core | `npx pocketto-pi edu [<dir>]` | Report the Pocket Education learner profile. |
+| Core | `npx pocketto-pi edu init --level <skill>=<level> … [--file CLAUDE.md] [--reset]` | Write the learner profile; refuses to overwrite one without `--reset`. |
+| Core | `npx pocketto-pi edu set --level <skill>=<level> … [--teaching-mode] [--journal] [--education]` | Change the profile; reports each change as more/less guidance. |
 | Core | `npx pocketto-pi meta get\|set <dir> <field> [value]` | Read / write local `.pocket-meta.json`; this command makes no GitHub call. |
 | Enterprise | `npx pocketto-pi format <issue\|pr\|comment\|closeout> --input <json>` | Render Enterprise GitHub bodies to a temp file. |
 | Core | `npx pocketto-pi scaffold github [--dry-run]` | Write `.github/` issue + PR templates locally. |

@@ -3228,3 +3228,322 @@ test("log update --correction is refused on a marker-less log", {
 	assert.equal(JSON.parse(res.stdout.trim()).error.code, "PIPELINE_TOO_OLD");
 	assert.deepEqual(readFileSync(logPath), before);
 });
+
+// ---------------------------------------------------------------------------
+// Pocket Education learner profile (`edu`) — issue #55.
+// ---------------------------------------------------------------------------
+
+function educationBlock(lines, { eol = "\n", prose = "Learner notes." } = {}) {
+	return ["## Pocket Education", "", prose, "", "```", ...lines, "```", ""].join(eol);
+}
+
+const VALID_PROFILE = [
+	"education: true",
+	"profile_schema: 1",
+	"teaching_mode: guided",
+	"journal: true",
+	"skill.testing: foundation",
+	"skill.typescript: independent",
+];
+
+function eduError(args) {
+	const env = json(args, { expectFail: true });
+	assert.equal(env.ok, false);
+	return env.error.code;
+}
+
+test("edu defaults to disabled when no Pocket Education heading exists", () => {
+	const dir = tmp();
+	writeModeConfig(dir, "AGENTS.md", "# Notes\n\nNothing here.\n");
+	const env = json(["edu", dir, "--json"]);
+	assert.equal(env.command, "edu");
+	assert.deepEqual(env.data, {
+		education: false,
+		profile_schema: null,
+		teaching_mode: null,
+		journal: null,
+		skills: {},
+		source: null,
+	});
+});
+
+test("edu init writes the profile, preserves existing content, and needs no git remote", () => {
+	const dir = tmp();
+	const original = "# Existing notes\n\nKeep this.\n";
+	writeModeConfig(dir, "AGENTS.md", original);
+
+	const env = json([
+		"edu", "init", dir,
+		"--level", "programming_fundamentals=guided",
+		"--level", "testing=foundation",
+		"--level=typescript=independent",
+		"--json",
+	]);
+	assert.equal(env.data.action, "created");
+	assert.deepEqual(env.data.wrote, ["AGENTS.md"]);
+	assert.deepEqual(env.data.skills, {
+		programming_fundamentals: "guided",
+		testing: "foundation",
+		typescript: "independent",
+	});
+	assert.equal(env.data.teaching_mode, "guided");
+	assert.equal(env.data.journal, true);
+
+	const text = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+	assert.ok(text.startsWith(original), "content before the block must be byte-identical");
+	assert.equal((text.match(/## Pocket Education/g) || []).length, 1);
+	assert.match(text, /Levels change only when the learner explicitly agrees/);
+	assert.match(text, /skill\.testing: foundation/);
+
+	const read = json(["edu", dir, "--json"]);
+	assert.equal(read.data.education, true);
+	assert.equal(read.data.source, "AGENTS.md");
+	assert.deepEqual(Object.keys(read.data.skills), ["programming_fundamentals", "testing", "typescript"]);
+});
+
+test("edu init refuses to recalibrate an existing profile without --reset", () => {
+	const dir = tmp();
+	run(["edu", "init", dir, "--level", "git=guided"]);
+	const before = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+
+	assert.equal(eduError(["edu", "init", dir, "--level", "git=foundation", "--json"]), "EDU_PROFILE_EXISTS");
+	assert.equal(readFileSync(path.join(dir, "AGENTS.md"), "utf8"), before);
+});
+
+test("edu init --reset replaces only the block and keeps surrounding content", () => {
+	const dir = tmp();
+	const head = "# Notes\n\nAbove.\n\n";
+	const tail = "\n## Later Section\n\nBelow.\n";
+	writeModeConfig(dir, "AGENTS.md", head + educationBlock(VALID_PROFILE) + tail);
+
+	const env = json([
+		"edu", "init", dir, "--reset",
+		"--level", "sql=guided",
+		"--teaching-mode", "socratic",
+		"--journal", "false",
+		"--json",
+	]);
+	assert.equal(env.data.action, "reset");
+	assert.deepEqual(env.data.skills, { sql: "guided" });
+	assert.equal(env.data.teaching_mode, "socratic");
+	assert.equal(env.data.journal, false);
+
+	const text = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+	assert.ok(text.startsWith(head));
+	assert.ok(text.endsWith(tail));
+	assert.equal((text.match(/## Pocket Education/g) || []).length, 1);
+	assert.doesNotMatch(text, /skill\.testing/);
+});
+
+test("edu init --reset repairs a fence-less profile without borrowing the Enterprise fence", () => {
+	const dir = tmp();
+	const enterprise = enterpriseBlock(["enterprise: true", "branch_strategy: branch", "create_pr: true"]);
+	writeModeConfig(dir, "AGENTS.md", "## Pocket Education\n\nfence went missing\n\n" + enterprise);
+
+	assert.equal(eduError(["edu", dir, "--json"]), "EDU_CONFIG_INVALID");
+	json(["edu", "init", dir, "--reset", "--level", "git=guided", "--json"]);
+
+	const text = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+	assert.ok(text.endsWith(enterprise), "Enterprise block must survive byte for byte");
+	assert.equal(json(["edu", dir, "--json"]).data.skills.git, "guided");
+	assert.equal(json(["mode", dir, "--json"]).data.enterprise, true);
+});
+
+test("edu set reports guidance direction and preserves prose above the fence", () => {
+	const dir = tmp();
+	writeModeConfig(dir, "AGENTS.md", "# Notes\n\n" + educationBlock(VALID_PROFILE, { prose: "My own reminder." }));
+
+	const env = json([
+		"edu", "set", dir,
+		"--level", "testing=guided",
+		"--level", "typescript=guided",
+		"--level", "git=foundation",
+		"--json",
+	]);
+	assert.equal(env.data.changed, true);
+	assert.deepEqual(env.data.changes, [
+		{ key: "skill.testing", skill: "testing", from: "foundation", to: "guided", direction: "less_guidance" },
+		{ key: "skill.typescript", skill: "typescript", from: "independent", to: "guided", direction: "more_guidance" },
+		{ key: "skill.git", skill: "git", from: null, to: "foundation", direction: "added" },
+	]);
+	assert.deepEqual(env.data.skills, { testing: "guided", typescript: "guided", git: "foundation" });
+
+	const text = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+	assert.match(text, /My own reminder\./);
+	assert.ok(text.startsWith("# Notes\n\n## Pocket Education\n"));
+});
+
+test("edu set with no effective change writes nothing", () => {
+	const dir = tmp();
+	const body = educationBlock(VALID_PROFILE);
+	writeModeConfig(dir, "AGENTS.md", body);
+	const env = json(["edu", "set", dir, "--level", "testing=foundation", "--json"]);
+	assert.equal(env.data.changed, false);
+	assert.deepEqual(env.data.wrote, []);
+	assert.equal(readFileSync(path.join(dir, "AGENTS.md"), "utf8"), body);
+});
+
+test("edu set --education false keeps the profile dormant, and true restores it", () => {
+	const dir = tmp();
+	writeModeConfig(dir, "AGENTS.md", educationBlock(VALID_PROFILE));
+
+	const off = json(["edu", "set", dir, "--education", "false", "--json"]);
+	assert.deepEqual(off.data.changes, [{ key: "education", from: true, to: false }]);
+	const read = json(["edu", dir, "--json"]);
+	assert.equal(read.data.education, false);
+	assert.equal(read.data.source, "AGENTS.md");
+	assert.deepEqual(read.data.skills, { testing: "foundation", typescript: "independent" });
+
+	assert.equal(json(["edu", "set", dir, "--education", "true", "--json"]).data.education, true);
+});
+
+test("edu set without a profile fails with EDU_NOT_INITIALIZED and writes nothing", () => {
+	const dir = tmp();
+	assert.equal(eduError(["edu", "set", dir, "--level", "git=guided", "--json"]), "EDU_NOT_INITIALIZED");
+	assert.equal(existsSync(path.join(dir, "AGENTS.md")), false);
+});
+
+test("edu uses CLAUDE.md as a whole-heading override and edits the active file", () => {
+	const dir = tmp();
+	writeModeConfig(dir, "AGENTS.md", educationBlock(VALID_PROFILE));
+	writeModeConfig(
+		dir,
+		"CLAUDE.md",
+		educationBlock(["education: true", "profile_schema: 1", "skill.git: independent"]),
+	);
+	const agentsBefore = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+
+	const read = json(["edu", dir, "--json"]);
+	assert.equal(read.data.source, "CLAUDE.md");
+	assert.deepEqual(read.data.skills, { git: "independent" });
+	assert.equal(read.data.teaching_mode, "guided", "teaching_mode defaults to guided");
+	assert.equal(read.data.journal, true, "journal defaults to true");
+
+	const set = json(["edu", "set", dir, "--level", "git=guided", "--json"]);
+	assert.deepEqual(set.data.wrote, ["CLAUDE.md"]);
+	assert.equal(readFileSync(path.join(dir, "AGENTS.md"), "utf8"), agentsBefore);
+
+	assert.equal(
+		eduError(["edu", "set", dir, "--level", "git=guided", "--file", "AGENTS.md", "--json"]),
+		"EDU_FILE_MISMATCH",
+	);
+	assert.equal(
+		eduError(["edu", "init", dir, "--reset", "--level", "git=guided", "--json"]),
+		"EDU_FILE_MISMATCH",
+		"profiles in both files must not be reset blindly",
+	);
+});
+
+test("edu init --reset refuses to create a second profile in another file", () => {
+	const dir = tmp();
+	writeModeConfig(dir, "CLAUDE.md", educationBlock(VALID_PROFILE));
+	assert.equal(
+		eduError(["edu", "init", dir, "--reset", "--file", "AGENTS.md", "--level", "git=guided", "--json"]),
+		"EDU_FILE_MISMATCH",
+	);
+	assert.equal(existsSync(path.join(dir, "AGENTS.md")), false);
+});
+
+test("edu rejects malformed profiles instead of treating them as disabled", () => {
+	const cases = [
+		[["education: true", "profile_schema: 1", "skill.testing: expert"], "EDU_CONFIG_INVALID"],
+		[["education: true", "profile_schema: 1", "skil.testing: guided"], "EDU_CONFIG_INVALID"],
+		[["education: true", "profile_schema: 1", "skill.git: guided", "skill.git: foundation"], "EDU_CONFIG_INVALID"],
+		[["education: true", "profile_schema: 1"], "EDU_CONFIG_INVALID"],
+		[["education: maybe", "profile_schema: 1", "skill.git: guided"], "EDU_CONFIG_INVALID"],
+		[["education: true", "skill.git: guided"], "EDU_CONFIG_INVALID"],
+		[["education: true", "profile_schema: 1", "teaching_mode: lecture", "skill.git: guided"], "EDU_CONFIG_INVALID"],
+		[["education: true", "profile_schema: 1", "skill.System Design: guided"], "EDU_CONFIG_INVALID"],
+		[["education: true", "profile_schema: 2", "skill.git: guided"], "EDU_SCHEMA_UNSUPPORTED"],
+	];
+	for (const [lines, code] of cases) {
+		const dir = tmp();
+		writeModeConfig(dir, "AGENTS.md", educationBlock(lines));
+		assert.equal(eduError(["edu", dir, "--json"]), code, lines.join(" / "));
+	}
+
+	const unclosed = tmp();
+	writeModeConfig(unclosed, "AGENTS.md", "## Pocket Education\n\n```\neducation: true\n");
+	assert.equal(eduError(["edu", unclosed, "--json"]), "EDU_CONFIG_INVALID");
+
+	const duplicated = tmp();
+	writeModeConfig(duplicated, "AGENTS.md", educationBlock(VALID_PROFILE) + "\n" + educationBlock(VALID_PROFILE));
+	assert.equal(eduError(["edu", duplicated, "--json"]), "EDU_CONFIG_INVALID");
+
+	// A malformed AGENTS.md profile is not masked by a valid CLAUDE.md one.
+	const masked = tmp();
+	writeModeConfig(masked, "AGENTS.md", educationBlock(["education: true"]));
+	writeModeConfig(masked, "CLAUDE.md", educationBlock(VALID_PROFILE));
+	assert.equal(eduError(["edu", masked, "--json"]), "EDU_CONFIG_INVALID");
+});
+
+test("edu caps the profile at 16 skills", () => {
+	const dir = tmp();
+	const skills = Array.from({ length: 17 }, (_, i) => `skill.s${i}: guided`);
+	writeModeConfig(dir, "AGENTS.md", educationBlock(["education: true", "profile_schema: 1", ...skills]));
+	assert.equal(eduError(["edu", dir, "--json"]), "EDU_CONFIG_INVALID");
+});
+
+test("edu validates flags and usage", () => {
+	const dir = tmp();
+	assert.equal(eduError(["edu", "init", dir, "--json"]), "EDU_INPUT_INVALID");
+	assert.equal(eduError(["edu", "init", dir, "--level", "testing", "--json"]), "EDU_INPUT_INVALID");
+	assert.equal(eduError(["edu", "init", dir, "--level", "testing=expert", "--json"]), "EDU_INPUT_INVALID");
+	assert.equal(eduError(["edu", "init", dir, "--level", "Testing=guided", "--json"]), "EDU_INPUT_INVALID");
+	assert.equal(
+		eduError(["edu", "init", dir, "--level", "git=guided", "--level", "git=foundation", "--json"]),
+		"EDU_INPUT_INVALID",
+	);
+	assert.equal(
+		eduError(["edu", "init", dir, "--level", "git=guided", "--teaching-mode", "lecture", "--json"]),
+		"EDU_INPUT_INVALID",
+	);
+	assert.equal(
+		eduError(["edu", "init", dir, "--level", "git=guided", "--file", "README.md", "--json"]),
+		"EDU_INPUT_INVALID",
+	);
+	assert.equal(eduError(["edu", "init", dir, "--level", "git=guided", "--education", "false", "--json"]), "BAD_USAGE");
+	assert.equal(eduError(["edu", dir, "--level", "git=guided", "--json"]), "BAD_USAGE");
+	assert.equal(eduError(["edu", "init", dir, "--level", "--json"]), "MISSING_VALUE");
+	assert.equal(existsSync(path.join(dir, "AGENTS.md")), false, "rejected input must write nothing");
+
+	run(["edu", "init", dir, "--level", "git=guided"]);
+	assert.equal(eduError(["edu", "set", dir, "--json"]), "BAD_USAGE");
+	assert.equal(eduError(["edu", "set", dir, "--reset", "--level", "git=foundation", "--json"]), "BAD_USAGE");
+	assert.equal(eduError(["edu", "set", dir, "--journal", "maybe", "--json"]), "EDU_INPUT_INVALID");
+	assert.equal(eduError(["edu", path.join(dir, "missing"), "--json"]), "NOT_FOUND");
+});
+
+test("edu preserves CRLF line endings in the memory file", () => {
+	const dir = tmp();
+	writeModeConfig(dir, "CLAUDE.md", "# Notes\r\n\r\nWindows file.\r\n");
+	run(["edu", "init", dir, "--file", "CLAUDE.md", "--level", "git=guided"]);
+	run(["edu", "set", dir, "--level", "git=independent"]);
+
+	const text = readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
+	assert.ok(text.startsWith("# Notes\r\n\r\nWindows file.\r\n"));
+	assert.equal(text.replace(/\r\n/g, "").includes("\n"), false, "no bare LF may be introduced");
+	assert.equal(json(["edu", dir, "--json"]).data.skills.git, "independent");
+});
+
+test("Education and Enterprise blocks coexist without touching each other", { skip: !hasGit() }, () => {
+	const dir = tmp();
+	gitInitRepoWithRemote(dir);
+	run(["mode", "init", dir, "--enterprise", "true", "--branch-strategy", "branch", "--create-pr", "true"]);
+	run(["edu", "init", dir, "--level", "testing=foundation", "--level", "git=guided"]);
+
+	const enterpriseSpan = (text) => text.slice(text.indexOf("## Pocket Enterprise"), text.indexOf("## Pocket Education"));
+	const educationSpan = (text) => text.slice(text.indexOf("## Pocket Education"));
+	const afterInit = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+
+	run(["edu", "set", dir, "--level", "testing=guided"]);
+	const afterSet = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+	assert.equal(enterpriseSpan(afterSet), enterpriseSpan(afterInit), "edu set must not touch the Enterprise block");
+
+	run(["mode", "init", dir, "--enterprise", "true", "--branch-strategy", "branch", "--create-pr", "false"]);
+	const afterMode = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
+	assert.equal(educationSpan(afterMode), educationSpan(afterSet), "mode init must not touch the Education block");
+
+	assert.equal(json(["mode", dir, "--json"]).data.create_pr, false);
+	assert.deepEqual(json(["edu", dir, "--json"]).data.skills, { testing: "guided", git: "guided" });
+});

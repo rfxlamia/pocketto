@@ -1,14 +1,14 @@
 # Pocketto
 
-> Pocketto `4.0.0` provides local-first AI coding workflows for Claude Code and Pi. Core is useful without GitHub or Enterprise; the optional Enterprise adapter consumes durable neutral lifecycle events and owns all remote reconciliation.
+> Pocketto `4.0.0` provides local-first AI coding workflows for Claude Code and Pi. Core is useful without GitHub or Enterprise; the optional Enterprise adapter consumes durable neutral lifecycle events and owns all remote reconciliation. An opt-in Pocket Education mode turns the agent into a repository-aware mentor — the human implements, the agent teaches and reviews. The 14 skills include a 6-stage pipeline and 8 standalone skills.
 
 ## Release surfaces
 
 The schema-1 `surfaces.json` manifest defines exactly four roles:
 
-- `pi/core` — local-first Core workflows for Pi.
+- `pi/core` — local-first Core workflows for Pi, including Education.
 - `pi/enterprise` — additive Enterprise adapter for Pi; requires `pi/core`.
-- `claude/core` — local-first Core workflows for Claude Code.
+- `claude/core` — local-first Core workflows for Claude Code, including Education.
 - `claude/enterprise` — additive Enterprise adapter for Claude Code; requires `claude/core`.
 
 Protocol versions are independent: `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1`.
@@ -28,6 +28,15 @@ A progressed or non-pristine v3 plan returns `PIN_V3_REQUIRED` unchanged and mus
 
 For rollback, disable or remove the Enterprise adapter but retain Core, `lifecycle.json`, `.pocket-meta.json`, `log.json`, pending events, and remote markers. Local execution continues. Pin a faulty adapter to the last compatible v4 release, correct it, then replay the same event IDs with `lifecycle drain`; do not automatically downgrade or destructively convert v4 state.
 
+## Education
+
+Education is local, opt-in, and independent of Enterprise. The learner owns implementation and every profile change. `pocket-init` calibrates once and stores a `## Pocket Education` block outside the regenerable project guide; later sessions reuse it.
+
+- `npx pocketto-pi edu [<dir>]` reports the learner profile.
+- `npx pocketto-pi edu init --level <skill>=<level> … [--file CLAUDE.md] [--reset]` initializes the profile; refuses to overwrite without `--reset`.
+- `npx pocketto-pi edu set --level <skill>=<level> …` updates confirmed levels and reports more/less guidance.
+- Add `--json --contract 3` for the current stable envelope and handshake.
+
 ## Skills
 
 ### Pipeline
@@ -40,7 +49,8 @@ For rollback, disable or remove the Enterprise adapter but retain Core, `lifecyc
 
 ### Standalone
 - [pocket-help](skills/pocket-help/SKILL.md): route users through the skills.
-- [pocket-init](skills/pocket-init/SKILL.md): onboard a project; Enterprise remains opt-in.
+- [pocket-init](skills/pocket-init/SKILL.md): local project guide and optional learner calibration; no remote integration setup.
+- [pocket-education](skills/pocket-education/SKILL.md): the human writes the code; the agent explains, reviews, and coaches with progressive hints at a persisted per-skill depth (foundation/guided/independent). Recommends level changes; the learner decides.
 - [create-pr](skills/create-pr/SKILL.md): explicit Enterprise PR recorder.
 - [bug-hunting](skills/bug-hunting/SKILL.md): diagnose and fix confirmed bugs.
 - [hotfix](skills/hotfix/SKILL.md): small-to-medium changes.

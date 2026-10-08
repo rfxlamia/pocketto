@@ -2,6 +2,10 @@
 
 All notable changes to Pocketto are documented here, newest first. Dates are the tag's commit date.
 
+## Unreleased
+
+**Pocket Education** (#55) — an opt-in mentor mode where the human writes the code and the agent teaches, reviews, and guides. New standalone skill `pocket-education` runs Understand → Investigate → learner plans → learner implements → review → guided correction → re-review → learning summary, with a one-rung-at-a-time hint ladder and review findings phrased as traces instead of verdicts. Teaching depth is skill-specific (`foundation` / `guided` / `independent` per skill) and comes from a learner profile that `pocket-init`'s new Education Gate calibrates once and persists in a `## Pocket Education` block of `CLAUDE.md`/`AGENTS.md` — separate from the regenerable project guide, so refreshing it never resets calibration. Levels change only with the learner's explicit consent. New CLI command `pocketto-pi edu` (read / `init` / `set`) owns profile writes: `init` refuses to overwrite an existing profile without `--reset`, `set` reports each change as more/less guidance, and malformed profiles fail loudly (`EDU_CONFIG_INVALID`) instead of reading as disabled. `hotfix`, `bug-hunting`, and `pocket-development` gain a guard that asks before implementing in an Education repo; without a `## Pocket Education` block they are unchanged and make no extra call. Education is independent of Enterprise and makes no GitHub calls. Additive to the v4 Core surface and contract 3.
+
 ## 4.0.0 — 2026-09-19
 
 **Core / Enterprise split.** Package version `4.0.0` ships four manifest roles: `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Core is local-first and commits neutral lifecycle state/events without GitHub calls. Enterprise is an optional additive adapter that requires matching Core and fails closed on missing or incompatible installations.
