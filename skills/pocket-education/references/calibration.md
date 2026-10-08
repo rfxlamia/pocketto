@@ -6,9 +6,11 @@ A short, friendly onboarding that decides how much to explain per skill. **It is
 
 Run it when: `pocket-init`'s Education Gate is accepted, `pocket-education` finds no profile, or the learner asks to recalibrate. Never on a session where a valid profile already exists.
 
-## 1. Pick the skills (4–8)
+## 1. Pick the skills to calibrate
 
-Always include the core set:
+When `pocket-education` creates a profile for a task, include the **1–3 skill dimensions this task actually uses**. Do not calibrate unrelated skills just to fill out a profile. Include a core dimension below only when the task exercises it. Add language, framework, database, or system-design dimensions when the repository and task provide evidence that they matter.
+
+For `pocket-init` onboarding, or an explicit request to recalibrate the learner's broader profile, choose a compact set of **4–8 dimensions**: the core skills below plus relevant stack skills. Keep the selection tied to the learner's goals and this repository.
 
 | id | Covers |
 |----|--------|
@@ -18,29 +20,25 @@ Always include the core set:
 | `testing` | test structure, assertions, running targeted tests, test doubles |
 | `debugging` | reading errors and stack traces, forming and checking hypotheses |
 
-Add stack skills **only from evidence** in the repository (the `pocket-init` scan, or manifests you read now): the main language (`typescript`, `python`, `go`, …), the main framework (`react`, `django`, …), `sql` if there is a database layer or migrations, `system_design` only if the learner wants architecture coaching. Use lowercase ids joined by `_` or `-`. Keep the profile compact — at most 8 at calibration.
+Add stack skills only when supported by repository evidence (the `pocket-init` scan or manifests) and relevant to the task: the language (`typescript`, `python`, `go`, …), framework (`react`, `django`, …), `sql` when database work is involved, or `system_design` when the learner wants architecture coaching. Use lowercase ids joined by `_` or `-`; keep any calibration to at most 8 dimensions.
 
 ## 2. Self-assessment (one message)
 
-Ask for one letter per skill:
+In one message, ask for one letter per selected skill:
 
 ```text
 For each, pick a / b / c:
   a = new to me    b = I've used it with help    c = comfortable on my own
 
-  programming_fundamentals   _
-  repository_navigation      _
-  git                        _
-  testing                    _
-  debugging                  _
-  typescript                 _
+  <selected skill dimension> _
+  <selected skill dimension> _
 ```
 
 Map `a → foundation`, `b → guided`, `c → independent`.
 
-## 3. Two or three practical probes
+## 3. Optional practical probe
 
-Small, answerable in one sentence, written in the repo's language. Prefer a **real** short, pure function from this repository (≤ 10 lines) when one fits — it also teaches them something about the codebase. Probe skills the learner rated `b` or `c`; never more than three probes in total.
+Do not probe by default. Use at most one small, one-sentence probe when its answer could materially change the starting level. Prefer a real, short, pure function from this repository when one fits. Probe only a skill the learner rated `b` or `c`.
 
 Probe shapes:
 
@@ -58,30 +56,24 @@ Rules:
 
 ## 4. Propose, confirm, write
 
-Show the proposal and the reason for any probe adjustment:
+Show the proposed levels for the selected skills and the reason for any probe adjustment. Let the learner choose the teaching style and whether to keep a journal; avoid asking them to re-confirm information they already gave.
 
 ```text
-Proposed learner profile:
-  programming_fundamentals   guided
-  repository_navigation      guided
-  git                        guided
-  testing                    foundation   (you picked b; the loop question suggests starting gentler)
-  debugging                  guided
+Proposed learner profile (for this task):
+  testing                    foundation   (you picked b; the probe suggests starting gentler)
   typescript                 independent
 
-Teaching style: guided (hints step by step; full explanation after the hints) — or socratic (questions first, explanations only when you ask).
-Learning journal: on (short notes in docs/pocket/learning/ after each task, used to suggest level changes) — say "off" if you prefer.
+Teaching style: guided (hints step by step; full explanation after the hints) or socratic (questions first; ask for a full explanation any time).
+Learning journal: on (short notes in docs/pocket/learning/ after each task, used to suggest level changes) or off.
 
-Change anything, or confirm?
+Choose or change the teaching style and journal setting, adjust any proposed level, or confirm.
 ```
 
-The learner may change any level in either direction — it is their call. Then write it:
+The learner may change any proposed level in either direction. Once they confirm, write only the selected dimensions:
 
 ```bash
 npx -y pocketto-pi edu init --file <memory_file> \
-  --level programming_fundamentals=guided --level repository_navigation=guided \
-  --level git=guided --level testing=foundation --level debugging=guided \
-  --level typescript=independent \
+  --level testing=foundation --level typescript=independent \
   [--teaching-mode socratic] [--journal false] --json --contract 3
 ```
 
