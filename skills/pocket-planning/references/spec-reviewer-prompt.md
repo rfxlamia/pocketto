@@ -13,11 +13,11 @@ Load this during Phase 5 to dispatch the spec reviewer subagent.
 ```
 Mode: Read-only review
 Complexity: Standard
-Description: "Spec reviewer — verify plan covers spec"
+Description: "spec-reviewer — independently verify plan coverage and execution readiness"
 
 Prompt:
-  You are a plan document reviewer. Your job is to verify this execution
-  plan is complete, matches the spec, and has no placeholder failures.
+  You are an independent plan document reviewer. Verify that this execution plan
+  covers the spec, carries usable test intent, and can be executed without guessing.
 
   Plan file: [PLAN_FILE_PATH]
   Spec file: [SPEC_FILE_PATH]
@@ -34,6 +34,7 @@ Prompt:
   | GWT traceability | Every task's DELIVERABLE contains GWT scenarios from the spec |
   | Out-of-scope | No task touches items listed in spec Out-of-Scope section |
   | File map | Every file mentioned in tasks was listed in Phase 2 File Structure Map |
+  | Dependency evidence | Tasks that use a library/API carry version-matched docs in REFERENCES LOADED, or list sources tried and the remaining risk when docs are unavailable; unverified capabilities are never assumed facts |
   | Test intent present | Every behavioral task carries all seven fields across its RED cycle: test file, level, GWT test intent, boundary to exercise, test doubles, expected RED reason (Step 1), and the exact command (Step 2). A command defined in Step 2 only is correct — do not flag it as missing from Step 1 |
   | Test level sane | The stated level (unit / integration / E2E) can actually observe the behavior being proved — not a unit test for a cross-boundary outcome |
   | Mock boundary sane | Test doubles do not mock the unit under test, and external services / network / clock are doubled rather than hit for real |
@@ -65,10 +66,13 @@ Prompt:
 
   ### Plan Review
 
-  **Status:** Approved | Issues Found
+  **Status:** Approved | Issues Found | Needs Context
 
   **Issues (if any):**
-  - [Task N, Step X]: [specific issue] — [why it blocks implementation]
+  - [Task N, Step X]: [specific issue] — [spec rule or packet requirement affected] — [why it blocks implementation]
+
+  **Needed context (if any):**
+  - [specific missing evidence or input] — [why it cannot be inferred from the spec, plan, or supplied project context]
 
   **Recommendations (advisory, do not block approval):**
   - [suggestion]
@@ -81,17 +85,13 @@ Prompt:
 | Reviewer Status | Action |
 |-----------------|--------|
 | Approved | Proceed to Phase 6 and run its trigger check (the audit itself is conditional) |
-| Issues Found | Fix each issue inline in the execution plan, re-dispatch reviewer |
+| Issues Found | Check each finding against the spec and plan, fix valid issues, and request an independent review of the changed plan |
+| Needs Context | Inspect the spec, preflight summary, and plan for the missing input; provide it and request a focused review. Ask the user only if it is a consequential decision unavailable from context. |
 
-**Fix loop:** Fix → re-dispatch → repeat until Approved. Do not proceed past Phase 5 with open issues.
+**Fix loop:** Fix → re-dispatch → repeat until Approved or a specific human decision or unavailable review capability remains. Do not proceed past Phase 5 with unresolved blocking issues.
 
-**Maximum 2 review cycles.** If cycle 2 still returns Issues Found, output exactly:
+If the reviewer repeats a finding, check whether the plan changed and whether the finding still applies. If the review is vague, narrow the prompt to the affected task and step. If the same disagreement persists, dispatch a fresh `spec-reviewer` subagent or use another independent review route; include the reviewer persona and the relevant spec and plan excerpts.
 
-```
-REVIEW BLOCKED — <N> unresolved issues after 2 cycles:
-<reviewer's Issues list verbatim>
-
-Please resolve the above before the plan can be presented for approval.
-```
-
-Do not summarize or paraphrase the issues. Do not auto-advance to Phase 6 or Phase 7. Wait for user input.
+Do not claim approval without an independent review result. If no reviewer route is
+available after trying alternatives, report the exact limitation and unresolved
+findings. Ask the user only if they need to decide whether to proceed without review.

@@ -21,57 +21,28 @@ Do NOT use:
 - Without a completed pocket-grinding spec (use pocket-grinding skill first)
 - To re-plan a task already in execution (use pocket-development directly)
 
-## Hard Gates
+## Operating Rules
 
-```
-GATE 0: POCKET-GRINDING HANDOFF VERIFICATION.
-        Before doing ANYTHING else, verify you have ALL of these:
-        - [ ] Spec file path (e.g., docs/pocket/spec/YYYY-MM-DD-slug/topic.md)
-        - [ ] Acceptance criteria (full GWT list)
-        - [ ] Architecture constraints
-        - [ ] Design decision
-        - [ ] Open questions / assumptions
-        If ANY is missing → STOP. "HANDOFF_INCOMPLETE: Missing [list missing items].
-        Return to pocket-grinding or provide manually."
-        Do NOT proceed to Phase 0 until all inputs are verified.
-
-GATE 1: Spec must exist and be readable. Missing → ask user for correct path.
-
-GATE 2: Acceptance criteria must be present and usable.
-        Rules with GWT → use directly.
-        Rules without GWT → derive behavioral assertions, mark [derived].
-        No acceptance criteria at all → STOP. Return to pocket-grinding.
-
-GATE 3: Design Decision section must be present in spec.
-        Missing → STOP. "Design Decision not found. Return to pocket-grinding
-        or provide the decision manually." Do not proceed to Phase 2.
-
-GATE 4: Spec Reviewer must APPROVE before the plan is presented at the Phase 7
-        approval gate.
-        Issues Found → fix plan, re-run reviewer. Do not skip.
-        (Phase 6 is conditional — an APPROVE is required whether or not it runs.
-         If Phase 6 changes the plan, it is re-reviewed before Phase 7.)
-
-GATE 5: User must approve the final plan before ANY downstream handoff.
-        All plans hand off to pocket-structuring (which generates the execution-plan/ index and task files).
-        Running `structure --dry-run` is validation only and never authorizes a handoff.
-        Do not invoke pocket-structuring before the user explicitly approves.
-```
+- **Start from the user's request.** Use a clear handoff, correction, or approval already given. Do not ask the user to repeat a decision or choose a numbered option.
+- **Recover missing context first.** Search the conversation and expected spec directory before reporting an input missing. Treat open questions as optional; record `none identified` when there are none.
+- **Preserve independent review.** A separate Spec Reviewer must review the plan, and a Test Strategy Audit must run when its triggers fire. If review is inconclusive, fix the review context or try another available reviewer route; a cycle count alone is not a reason to stop.
+- **Use evidence for library decisions.** Check the version in the lockfile or proposed dependency and query version-matched documentation. When a source is missing, try official documentation or release notes and record what remains unverified.
+- **Honor the authorized handoff.** If the user clearly requested plan generation and structuring, that instruction authorizes the plan handoff once the required checks pass. Otherwise, present the completed plan and wait for approval before generating derived execution artifacts. This approval never authorizes implementation.
 
 ---
 
 ## Input Requirements
 
-Read the spec file at Phase 1. The table below is a checklist of what to extract.
+Read the located spec in Phase 1. The table below is a checklist of what to extract.
 
 | Input | Source | Required |
 |-------|--------|----------|
 | Spec path | `docs/pocket/spec/{date}-{slug}/topic.md` | Yes |
-| Acceptance criteria | Spec `## Acceptance Criteria` | Yes |
-| Architecture constraints | Spec `## Architecture Constraints` | Yes |
-| Design decision | Spec `## Design Decision` | Yes — GATE 3 |
-| Open questions / assumptions | Spec `## Open Questions` | If present |
-| Out-of-scope list | Spec `## Scope → Out-of-Scope` | Yes |
+| Acceptance criteria | Spec `## Acceptance Criteria` or concrete behavioral requirements | Required; derive and mark `[derived]` when unambiguous |
+| Architecture constraints | Spec `## Architecture Constraints` and codebase | Required; record `none identified` when applicable |
+| Design decision | Spec `## Design Decision` or explicit handoff context | Required to plan implementation; use the stated recommendation if clear |
+| Open questions / assumptions | Spec `## Open Questions` | Optional; write `none identified` if absent |
+| Out-of-scope list | Spec `## Scope → Out-of-Scope` | Required; record `none stated` if absent |
 | Dependencies | Spec `## Dependencies` | If present |
 | Rollback plan | Spec `## Rollback Plan` | If present |
 
@@ -83,7 +54,11 @@ Read the spec file at Phase 1. The table below is a checklist of what to extract
 
 ### Codebase Scan
 
-In Phase 0, read only the `## Context → Related Areas` section of the spec to identify which codebase files to scan. Do NOT read the full spec here — that happens in Phase 1.
+Locate the spec from the handoff or conversation. If no path is present, search
+`docs/pocket/spec/` for a clear match; ask for the path only if several candidates
+fit or the spec cannot be found. In Phase 0, read only `## Context → Related Areas`
+to seed the scan; verify the listed paths exist and add relevant callers, tests, or
+related modules discovered while scanning. Read the full spec in Phase 1.
 
 Scan identified areas:
 - Read the codebase files listed under Related Areas
@@ -91,38 +66,45 @@ Scan identified areas:
 - Identify existing test patterns: framework, naming conventions, folder layout
 - Identify existing file conventions: module boundaries, error handling, logging
 - Search for existing shared helpers/utilities the plan can reuse — glob for helper-style
-  names (`*util*`, `*helper*`, `lib/`, `shared/`) AND grep for exported symbols used across
+  names (`*util*`, `*helper*`, `lib/`, `shared/`) AND use `rg` to find exported symbols used across
   files in the related feature areas, since domain-scoped helpers rarely carry "util" in
   their filename — tasks must import these instead of reinventing them
 
-**Test framework gate:** If zero test files exist in the codebase:
-→ STOP. Ask user: "No test files found. Confirm the test framework to use (e.g., pytest, Jest, go test, RSpec) before continuing."
-→ Store the answer explicitly in Preflight Summary as `Test framework: <user-specified>`.
-Do not proceed until test framework is confirmed.
+**Test framework:** Check test files, package scripts, build configuration, and
+project conventions. If no tests exist, infer a conventional runner from the stack
+when the evidence supports one and record it as a proposal or assumption. Plan test
+setup as a prerequisite task when needed. Ask the user only if choosing a framework
+would create a consequential project decision that cannot be resolved from context.
 
 ### Library Docs Search
 
-For every unfamiliar dependency in the spec's tech stack or architecture constraints, and every dependency listed in the spec's `## Dependencies` section (existing to leverage + newly proposed):
-- Use context7 MCP (`resolve-library-id` then `query-docs`) to fetch current docs
-- Focus on: API usage, version-specific behavior, known constraints, test utilities
-- Do NOT skip this for libraries not in your training data — query them
+For every dependency whose behavior affects a planned task, identify its exact
+installed or proposed version from the lockfile or spec. Do not skip documentation
+checks because a library is familiar.
 
-**context7 fallback:** If `resolve-library-id` returns no results or `query-docs` returns empty:
-→ Note the library in Preflight Summary under "Unknown areas: <library name> <version> — docs unavailable"
-→ Do NOT block Phase 1 on unresolvable library docs
-→ Flag in QUALITY BAR of every Pocket Packet that uses this library: "Library docs unavailable — verify API usage carefully"
+1. Use Context7 MCP: `resolve-library-id`, then `query-docs` for the matching version
+   when available. Check API usage, version-specific behavior, constraints, and test
+   utilities relevant to the plan.
+2. If Context7 has no matching result, check the vendor's versioned docs, API
+   reference, and release notes. Search the codebase for established usage and tests
+   as additional evidence; do not treat repo usage as proof of current external API
+   behavior.
+3. Record the version, sources, and findings in the Preflight Summary. If distinct
+   sources still do not resolve a material claim, mark it unverified, carry the risk
+   into affected Pocket Packets, and do not describe the API as verified. Continue
+   planning work that does not depend on the unknown.
 
 ### Preflight Summary
 
 ```
 PREFLIGHT COMPLETE
 Codebase scanned: <areas reviewed>
-Test framework: <framework + conventions found, or user-specified>
+Test framework: <detected framework + conventions, inferred proposal, or user-specified>
 File conventions: <key patterns>
 Existing helpers: <reusable helper/util modules found, or none>
-Library docs fetched: <list of libraries queried>
+Library docs checked: <library + exact version + Context7 or official source>
 Key findings: <anything surprising or constraining for the plan>
-Unknown areas: <gaps — missing docs, unreadable files, etc.>
+Unverified areas: <claim + evidence gap + affected task, or none>
 ```
 
 ---
@@ -135,11 +117,11 @@ Read spec completely, extract:
 
 1. **Feature name** — from spec title
 2. **Context summary** — current state, problem, related areas
-3. **Design decision** — chosen option + tradeoffs → GATE 3 fires if missing
+3. **Design decision** — chosen option + tradeoffs; locate it in the spec or handoff context
 4. **Architecture constraints** — layers, patterns, forbidden dependencies
 5. **Acceptance criteria** — every rule + its GWT scenarios
 6. **Out-of-scope items** — enforced in every Pocket Packet's QUALITY BAR
-7. **Open questions / assumptions** — propagated as risks in QUALITY BAR
+7. **Open questions / assumptions** — propagate as risks in QUALITY BAR, or record `none identified`
 8. **Rollback plan** — propagated into STOP CONDITIONS of affected tasks
 
 ### GWT Check
@@ -149,7 +131,7 @@ Read spec completely, extract:
 
 ### Conflict Check
 - Duplicate rules (same behavior, different wording) → flag `[DUPLICATE]`, merge
-- Rule conflicts out-of-scope (`must-have` vs `must-not-touch`) → flag `[CONTRADICTION]`, stop and ask user
+- Rule conflicts out-of-scope (`must-have` vs `must-not-touch`) → flag `[CONTRADICTION]`; compare the spec with the user's explicit request and prior decisions. Resolve when intent is clear; ask one focused question only when the conflict leaves a consequential choice unresolved.
 
 ### SPEC PARSED Summary
 
@@ -230,7 +212,7 @@ Either way it lands in some task's Step 1 test intent — a cross-unit scenario 
 
 ### Conflict Resolution
 - Overlapping rules: check if same behavior (merge) or genuinely distinct (keep, note shared precondition)
-- Unclear → stop, ask user before generating packets
+- Unclear → inspect the spec, handoff context, and codebase evidence; use an explicit assumption for non-blocking details. Ask the user only if the unresolved point changes scope, behavior, or a consequential design choice.
 
 ### Dependency Notation
 
@@ -250,7 +232,7 @@ Dependency annotations are **recommended order** — pocket-development enforces
 Walk each task's dependency chain before presenting. If any chain leads back to itself → resolve by removing artificial dependency or extracting a `[prereq]` task.
 
 ### Large Spec (10+ tasks)
-Ask user: "This spec produces N tasks — recommend batching into phases for manageability. Proceed as one plan or split into Phase A (foundation), Phase B (features), Phase C (integration)?"
+Recommend phases when 10+ tasks would make the plan difficult to execute or review. If the user already requested one plan or phased work, follow that instruction. Otherwise, choose a dependency-based grouping and state the rationale; ask only if the grouping changes delivery scope or sequencing authority.
 
 ### Task List
 
@@ -293,7 +275,7 @@ Do **not** write test source code into the plan. The implementation does not exi
 | Pocket Field | Source |
 |---|---|
 | OBJECTIVE | Rule + TDD steps (red → green → refactor) + commit |
-| REFERENCES LOADED | Spec path + preflight codebase files read |
+| REFERENCES LOADED | Spec path + relevant codebase files + version-matched docs or recorded source gaps for APIs used |
 | WHY THIS APPROACH | Task type → complexity assessment |
 | SANDWICH CONTEXT | Architecture constraints + design decision |
 | DELIVERABLE | GWT scenarios (or derived) from acceptance criteria |
@@ -349,22 +331,20 @@ Do NOT fill with style preferences or naming conventions.
 Quick dispatch format:
 
 ```
-Dispatch: Subagent reviewer | Standard complexity
+Dispatch: Subagent `spec-reviewer` | Standard complexity
 Plan file: docs/pocket/plans/{date}-{slug}/execution-plan.md
 Spec file: docs/pocket/spec/{date}-{slug}/topic.md
-Return: Status (Approved | Issues Found) + specific issues with task:step references
+Return: Status (Approved | Issues Found | Needs Context) + specific findings with task:step references
 ```
 
-**Gate 4 enforcement (maximum 2 review cycles):**
+**Review flow:**
 - Status = Approved → proceed to Phase 6 (run its trigger check)
-- Status = Issues Found → fix issues inline, re-dispatch reviewer (cycle 2)
-- Cycle 2 still Issues Found → STOP. Output:
-  ```
-  REVIEW BLOCKED — <N> unresolved issues after 2 cycles:
-  <reviewer's Issues list verbatim>
-  ```
-  Ask user: "Please resolve the above before the plan can be presented for approval."
-  Do not auto-advance to Phase 6 or Phase 7.
+- Status = Issues Found → check each finding against the spec and packet, fix valid issues, and re-dispatch an independent reviewer on the changed plan.
+- Status = Needs Context → check the spec, preflight summary, and plan for the missing information; provide it and request a focused review. If the missing item is a consequential user decision, ask only for that decision.
+- If the reviewer repeats a finding, verify whether the plan addresses it. Correct the plan or provide evidence that the finding does not apply; do not accept or reject it by repetition alone.
+- If the review is vague, repair the prompt with the exact task and step, then try a fresh reviewer or another available dispatch route. Never re-run an unchanged failed attempt.
+- If no independent reviewer can run after trying available routes, report the review as incomplete. Do not claim approval; ask the user only if they want to proceed without the required review.
+- A cycle count is a cue to change the review approach, not a terminal limit. Continue until the plan is approved or a specific human decision or unavailable capability remains.
 - Full reviewer dispatch protocol → `references/spec-reviewer-prompt.md`
 
 ---
@@ -397,13 +377,13 @@ Return: FINDINGS ONLY — missing behavior/edge case, wrong test level,
 Apply findings by editing affected tasks in place. Then, before Phase 7:
 
 - Task added → re-run the Phase 3 circular dependency check, refresh the Phase 2 file map, and update `**Total tasks:**`, the `Recommended Order` and `Parallelizable Groups` blocks, and the Plan Summary table. A new task changes the topology; stale overview blocks contradict the packets.
-- **The confirmation review is triggered by mutation, not by the audit having run.** `Clean` → nothing changed → skip it → Phase 7. `Findings` applied → re-dispatch the Spec Reviewer on the changed tasks, since Gate 4 covers the plan the user actually sees. When it runs it is a **single confirmation cycle, independent of Phase 5's 2-cycle budget**: Issues Found → fix inline, re-dispatch once → still Issues Found → `REVIEW BLOCKED`, stop.
+- **The confirmation review is triggered by mutation, not by the audit having run.** `Clean` → nothing changed → skip it → Phase 7. `Findings` applied → re-dispatch the Spec Reviewer on the changed tasks, since the review must cover the plan the user actually sees. If further valid changes are needed, fix them and review the changed tasks again. If feedback repeats or becomes inconclusive, change the prompt or reviewer route; do not stop solely because a retry count was reached.
 
 ---
 
 ## Phase 7: Output Execution Plan
 
-**Goal:** Save the plan, validate it parses, then get user approval and route to exactly one downstream skill.
+**Goal:** Save and validate the plan, then route it according to the user's authorization.
 
 ### Step 1: Save the plan
 
@@ -430,28 +410,33 @@ Parse the JSON envelope — do not scrape prose:
   authorizes a handoff — it only validates. Routing does not branch on `data.action`; every
   approved plan goes to pocket-structuring.
 
-### Step 3: Plan approval
+### Step 3: Plan approval and authorization
 
 This gate is **plan approval**: the user authorizes generation of derived execution
 artifacts (`execution-plan/index.md`, task files, and phase manifests when multi-phase).
 It does **not** authorize implementation. Structuring will ask separately for
 **execution approval** before pocket-development starts.
 
-Present the result, showing the execution flow:
+If the user has not already authorized handoff to pocket-structuring, present the
+result and execution flow:
 
 > "Plan complete — N tasks, TDD-structured, spec-reviewed, test intent defined.
-> Test strategy audit: skipped (no trigger) | run on <tasks> — Clean, no findings | run on <tasks> — <N> findings applied, changed tasks re-reviewed.
+> Test strategy audit: skipped (no trigger) | run on <tasks> — Clean, no findings | run on <tasks> — <N> findings applied, changed tasks re-reviewed | incomplete on <tasks> — <gap and impact>.
 > Saved to docs/pocket/plans/…
 > Execution flow: {data.executionFlow}
 > Plan approval: Ready to hand off to pocket-structuring for execution index generation?"
 
-Wait for confirmation.
+Wait for approval before invoking pocket-structuring. If the user explicitly
+requested plan generation and structuring earlier in the conversation, that
+instruction counts as approval for this handoff; report the ready plan and continue
+without asking the same question again. Plan approval authorizes generation of
+derived plan artifacts only, never implementation.
 
 ### Step 3b: Revalidate user-requested edits
 
 `structure --dry-run` validates parsing and dependency topology only. It says nothing about
 spec coverage, test intent, mock boundaries, GWT coverage, or audit triggers — so an edit
-requested *at* the approval gate can otherwise reach handoff without Gate 4 covering the
+requested *at* the approval gate can otherwise reach handoff without independent review of the
 version that actually executes. Classify each requested edit by its **largest** applicable
 tier and re-run that tier's checks:
 
@@ -461,22 +446,28 @@ tier and re-run that tier's checks:
 | Semantic packet edit — merge or split tasks, change a dependency, change a GWT behavior, add or remove a behavioral step, change files in scope | Step 2 dry-run + re-dispatch Spec Reviewer on the changed tasks |
 | Test-strategy or topology edit — change a test level or mock boundary, introduce a new cross-unit seam, restructure dependencies | Step 2 dry-run + re-run the Phase 6 trigger check + re-dispatch Spec Reviewer on the changed tasks |
 
-Then return to Step 3 and present the revalidated plan. **Only a version that has passed the
-tier its edits require may be approved or handed off.**
+Then return to Step 3 and present the revalidated plan if approval is still needed.
+Preserve existing authorization when the user requests edits to that plan unless they
+change the requested scope or withdraw the handoff. **Only a version that has passed
+the tier its edits require may be approved or handed off.**
 
-The Phase 5 cycle budget applies to *reviewer disagreement inside one edit round* — Issues
-Found → fix → re-dispatch once → still Issues Found → `REVIEW BLOCKED` — and **not** to how
-many rounds of edits the user asks for. A user may iterate as many times as they want; each
-round is revalidated at its own tier.
+Each user-requested edit round is revalidated at its own tier. Reviewer retries are separate:
+when findings repeat or the review becomes inconclusive, change the prompt or reviewer route
+and continue until approved or a specific human decision or unavailable capability remains.
 
-### Step 4: Route to pocket-structuring (MANDATORY)
+### Step 4: Route to pocket-structuring (when authorized)
 
-**DO NOT STOP AFTER PLAN APPROVAL.** Invoke `pocket-structuring` with:
+When the user has approved or already authorized the handoff, invoke
+`pocket-structuring` with:
 - Execution plan path: `docs/pocket/plans/{date}-{slug}/execution-plan.md`
 - Task count (from Phase 3)
 - Spec file path
 
 pocket-structuring re-parses the plan from disk and decomposes it into `execution-plan/index.md` + per-task files.
+
+If the user requested only the execution plan and has not authorized structuring,
+deliver the validated plan and stop here. Do not infer approval from a successful
+dry-run or from the existence of the plan file.
 
 ---
 
