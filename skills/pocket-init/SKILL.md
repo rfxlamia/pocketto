@@ -30,7 +30,7 @@ Standalone local onboarding. Takes an existing project from zero Pocket context 
 <HARD-GATE>
 1. **Merge, never clobber** — if the memory file exists, only the `<!-- pocket-init:start -->` … `<!-- pocket-init:end -->` managed section may be created or replaced. Everything outside it is untouched, byte for byte. The separately consented Education Gate writes only its learner profile through `edu`.
 2. **Local onboarding only** — inspect local project files and do not configure integrations or access remote services.
-3. **Evidence-based guide** — every command written to the memory file (build, test, lint) must be read from a manifest or config file, not assumed from the stack.
+3. **Evidence-based guide** — every build, test, lint, or typecheck command written to the memory file must come from an inspected manifest, config, or local CI workflow. Never infer a command from the stack.
 4. **Education is opt-in and learner-owned** — never calibrate or write a `## Pocket Education` block unless the user says yes at the Education Gate, and never write levels the learner has not confirmed. An existing profile is reused, never recalibrated, unless the learner explicitly asks.
 </HARD-GATE>
 
@@ -41,12 +41,12 @@ Standalone local onboarding. Takes an existing project from zero Pocket context 
 Inspect the project before writing anything:
 
 1. **Stack & manifests** — `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, or equivalent: language, package manager, declared scripts.
-2. **Commands** — extract the real build / test / lint / typecheck commands from manifest scripts or local CI workflow files. Record them verbatim.
+2. **Commands** — extract build / test / lint / typecheck commands from manifest scripts, project config, or local CI workflow files. Record each command verbatim with its source. If a command is not declared in the inspected files, write `Not configured` rather than guessing.
 3. **Layout** — top-level directories and what lives in each (source, tests, docs, tooling). Keep it to the directories that matter.
 4. **Conventions** — formatter/linter configs, test file naming, and commit style visible in `git log --oneline -10`.
 5. **Existing memory files** — check for `CLAUDE.md` and `AGENTS.md`. Note which exist and whether they already contain a `pocket-init` managed section or a `## Pocket Education` heading.
 
-Summarize the findings to the user in a few lines before writing.
+Briefly report the findings, then continue to Step 2 and write the guide. Do not wait for confirmation unless Step 2 cannot determine which memory file to use. The Education Gate in Step 4 controls only whether to create or resume an Education profile; declining it does not cancel the requested project guide.
 
 ## Step 2: Pick the memory file
 
@@ -54,7 +54,7 @@ Detect the platform and choose the target:
 
 - Running as a **Claude Code** plugin/skill → `CLAUDE.md`.
 - Running under **Pi** → `AGENTS.md`.
-- Ambiguous, or both files already exist → ask the user which file to use. Never write both.
+- If both files exist, use the file for the active platform and leave the other untouched. Ask the user only when the active platform or authoritative file is genuinely unclear, or when they request a specific target. Never write both.
 
 Record the choice as `<memory_file>`.
 
@@ -70,9 +70,10 @@ Compose the project guide from Step 1 findings:
 …
 
 ### Commands
-- Build: `…`
-- Test: `…`
-- Lint: `…`
+- Build: `<verified command | Not configured>`
+- Test: `<verified command | Not configured>`
+- Lint: `<verified command | Not configured>`
+- Typecheck: `<verified command | Not configured>`
 
 ### Layout
 …
@@ -85,8 +86,9 @@ Compose the project guide from Step 1 findings:
 Merge rules:
 
 - File missing → create it with the managed section as its content.
-- File exists, no markers → append the managed section at the end, preceded by one blank line.
-- File exists with markers → replace only the content between (and including) the markers.
+- File exists with no marker tokens → append the managed section at the end, preceded by one blank line.
+- File exists with exactly one complete marker pair → replace only the managed section, preserving all bytes outside it.
+- Any marker token is present, but there is not exactly one complete, correctly ordered pair → do not write. Report the malformed section and ask how the user wants it repaired; do not guess which content is managed.
 
 Keep the section under ~60 lines — a memory file is an index, not documentation.
 
@@ -108,7 +110,7 @@ Otherwise ask the user **one** question:
 
 > "Enable Pocket Education for this repo? It keeps implementation human-owned — the agent explains, reviews, and guides while you write the code — and stores a learner profile so guidance adapts across sessions. (yes/no)"
 
-**If no → skip to Step 5.** Nothing is written.
+**If no → skip to Step 5.** Keep the project guide written in Step 3; do not create or change an Education profile.
 
 **If yes:**
 
