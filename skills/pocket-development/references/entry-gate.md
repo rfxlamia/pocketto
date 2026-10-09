@@ -51,7 +51,7 @@ The Entry Gate is a mandatory 6-question checkpoint before any subagent spawn.
 | 2. PACKET CONSTRUCTIBLE = NO | Cannot delegate precisely → HOLD LOCAL |
 | 3. TASK TYPE UNCLEAR = NO | Clarify task type before proceeding |
 | 4. PROMPT SANDWICH = NO | Restructure prompt, then re-run the gate → else HOLD LOCAL |
-| 5. PARALLEL CLASSIFICATION = unclear | Re-read plan annotations; if still unclear, escalate to user |
+| 5. PARALLEL CLASSIFICATION = unclear | Inspect dependency annotations and task relationships; ask a fresh `advisor` to classify if useful; ask the user only if the plan itself leaves an unresolved execution choice |
 | 6. VERIFICATION DEFINED = NO | Define verification, then re-run the gate → else HOLD LOCAL |
 
 ## Bounded vs Unbounded Tasks
@@ -138,16 +138,17 @@ A misclassified task = a foundation task accidentally worktreed (wasted setup, b
 
 ## HOLD LOCAL Triggers
 
-When the gate fails, the task is **not delegatable yet**. `HOLD LOCAL` records that state — it
-does not hand the task to the main agent. The main agent remains Delegator + Auditor only and
-SHALL NOT write, edit, or create implementation code (see `two-stage-review.md` § Auditor
-identity). Permitted next actions: repair the packet or the missing context, then re-run the
-Entry Gate; or escalate `NEEDS_CONTEXT` / `BLOCKED` when the task cannot be made delegatable.
+When the gate fails, the task is **not ready for standard Pocket dispatch yet**. `HOLD LOCAL`
+pauses dispatch while the controller inspects available context, repairs the packet, or
+gathers evidence, then re-runs the Entry Gate. Ask the user only if the next safe action
+requires a decision, access, information, or authorization unavailable to the agent. If the
+user explicitly chooses another workflow or bypasses a gate, honor the choice and report what
+will not be checked; do not claim the skipped gate passed.
 
 ```
 HOLD LOCAL: [specific failure reason]
 WHY UNSAFE: [what could go wrong]
-NEXT ACTION: [packet/context repair, then re-run Entry Gate — or the escalation]
+NEXT ACTION: [source inspection or packet/context repair, then re-run Entry Gate — or the specific human dependency]
 ```
 
 ## Gate vs Packet Relationship

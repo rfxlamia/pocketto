@@ -14,7 +14,7 @@ If metadata is absent, search the current repository for the exact branch and ph
 - Exactly one owned, open match → reconcile it.
 - Multiple, foreign-owned, closed, branch-mismatched, or phase-mismatched matches → stop for manual resolution without mutation.
 
-The explicit `create-pr` recorder may create or discover the PR only after the user invokes it. It records the PR identity only; verdict reporting stays in the Enterprise-owned `skills/pocket-development/references/enterprise-reporting.md`. The registered lifecycle adapter never auto-creates a PR.
+The explicit `create-pr` recorder may create or discover the PR only after the user invokes it. It records the PR identity only. The registered lifecycle adapter is the sole phase-reporting writer: it upserts the summary and reconciles inline findings when a `phase-complete` event is drained. The adapter never auto-creates a PR.
 
 ## Summary and findings proof
 

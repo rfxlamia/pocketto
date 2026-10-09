@@ -2,7 +2,7 @@
 
 # In-Loop Audit Contract
 
-Normative contract for the per-task in-loop audit inside `pocket-development`. All audit state lives in the verdict artifact (`CONTRACT` stays 2). The main agent is Delegator only: it runs the mechanical gate, dispatches the auditor, reads labels from the artifact, and drives CLI updates. It SHALL NOT read implementation files to assess quality, spec compliance, or refactor thresholds.
+Normative contract for the per-task in-loop audit inside `pocket-development`. All audit state lives in the verdict artifact (`CONTRACT` stays 2). The main agent is Delegator + Gate Runner: it runs the mechanical gate, dispatches the auditor, reads labels from the artifact, and drives CLI updates. It SHALL NOT read implementation files to assess quality, spec compliance, or refactor thresholds. Pre-dispatch architecture inspection is limited to constructing and validating the packet; implementation judgments remain with the independent auditor.
 
 ## Contents
 - [Auditor identity](#auditor-identity)
@@ -11,7 +11,7 @@ Normative contract for the per-task in-loop audit inside `pocket-development`. A
 - [Criteria](#criteria)
 - [Refactor heuristics](#refactor-heuristics)
 - [Severity ladder](#severity-ladder)
-- [Round budget](#round-budget)
+- [Review cycles and recovery](#review-cycles-and-recovery)
 - [BLOCKED categories](#blocked-categories)
 - [Minor carry-forward on re-audit](#minor-carry-forward-on-re-audit)
 - [SHA pinning](#sha-pinning)
@@ -39,9 +39,9 @@ The gate SHALL check, in order:
 4. **Parallel-group in-worktree pass:** with cwd set to the task worktree, `git branch --show-current` MUST equal `task/<task_id>`. A mismatch is a mechanical gate failure (wrong branch / CWD discipline).
 5. If the plan specifies no command at all (neither a test command nor a validation command), the main agent SHALL skip every command check and proceed straight to the auditor.
 
-On any mechanical failure the main agent SHALL re-dispatch the implementer with the failure reason (for example, "tests failing" or "no commit") and SHALL NOT dispatch the auditor. A mechanical failure consumes no round: `loop_info` is unchanged.
+On a mechanical failure the main agent SHALL NOT dispatch the auditor. Each failed gate consumes one recovery round before an implementer re-dispatch, including a failure before the first audit. Decrement `loop_info.cycles_remaining` for that round and append the materially different attempt to `loop_info.strategies`. If no round remains, stop and report `RECOVERY_CHECKPOINT`; do not re-dispatch the implementer. A gate failure after a correction attempt that requires another implementer dispatch consumes the next round.
 
-After a refactor or fix round returns, the main agent SHALL run this same mechanical gate again before re-dispatching the auditor. Tests going red after a refactor is a mechanical failure: re-dispatch the implementer; do not consume an additional round (the refactor round that was already entered has already consumed one — see [Round budget](#round-budget)).
+After a refactor or fix round returns, the main agent SHALL run this same mechanical gate again before re-dispatching the auditor. Tests going red after a refactor is a mechanical failure: re-dispatch the implementer only if another recovery round remains, and record the changed strategy (see [Review cycles and recovery](#review-cycles-and-recovery)).
 
 ## Audit input
 
@@ -61,6 +61,7 @@ The auditor SHALL apply all three of the following, in the dispatch, by loading 
    `<skills_root>/pocket-development/references/spec-compliance-review.md`
 3. **Code quality** — reuse verbatim:
    `<skills_root>/pocket-development/references/code-quality-review.md`
+4. **Architecture and API assumptions**, when the packet relies on them — verify against the relevant repository implementation, configuration, and tests. For framework, library, or external API behavior, verify the installed version using Context7 or current official documentation. Cite the evidence in the verdict; an unverified assumption is not a pass.
 
 The auditor SHALL emit `stage_1` (spec compliance) and `stage_2` (code quality, including QUALITY BAR and refactor heuristics) into the verdict artifact. The main agent SHALL NOT substitute its own checklist for these files.
 
@@ -72,7 +73,7 @@ No implementer self-report is required or accepted. The main agent SHALL NOT ask
 
 A diff that violates none of the thresholds proceeds to commit / DONE with no refactor round.
 
-A diff that crosses any threshold SHALL produce an Important quality finding on that heuristic. That finding forces a refactor round (see [Severity ladder](#severity-ladder) and [Round budget](#round-budget)). The subsequent re-audit SHALL confirm the heuristic is cleared and that tests remain green (via the mechanical gate). A refactor that shifts behavior so the test command goes red fails the mechanical gate and is not accepted as DONE.
+A diff that crosses any threshold SHALL produce an Important quality finding on that heuristic and requires a fix/refactor cycle (see [Severity ladder](#severity-ladder) and [Review cycles and recovery](#review-cycles-and-recovery)). The subsequent re-audit SHALL confirm the heuristic is cleared and that tests remain green (via the mechanical gate). A refactor that shifts behavior so the test command goes red fails the mechanical gate and is not accepted as DONE.
 
 ## Severity ladder
 
@@ -88,44 +89,43 @@ A Minor-only verdict (no Critical, no Important) SHALL proceed to DONE. Those Mi
 
 A verdict that contains any Critical or Important finding SHALL enter a fix or refactor round and SHALL NOT be marked DONE.
 
-## Round budget
+## Review cycles and recovery
 
-Each task has a budget of **2 fix/refactor rounds**. `loop_info` is the durable counter: `current_cycle` is the number of audit cycles written (the initial audit is cycle 1), while `cycles_remaining` is `max(0, 2 - consumed_rounds)`. For every audited task the artifact SHALL set `loop_info.max_cycles` to `2`; `max_cycles` caps fix/refactor rounds, so a second-round re-audit may be audit cycle 3.
+`max_cycles: 2` is a hard cap of two correction rounds per recovery window. Each round is one implementer correction/re-dispatch attempt, uses a materially different strategy, and consumes one `cycles_remaining` when entered. A failed mechanical gate consumes a round before its retry; if that retry also fails, the next dispatch needs another remaining round. `current_cycle` counts audits within the current window, so it may reach 3 (initial audit plus two re-audits), but never exceed `max_cycles + 1`. A cap is a mandatory user checkpoint, not a verdict that the task is BLOCKED. `loop_info.recovery_window` distinguishes a user-authorized new window; see [Resume](#resume).
 
 **Consumes one round** (decrement `loop_info.cycles_remaining` once when the round is entered):
 
-- a fix/refactor round entered because an audit emitted any Critical or Important finding, including a refactor-heuristic finding
-- another fix/refactor round entered because the re-audit still has a Critical or Important finding, including a new finding introduced by the previous fix
+- each implementer correction/re-dispatch entered because an audit emitted any Critical or Important finding, including a refactor-heuristic finding
+- each implementer re-dispatch needed after a mechanical-gate failure
 
-The finding and the fix/refactor it triggers are one consuming event, not two. A single re-audit that both re-states an unfixed Critical/Important and reports a new finding starts at most one next round.
+The findings that trigger one implementer dispatch are one consuming event, not one round per finding. A single re-audit that both re-states an unfixed Critical/Important and reports a new finding starts at most one next round.
 
-**Does not consume a round:**
+**Does not consume a fix round:**
 
-- mechanical-gate failure (implementer re-dispatched; auditor not spawned)
 - a Minor-only or fully clean PASS
 - **auditor infrastructure failure** (subagent dies, times out, or returns unparseable output)
 
-Auditor infrastructure failure does not consume a round. It yields a bounded retry ladder before escalating to BLOCKED. The round count in `loop_info` stays unchanged through all retries and the BLOCKED write.
+Auditor infrastructure failure does not consume a correction round. Bound recovery to the original auditor attempt, one fresh auditor retry, and one `advisor` attempt. If all three fail, stop and request the specific human action needed to restore an independent review route; do not convert an unavailable subagent into a task verdict.
 
-**Retry ladder for auditor-unavailable:**
-1. First infrastructure failure → retry immediately (no round consumed)
-2. Second consecutive infrastructure failure → retry after a brief pause (~30s; no round consumed)
-3. Third consecutive infrastructure failure → task is BLOCKED with category `auditor-unavailable`
+**Auditor recovery:**
 
-The main agent SHALL attempt up to 3 total auditor attempts (the initial dispatch plus up to 2 retries) before declaring BLOCKED. Each retry dispatches a fresh read-only auditor subagent. Retries MUST NOT consume a fix round (`loop_info` unchanged). The persisted `blocked_category` is preserved when the ladder is exhausted.
+1. Retry with a fresh read-only auditor subagent and the same pinned diff and criteria.
+2. If the failure repeats, dispatch a fresh subagent named `advisor` with the `advisor` persona. It performs the same independent, read-only audit and writes the same verdict artifact; the main agent never substitutes its own code judgment.
+3. If the advisor cannot complete the review, diagnose recoverable tool or input failures, then stop and report the exact human action needed. Preserve the task state and review history.
+4. Use `auditor-unavailable` only when no independent review route is available until a human restores or authorizes a required capability. Record that exact dependency and how the user can unblock it.
 
-On a clean first PASS (no consumed round), the artifact SHALL record `loop_info.current_cycle: 1`, `max_cycles: 2`, and `cycles_remaining: 2`.
+On a clean first PASS, the artifact SHALL record `loop_info.recovery_window: 1`, `current_cycle: 1`, `max_cycles: 2`, and `cycles_remaining: 2`.
 
-After the initial audit starts the first fix/refactor round, its artifact records `current_cycle: 1`, `max_cycles: 2`, `cycles_remaining: 1`; the following re-audit records `current_cycle: 2` and keeps `cycles_remaining: 1` if it passes. If that re-audit starts the second round, it records `current_cycle: 2`, `cycles_remaining: 0`; the final re-audit records `current_cycle: 3`, `cycles_remaining: 0`. If Critical or Important findings remain after that final re-audit, the task is BLOCKED with category `audit-failed`.
+After each correction round, update the same verdict artifact and decrement the remaining budget. If Critical or Important findings remain when `cycles_remaining` reaches zero, stop automatic correction and report `RECOVERY_CHECKPOINT` with the unresolved findings, attempted strategies, evidence, and one concrete next strategy. Keep `overall: "REVIEW_FAIL"`; do not label the task BLOCKED solely because the cap was reached. On resume, a checkpoint never triggers an automatic dispatch. Ask the user whether to authorize another bounded correction window. Only with explicit authorization, append a snapshot of the closed window to `loop_info.prior_windows`, increment `loop_info.recovery_window`, reset `current_cycle` to 1 and `cycles_remaining` to 2, and start with a materially different strategy. Do not reset `max_cycles`. `REVIEW_BLOCKED` with `audit-failed` remains reserved for a specific human decision, information, access, or authorization needed to choose a safe correction; record that dependency and unblock action in `fix_instructions`.
 
 ## BLOCKED categories
 
-Two categories exist. Both SHALL be persisted in the verdict artifact (field `blocked_category`), not only reported in chat. `overall` SHALL be `REVIEW_BLOCKED`. No `done_sha` is written for a BLOCKED task. The phase halts — the next task is not started.
+Two categories exist. Both SHALL be persisted in the verdict artifact (field `blocked_category`), not only reported in chat. `overall` SHALL be `REVIEW_BLOCKED`. No `done_sha` is written for a BLOCKED task. Do not start tasks that depend on it; continue other ready tasks when the plan confirms they are independent. A blocked member stops its parallel group.
 
 | `blocked_category` | When |
 |--------------------|------|
-| `audit-failed` | The round budget is spent (`cycles_remaining: 0` after a consuming event) and Critical or Important findings remain. |
-| `auditor-unavailable` | Three consecutive auditor infrastructure failures (bounded retry ladder exhausted). Round count unchanged. |
+| `audit-failed` | Outstanding Critical or Important findings require a specific human decision, information, access, or authorization; reaching the correction cap alone is not this verdict. |
+| `auditor-unavailable` | No independent audit route is available until a human restores or authorizes a required capability; failed attempts alone are insufficient. |
 
 The artifact SHALL also keep the findings (`stage_1.issues`, `stage_2.issues`) and `fix_instructions` so a later session can see why the task blocked.
 
@@ -163,13 +163,13 @@ The skip stub JSON (verbatim):
   "task_name": "<task_name>",
   "cycle": 1,
   "timestamp": "<UTC ISO 8601 now>",
-  "reviewer_mode": "read-only",
+  "reviewer_mode": "main-agent",
   "reviewer_config": "batch-parallel",
   "stage_1": { "status": "PASS", "issues": [], "concerns_addressed": [] },
   "stage_2": { "status": "PASS", "strengths": [], "issues": [], "assessment": "Approved" },
   "overall": "REVIEW_PASS",
   "fix_instructions": "",
-  "loop_info": { "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0 },
+  "loop_info": { "recovery_window": 1, "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0, "strategies": [], "prior_windows": [] },
   "skip_reason": "no_file_changes",
   "reviewed_sha": "<task.done_sha>"
 }
@@ -185,15 +185,16 @@ The file SHALL conform to `skills/pocket-development/references/review-report-te
 - `overall` (`REVIEW_PASS` | `REVIEW_FAIL` | `REVIEW_BLOCKED`)
 - `reviewed_sha`
 - `fix_instructions` (empty string on PASS)
-- `loop_info` — the durable round counter: `current_cycle`, `max_cycles: 2` (except the empty-diff skip stub, which keeps `max_cycles: 1` as written above), `cycles_remaining`
-- `merge_recovery_consumed` (optional, boolean) — once-only guard for the single bounded merge-recovery cycle; set `true` before the first recovery dispatch
-- `merge_recovery_stage` (optional) — `implementer` | `gate` | `auditor` | `merge_retry` | `parallel-conflict` (terminal); persisted before each merge-recovery step on `<plan_dir>/reviews/<task_id>-review.json` (and mirrored on peer group tasks during a conflict). Resume only from non-terminal stages. Distinct from phase-level `recovery_stage` on `phase-pass-*.json`
+- `loop_info` — durable per-window recovery state: `recovery_window` (starts at `1`), `current_cycle` (audit number within this window), `max_cycles: 2` (except the empty-diff skip stub, which keeps `max_cycles: 1` as written above), `cycles_remaining`, `strategies` (attempts in this window), and `prior_windows` (closed-window snapshots, if any)
+- `merge_recovery_consumed` (optional, boolean) — compatibility/history marker indicating that merge recovery has started
+- `merge_recovery_round` (optional, integer) — current bounded merge-conflict recovery round, maximum `2` before `RECOVERY_CHECKPOINT`; applies separately from the task's in-loop audit budget
+- `merge_recovery_stage` (optional) — `implementer` | `gate` | `auditor` | `merge_retry` | `parallel-conflict`; persist the current step on `<plan_dir>/reviews/<task_id>-review.json` and mirror it on peer group tasks involved in the conflict. Resume an interrupted step; after a failed merge retry, `parallel-conflict` records that attempt. See `parallel-group.md` for the two-round cap and user checkpoint. Distinct from phase-level `recovery_stage` on `phase-pass-*.json`
 - `stage_2.issues[].severity`
 - `stage_2.strengths[]`
 
 When the task is BLOCKED, the artifact SHALL also persist `blocked_category` as `audit-failed` or `auditor-unavailable`.
 
-The main agent SHALL create `<plan_dir>/reviews/` before the first write. Re-audit overwrites the same path; `loop_info` in that file is what resume reads. When rewriting an artifact on re-audit, the main agent SHALL carry forward `merge_recovery_consumed: true`, terminal `merge_recovery_stage: "parallel-conflict"`, and any in-progress non-terminal `merge_recovery_stage` from the prior file if they were set — a successful re-audit MUST NOT clear those fields and reopen merge-conflict recovery (clear `merge_recovery_stage` only after a successful merge retry).
+The main agent SHALL create `<plan_dir>/reviews/` before the first write. Re-audit overwrites the same path; `loop_info` in that file is what resume reads. When rewriting an artifact on re-audit, carry forward `merge_recovery_consumed: true`, `merge_recovery_round`, and any in-progress merge-recovery stage. A successful re-audit must not erase recovery history; clear the stage only after the corresponding merge succeeds. Do not repeat a failed strategy, and stop after two materially different merge recovery rounds until the user authorizes a new bounded window.
 
 ## Resume
 
@@ -201,8 +202,10 @@ On resume, the main agent SHALL inspect `log.json` and each existing verdict art
 
 A task already DONE whose artifact's `reviewed_sha` equals its `done_sha` SHALL be skipped. `log update … DONE` SHALL never be re-issued for it.
 
-For any task that is not yet DONE, the round count SHALL be read from that task's `loop_info` (`current_cycle`, `max_cycles`, `cycles_remaining`) and SHALL NOT be reset.
+For any task that is not yet DONE, read its per-window recovery state from `loop_info`. `recovery_window` starts at `1`; `current_cycle`, `max_cycles`, `cycles_remaining`, and `strategies` apply only to that window. For a legacy artifact without `recovery_window`, treat the persisted counters as window `1` and do not infer a fresh budget. If unresolved findings remain and `cycles_remaining` is zero, or a legacy `current_cycle` is already beyond `max_cycles + 1`, treat the artifact as `RECOVERY_CHECKPOINT` and do not dispatch automatically.
 
-A BLOCKED task (`overall: REVIEW_BLOCKED` with `blocked_category` set) SHALL keep the phase halted. The main agent SHALL NOT start the next task. For `audit-failed` or `auditor-unavailable`, the persisted BLOCKED artifact is terminal for this session — do NOT re-arm the retry ladder on resume. Unblock only via a new user-triggered pocket-development session that explicitly retries the blocked task.
+When and only when the user explicitly authorizes another bounded window, append a snapshot of the closed window (window number, counters, and strategies) to `loop_info.prior_windows`; increment `recovery_window`; reset `current_cycle` to `1`, `cycles_remaining` to `2`, and `strategies` to an empty list. Keep `max_cycles: 2`. The audit `cycle` field mirrors `current_cycle` within the active window; prior-window snapshots preserve the older counts.
+
+A BLOCKED task (`overall: REVIEW_BLOCKED` with `blocked_category` set) SHALL keep that task and its dependents halted; it does not prevent ready tasks that the plan confirms are independent. The phase SHALL NOT advance to `REVIEW` while any task remains blocked. On resume, first check whether the recorded human dependency has been resolved. If so, continue recovery from the saved artifact and counter; do not restart or erase review history. If it remains unresolved, report the specific action needed from the user and continue any independent work that remains safe.
 
 [RESTATE: This file is the single source of truth. Downstream tasks cite it rather than paraphrasing it. The main agent never judges code — every criterion is executed by a read-only subagent. All audit state lives in `<plan_dir>/reviews/<task_id>-review.json`.]

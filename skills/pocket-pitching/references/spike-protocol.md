@@ -4,7 +4,7 @@
 
 ## What Is a Spike
 
-A spike is a time-boxed technical investigation to resolve one specific unknown that blocks approach selection. It is triggered by Phase 2 brainstorming surfacing a technical question that cannot be answered from existing context.
+A spike is a focused technical investigation to resolve one specific unknown that affects approach selection. It is triggered by Phase 2 brainstorming surfacing a technical question that cannot be answered from existing context. A timebox helps the agent reassess effort; it is not a hard stop or a reason to mark the task blocked.
 
 **Scope rule:** One unknown per spike. Do NOT expand into adjacent questions discovered during spike.
 
@@ -45,12 +45,13 @@ Agent decides based on the unknown type:
 **Step 1 — Identify target**
 Name the specific unknown: "Does an authentication middleware exist?"
 
-**Step 2 — Search**
+**Step 2 — Search the most likely locations**
 ```bash
-grep -r "middleware" src/ --include="*.ts" -l
-grep -r "auth" src/ --include="*.ts" -l
+rg -l "middleware|auth" src/ -g '*.ts'
 ```
-Or read specific files if location is known.
+Read likely entry points, configuration, and tests if the initial search has no
+matches. A search with zero matches describes only that search scope; it does not
+prove the capability is absent.
 
 **Step 3 — Check recent changes**
 ```bash
@@ -103,15 +104,38 @@ Combined implication: [synthesis of both findings]
 
 ---
 
+## When a Search Does Not Resolve the Unknown
+
+Use a different evidence source before repeating a failed search:
+
+| First attempt | Next useful step |
+|--------------|------------------|
+| Project search has no matches | Inspect entry points, configuration, tests, and relevant git history; broaden the search terms once. |
+| Documentation search is inconclusive | Check the official documentation for the project's version, then inspect official examples or release notes. |
+| Code and documentation appear to conflict | Verify versions and dates, then test the behavior locally if the project environment supports it. |
+| A tool or source is unavailable | Use another available source or mode; record the unavailable source and continue. |
+
+Do not repeat the same query or tool call without changing what evidence it can produce.
+
 ## Spike Completion Criteria
 
-Spike is complete when the original unknown has a yes/no answer with evidence:
+A spike is complete when it produces either a verified answer or a useful,
+evidence-based account of what remains unresolved:
 - "Yes — found at `src/middleware/auth.ts:42`"
-- "No — no existing implementation found, search returned zero matches"
+- "Not found in the files and terms searched — checked `src/`, configuration, and tests; broader project history remains unchecked"
 - "Yes — Prisma supports this via `createMany` (confirmed docs)"
 - "No — library doesn't support X, would need raw SQL or alternative"
+- "Unresolved — checked the local code and current library docs; neither establishes X. Carry this question into pocket-grinding."
 
 **Do NOT:**
-- Leave a spike with "it might be possible" — investigate until you have a concrete answer
-- Run a spike longer than ~5 tool calls — if unresolved after 5, document the uncertainty and note it as an open question for grinding
+- Report only "it might be possible" — state what evidence you found, what you tried, and the remaining uncertainty
 - Expand scope mid-spike if new questions emerge — note them as open questions instead
+
+At about five tool calls, reassess whether the current path is producing evidence.
+Change source or investigation mode if it is not. This checkpoint changes strategy;
+it does not end the investigation or block the rest of pitching.
+
+If distinct available approaches still cannot resolve the unknown, record the evidence
+and the exact open question in the pitch brief for pocket-grinding. Do not claim the
+unknown is resolved, and do not block the rest of pitching solely because the
+investigation budget or a retry cycle ended.

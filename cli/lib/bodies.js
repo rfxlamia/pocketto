@@ -171,8 +171,9 @@ function tasklistBody(log) {
 
 function closeoutBody({ slug, issue, phases }) {
   const lines = [
-    `# Closeout — ${slug}`,
+    '<!-- pocket-closeout:enterprise-plan-closed -->',
     '',
+    `## Plan closed — ${slug}`,
     `- **Issue:** #${issue}`,
     `- **Phases:** ${phases}`,
     '- **Result:** CLOSED — all phases DONE, all reviewable tasks REVIEW_PASS',

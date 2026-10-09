@@ -32,24 +32,24 @@ One block per Core skill: what it does, what it consumes, what it produces, and 
 - **What:** Creates a manifest and per-task files from an execution plan, adding phase files when needed.
 - **Input:** A completed execution plan.
 - **Output:** An execution index, task files, and optional phase manifests.
-- **Handoff:** Requests execution approval, then hands one phase at a time to `pocket-development`.
+- **Handoff:** Hands one phase at a time to `pocket-development` when the user's instruction authorizes execution; otherwise asks once for the missing authorization.
 - **Use when:** An execution plan needs task-level structure.
 - **Skip when:** The plan has already been structured.
 
 ### pocket-development
 - **What:** Executes tasks with Pocket Packets, test-first commits, per-task audits, and a phase-level pass.
 - **Input:** An execution index or a phase file whose prerequisite is complete.
-- **Output:** Commits, per-task verdict artifacts, and a phase-level pass result.
-- **Handoff:** Leaves a passing phase in `REVIEW`, emits `phase-complete`, and names `pocket-closing` as the next user-triggered step.
+- **Output:** Commits, per-task verdict artifacts, a phase-level pass result, and a durable phase handoff for closeout.
+- **Handoff:** Leaves a passing phase in `REVIEW` and emits `phase-complete`. Continue to `pocket-closing` when the user's request already authorizes end-to-end closeout; otherwise name it as the next step.
 - **Use when:** An approved execution plan is ready to build.
 - **Skip when:** No execution plan exists or a prerequisite phase is incomplete.
 
 ### pocket-closing
 - **What:** Reconciles current task verdicts, advances a passing phase, and closes a completed plan.
 - **Input:** An execution log and current verdict artifacts.
-- **Output:** An advanced phase or a closed plan with a closeout summary.
+- **Output:** An advanced phase with its section appended to `closeout.md`, or a closed plan with the final plan section appended.
 - **Handoff:** A successful final close emits `plan-closed`.
-- **Use when:** A phase-level pass has completed and the user invokes closing.
+- **Use when:** A phase-level pass has completed and closeout is authorized, either by a direct request or an end-to-end request.
 - **Skip when:** A task is failing, blocked, or missing a current verdict.
 
 ## Standalone skills
@@ -96,3 +96,12 @@ One block per Core skill: what it does, what it consumes, what it produces, and 
 - **Output:** The learner's own, reviewed change; a learning summary (optionally `docs/pocket/learning/<date>-<slug>.md`); learner-approved profile updates.
 - **Use when:** "teach me", "guide me through this", "I want to do it myself", "review my change", "explain testing more slowly", "recalibrate my level".
 - **Skip when:** The user explicitly wants the agent to implement (→ hotfix / bug-hunting / pocket-development).
+
+## Optional adapter
+
+### pocket-enterprise
+- **What:** Installs and operates the additive Enterprise lifecycle adapter beside a compatible Core installation.
+- **Input:** The user's explicit request to enable Enterprise and a project with a compatible Core installation.
+- **Output:** A registered adapter that can deliver neutral lifecycle events to the configured remote workflow.
+- **Use when:** The user explicitly asks for remote lifecycle synchronization.
+- **Skip when:** Enterprise has not been explicitly enabled; Core works locally without it.

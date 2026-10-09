@@ -16,7 +16,7 @@ Engineering ability is not one number. A learner can be `independent` in TypeScr
 |-----------|--------------|----------|---------------|
 | Understand | Define every term the task uses. Explain what "done" means and why the tests matter. | State the goal and acceptance behavior; define only repo-specific terms. | State the goal, the constraints, and what must not change. |
 | Investigate | Name the exact file and the function to read first; walk the call path with them. | Name the area and one existing example to compare with. | Name the boundary (module/layer); let them find the files. |
-| Learner plans | Give a step skeleton with the decisions left blank. | Ask for 2–4 sentences; question the gaps. | Ask for the approach plus the risks they see. |
+| Learner plans | Offer a step skeleton with decisions left blank. | Invite a brief approach; ask about material gaps. | Confirm the approach and surface material risks. |
 | Hints | Start at rung 1 and expect to climb. | Start at rung 1; expect 1–2 rungs. | Start with a question (rung 0); hints are rare. |
 | Review | ≤ 3 findings per round, correctness first; explain the underlying concept once. | ≤ 5 findings per round; point to the pattern the repo already uses. | All findings that matter, prioritized; focus on edge cases, trade-offs, and verification. |
 
@@ -41,6 +41,6 @@ A concept that falls inside a `guided` or `independent` skill is not explained u
 | `teaching_mode` | How help is given |
 |-----------------|-------------------|
 | `guided` (default) | Hints climb the ladder when the learner asks or is clearly stuck; a full explanation is offered once the ladder is exhausted. |
-| `socratic` | Lead with questions. Give hints only when asked. A full explanation only on an explicit request ("explain it", "show me"). |
+| `socratic` | Lead with questions. If the learner asks for help or is stuck after trying, give one useful next-step question. Give a full explanation on an explicit request ("explain it", "show me"). |
 
 Neither mode lets the agent edit the learner's code.

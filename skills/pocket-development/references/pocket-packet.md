@@ -187,15 +187,17 @@ Done when:
 - Tests pass without skipping
 
 Uncertain when:
-- Auth behavior differs from existing (check before implementing)
-- Security implications unclear (STOP, escalate)
-- Test failures after 2 attempts (escalate)
+- Auth behavior differs from existing (inspect current behavior and tests before changing it)
+- Security implications are unclear (gather evidence and request independent review)
+- A test still fails (diagnose it, use a materially different recovery strategy, and stop at the two-round cap for a `RECOVERY_CHECKPOINT` unless the failure requires a specific human decision)
 
 Escalate when:
 - Requires architectural decision not in scope
 - Existing code behavior unclear despite investigation
-- Security concern identified
+- A security finding requires a human product/security decision, access, or authorization after investigation and independent review
 ```
+
+Escalation is for a genuine human dependency. A security concern alone does not prevent read-only investigation: gather evidence and request independent review. Do not implement remediation that changes authentication, authorization, permission, or security-policy behavior until the user explicitly authorizes that specific change after seeing the finding and its impact. Keep any investigation read-only while awaiting that checkpoint. If a finding can be addressed without changing those behaviors, continue through the normal audit flow within the approved scope.
 
 ## Packet Quality Checklist
 

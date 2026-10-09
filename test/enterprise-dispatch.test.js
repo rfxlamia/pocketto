@@ -606,6 +606,41 @@ test('Core drain dispatches claimed spec, phase, and closure events through the 
     'T10 must write its local closeout after the claimed attempt');
 });
 
+test('plan-closed drain appends one marked final section and preserves the phase journal on replay', (t) => {
+  const { fixture, lifecyclePath, lifecycle, env } = setupRegisteredDispatch(t);
+  const closeoutPath = path.join(fixture.planDir, 'closeout.md');
+  const phaseJournal = [
+    '# Pocket Closeout — demo',
+    '',
+    '## Phase 1 of 1 — Existing phase report',
+    '<!-- pocket-closeout:phase-1 -->',
+    '',
+    'The phase report must survive Enterprise closure reconciliation.',
+    '',
+    '## Plan closed',
+    '<!-- pocket-closeout:plan-closed -->',
+    '',
+    'Core already wrote its final plan summary.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(closeoutPath, phaseJournal);
+
+  const first = runCoreDrainEvent(fixture, lifecyclePath, lifecycle, env, fixture.closeEvent);
+  assert.equal(first.delivery.status, 'succeeded');
+  const afterFirstDrain = fs.readFileSync(closeoutPath, 'utf8');
+  assert.ok(afterFirstDrain.startsWith(phaseJournal), 'closure reconciliation must preserve the existing phase journal verbatim');
+  assert.match(afterFirstDrain, /<!-- pocket-closeout:enterprise-plan-closed -->/,
+    'Enterprise must append its summary under an adapter-specific marker');
+  assert.equal((afterFirstDrain.match(/<!-- pocket-closeout:enterprise-plan-closed -->/g) || []).length, 1);
+  assert.equal((afterFirstDrain.match(/<!-- pocket-closeout:plan-closed -->/g) || []).length, 1,
+    'the existing Core marker must remain independent');
+
+  const replay = runCoreDrainEvent(fixture, lifecyclePath, lifecycle, env, fixture.closeEvent);
+  assert.equal(replay.delivery.status, 'succeeded');
+  const afterReplay = fs.readFileSync(closeoutPath, 'utf8');
+  assert.equal(afterReplay, afterFirstDrain, 'replayed closure reconciliation must not duplicate or rewrite the final section');
+});
+
 test('Core drain rejects T8 artifact symlink escapes before any followed file access', async (t) => {
   await t.test('hash-matching external artifact target is not statted or read', (t) => {
     const fixture = createFixture(t);

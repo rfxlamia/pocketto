@@ -52,15 +52,16 @@ Key insights:
 
 ## Advisor Synthesis
 [2-4 sentences summarizing what the advisor curation surfaced. Patterns, clusters, discards.]
+**Curation source:** [advisor tool | independent `advisor` subagent]
 
 ---
 
 ## Spike Results
 [Only include if spike was run. If no spike, delete this section.]
 
-**Unknown resolved:** [what was the question]
-**Finding:** [what was discovered — yes/no + evidence]
-**Implication:** [how this affects the approach directions below]
+**Question:** [the technical unknown]
+**Finding:** [verified answer with evidence, or the specific unresolved question and what was checked]
+**Implication:** [how this affects the approach directions below; carry unresolved technical questions into pocket-grinding]
 
 ---
 

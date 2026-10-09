@@ -63,7 +63,20 @@ Copy and fill in. Remove sections that don't apply — but never remove Acceptan
 - Layers this work may touch: <list>
 - Layers this work must NOT touch: <list>
 - Patterns that must be followed: <list>
-- Architecture validation result: PASS | CONDITIONAL PASS (see findings below if conditional)
+- Architecture validation result: PASS | CONDITIONAL PASS | UNVERIFIED (include the evidence below)
+
+### Validation Evidence
+
+Record how the recommended design was checked against the repository and, when
+version-dependent behavior affects the design, current documentation for that version.
+
+| Claim or constraint | Codebase evidence (paths/symbols) | External source (URL, version/date) | Result and finding |
+|---|---|---|---|
+| <claim> | <files, callers, tests, schema, or "not applicable"> | <official docs or "not applicable"> | PASS / FAIL / UNVERIFIED / N/A — <reason> |
+
+`PASS` requires supporting evidence. Explain `N/A`. Do not report full validation if a
+material claim remains unverified. List unresolved gaps with their impact under Open
+Questions / Assumptions.
 
 ---
 
@@ -218,6 +231,11 @@ Existing: <list> | New: <list, or none>
 Rule: <name>
   ✓ Given ..., When ..., Then ...
   ✗ Given ..., When ..., Then ...
+
+## Validation Evidence
+- Codebase: <relevant files, callers, tests, and schema inspected>
+- External docs: <version-matched source and finding, or none applicable>
+- Result: <PASS / CONDITIONAL PASS / UNVERIFIED, with unresolved risk>
 
 ## Assumptions
 - <assumption> → risk: <consequence>

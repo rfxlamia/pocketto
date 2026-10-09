@@ -132,10 +132,22 @@ function resolveCloseoutTarget(planDir, expectedRoot, { requireTarget = false } 
   return { root, target };
 }
 
-function writeCloseoutFile(planDir, content, opts, expectedRoot) {
+function appendCloseoutFile(planDir, content, opts, expectedRoot) {
   let temporaryDirectory;
   try {
     const initial = resolveCloseoutTarget(planDir, expectedRoot);
+    let current = '';
+    try {
+      current = fs.readFileSync(initial.target, 'utf8');
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+    if (current.includes('<!-- pocket-closeout:enterprise-plan-closed -->')) return;
+
+    const separator = current.length === 0
+      ? ''
+      : current.endsWith('\n\n') ? '' : current.endsWith('\n') ? '\n' : '\n\n';
+    const updated = `${current}${separator}${content}`;
     temporaryDirectory = fs.mkdtempSync(path.join(initial.root, '.closeout-'));
     const physicalTemporaryDirectory = fs.realpathSync(temporaryDirectory);
     if (!isInside(initial.root, physicalTemporaryDirectory)
@@ -146,11 +158,11 @@ function writeCloseoutFile(planDir, content, opts, expectedRoot) {
     const temporaryPath = path.join(physicalTemporaryDirectory, 'closeout.md');
     resolveCloseoutTarget(planDir, initial.root);
     if (opts.writeFile) {
-      opts.writeFile(temporaryPath, content, 'utf8');
+      opts.writeFile(temporaryPath, updated, 'utf8');
     } else {
       const descriptor = fs.openSync(temporaryPath, 'wx', 0o666);
       try {
-        fs.writeFileSync(descriptor, content, 'utf8');
+        fs.writeFileSync(descriptor, updated, 'utf8');
         fs.fsyncSync(descriptor);
       } finally {
         fs.closeSync(descriptor);
@@ -192,7 +204,7 @@ function reconcileExistingProof(eventId, context, listed, tasklist, closeout, op
   const existingProof = isCurrentTasklistProof(event, context, listed, tasklist);
   if (!existingProof) return null;
   try {
-    writeCloseoutFile(opts.planDir, closeout, opts, context.closeoutRoot);
+    appendCloseoutFile(opts.planDir, closeout, opts, context.closeoutRoot);
   } catch (error) {
     return withTasklistProof(
       adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',
@@ -250,7 +262,7 @@ function persistMetadata(eventId, context, record, proofHash, opts) {
 
 function persistCloseout(eventId, opts, closeout, proofHash, closeoutRoot) {
   try {
-    writeCloseoutFile(opts.planDir, closeout, opts, closeoutRoot);
+    appendCloseoutFile(opts.planDir, closeout, opts, closeoutRoot);
   } catch (error) {
     return withTasklistProof(
       adapterResult(eventId, 'reconciling', 'CLOSEOUT_LOCAL_WRITE_FAILED',

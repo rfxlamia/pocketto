@@ -101,6 +101,7 @@ Steps:
 
 ## REFERENCES LOADED
 <spec path> — rule: <name>, GWT scenarios used as verification
+<relevant source files and version-matched external docs for APIs used by this task; if unavailable, record sources tried and the remaining risk>
 [CRITICAL: Without this section, packet is incomplete]
 
 ## WHY THIS APPROACH

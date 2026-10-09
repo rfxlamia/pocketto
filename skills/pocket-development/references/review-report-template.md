@@ -44,7 +44,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     "cycle": {
       "type": "integer",
       "minimum": 1,
-      "description": "Review cycle number (1-indexed)"
+      "description": "Audit number (1-indexed) within the active recovery window"
     },
     "timestamp": {
       "type": "string",
@@ -53,7 +53,8 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     },
     "reviewer_mode": {
       "type": "string",
-      "description": "Review mode (read-only)"
+      "enum": ["read-only", "main-agent"],
+      "description": "Use read-only when an independent auditor ran; use main-agent only for a documented no-reviewer stub such as an empty-diff skip or single-task phase fast path."
     },
     "reviewer_config": {
       "type": "string",
@@ -147,19 +148,40 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     "loop_info": {
       "type": "object",
       "properties": {
+        "recovery_window": { "type": "integer", "minimum": 1 },
         "current_cycle": { "type": "integer" },
         "max_cycles": { "type": "integer" },
-        "cycles_remaining": { "type": "integer" }
+        "cycles_remaining": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "strategies": { "type": "array", "maxItems": 2, "items": { "type": "string" } },
+        "prior_windows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "recovery_window": { "type": "integer", "minimum": 1 },
+              "current_cycle": { "type": "integer" },
+              "max_cycles": { "type": "integer", "const": 2 },
+              "cycles_remaining": { "type": "integer", "const": 0 },
+              "strategies": { "type": "array", "maxItems": 2, "items": { "type": "string" } }
+            }
+          }
+        }
       }
     },
     "merge_recovery_consumed": {
       "type": "boolean",
-      "description": "Parallel group merge-conflict recovery: set true before the single bounded recovery dispatch; read on resume."
+      "description": "Compatibility/history marker showing that parallel group merge-conflict recovery has started."
+    },
+    "merge_recovery_round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2,
+      "description": "Current bounded merge-conflict recovery round; after round 2, report RECOVERY_CHECKPOINT and wait for explicit user authorization."
     },
     "merge_recovery_stage": {
       "type": "string",
       "enum": ["implementer", "gate", "auditor", "merge_retry", "parallel-conflict"],
-      "description": "In-progress merge-recovery step for resume; distinct from phase-level recovery_stage."
+      "description": "Current merge-recovery step for resume; follow the two-round cap in parallel-group.md. Distinct from phase-level recovery_stage."
     },
     "reviewed_sha": {
       "type": "string",
@@ -219,9 +241,12 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
   "overall": "REVIEW_FAIL",
   "fix_instructions": "1. In auth_service.py:42 — add token expiry check per spec rule 3.2. 2. Remove OAuth2 code (auth_service.py:15-30) — not in spec. 3. Add test for token expiry edge case.",
   "loop_info": {
+    "recovery_window": 1,
     "current_cycle": 1,
     "max_cycles": 2,
-    "cycles_remaining": 1
+    "cycles_remaining": 1,
+    "strategies": ["Narrowed the packet to the two failing acceptance cases"],
+    "prior_windows": []
   },
   "reviewed_sha": "bcd2345efg6789"
 }
@@ -261,9 +286,12 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
   "overall": "REVIEW_PASS",
   "fix_instructions": "",
   "loop_info": {
+    "recovery_window": 1,
     "current_cycle": 2,
     "max_cycles": 2,
-    "cycles_remaining": 0
+    "cycles_remaining": 1,
+    "strategies": ["Narrowed the packet to the two failing acceptance cases"],
+    "prior_windows": []
   },
   "reviewed_sha": "d4e5f6g7h8i9j0"
 }
@@ -275,7 +303,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
 {
   "task_id": "T3",
   "task_name": "Extract auth layer",
-  "cycle": 3,
+  "cycle": 1,
   "timestamp": "2026-05-08T14:00:00Z",
   "reviewer_mode": "read-only",
   "reviewer_config": "deep",
@@ -284,7 +312,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     "issues": [
       {
         "type": "missing",
-        "description": "Token expiry still not checked after 2 fix attempts",
+        "description": "The approved requirements do not specify whether an expired refresh token should revoke other active sessions or deny only this request.",
         "location": "auth_service.py:42"
       }
     ],
@@ -298,11 +326,14 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
   },
   "overall": "REVIEW_BLOCKED",
   "blocked_category": "audit-failed",
-  "fix_instructions": "ESCALATE: Token expiry check failed 2 cycles. Implementer consistently misses error handling. Recommend human review of error handling approach or task split.",
+  "fix_instructions": "ESCALATE: The approved requirements do not say whether an expired refresh token revokes other active sessions. A product decision is required before the auditor can determine the expected behavior. Choose whether to revoke all sessions or deny only this request.",
   "loop_info": {
-    "current_cycle": 3,
+    "recovery_window": 1,
+    "current_cycle": 1,
     "max_cycles": 2,
-    "cycles_remaining": 0
+    "cycles_remaining": 2,
+    "strategies": [],
+    "prior_windows": []
   },
   "reviewed_sha": "def4567ghi8901"
 }
@@ -324,7 +355,7 @@ Written by the main agent during the in-loop empty-diff path for any `DONE + don
   "stage_2": { "status": "PASS", "strengths": [], "issues": [], "assessment": "Approved" },
   "overall": "REVIEW_PASS",
   "fix_instructions": "",
-  "loop_info": { "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0 },
+  "loop_info": { "recovery_window": 1, "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0, "strategies": [], "prior_windows": [] },
   "skip_reason": "no_file_changes",
   "reviewed_sha": "cde3456fgh7890"
 }
@@ -365,11 +396,14 @@ Whenever pocket-development writes or rewrites this artifact — the per-task in
 
 | Field | Value |
 |-------|-----------------|
-| `cycle` | `1` on first cycle; incremented on re-review (see `skills/pocket-development/references/phase-level-pass.md` cycle bookkeeping) |
+| `cycle` | Audit number within the current `recovery_window`; `1` on its first audit and incremented on re-review |
 | `reviewer_config` | `"batch-parallel"` |
-| `loop_info.current_cycle` | `1` on first cycle; prior cycle + 1 on re-review (mirrors `cycle`) |
+| `loop_info.recovery_window` | `1` for the initial automatic window; increment only after explicit user authorization for a new bounded window |
+| `loop_info.current_cycle` | `1` on the first audit in a window; prior cycle + 1 on re-review (mirrors `cycle` within that window) |
 | `loop_info.max_cycles` | `2` for in-loop and phase-level audits; `1` only for the empty-diff skip stub defined by `two-stage-review.md` |
-| `loop_info.cycles_remaining` | Follow the round budget in `two-stage-review.md` or `phase-level-pass.md`; a clean first pass records `2` |
+| `loop_info.cycles_remaining` | Remaining correction rounds in the current window. Decrement when a correction/re-dispatch round starts; zero with unresolved findings requires `RECOVERY_CHECKPOINT`. A clean first pass records `2`. |
+| `loop_info.strategies` | Distinct correction strategies already used in this window; record each recovery dispatch, up to two. |
+| `loop_info.prior_windows` | Snapshots of closed recovery windows, including their counters and strategies. Append before resetting counters for a user-authorized new window. |
 | `overall` | `"REVIEW_PASS"` \| `"REVIEW_FAIL"` \| `"REVIEW_BLOCKED"` |
 | `reviewed_sha` | `done_sha` on first cycle; max-by-commit-time of `done_sha` and all owned correction SHAs on re-review |
 

@@ -91,6 +91,45 @@ Technical unknowns surfaced:
 - [unknown 1 — needs spike?]
 ```
 
+## Independent Subagent Fallback
+
+Independent curation reduces the main agent's confirmation bias. If `advisor()` is
+unavailable or fails, dispatch a fresh subagent named `advisor` with the persona
+below. Keep this review independent: do not substitute the main agent's own synthesis.
+
+```text
+You are Advisor, an independent brainstorm curator and constructive critic. You did
+not generate these method results. Assess the confirmed problem, relevant project
+context, and complete method outputs independently. The main agent's draft synthesis
+and recommendation are intentionally withheld; do not ask for or infer them.
+
+Your task:
+1. Identify the strongest insights and recurring patterns across methods.
+2. Find contradictions, duplicate ideas, unsupported assumptions, and noise.
+3. Name important angles or questions the methods missed.
+4. Surface technical unknowns that may need a spike.
+5. Separate evidence from inference. Do not invent project facts.
+6. Keep the result at problem-exploration level. Do not write implementation plans,
+   detailed architecture, or GWT scenarios.
+
+Return:
+- Key insights
+- Patterns
+- Ideas worth pursuing, with brief reasons
+- Discarded or duplicate ideas, with reasons
+- Contradictions and assumptions to check
+- Technical unknowns for possible spikes
+```
+
+Start the subagent with an isolated context when the dispatch mechanism supports it.
+Send only the confirmed problem, relevant project context, and complete method
+outputs. If the dispatch mechanism includes the parent conversation, tell the advisor
+to base its review only on that payload and not on any main-agent synthesis. Wait for
+the advisor's findings before writing the synthesis. Identify the fallback subagent
+as the curation source. If dispatch fails, try another available subagent route. If
+no independent reviewer can run, state that limitation, continue work that does not
+depend on curation, and leave the synthesis explicitly uncurated.
+
 ---
 
 ## Anti-patterns to Avoid
@@ -104,8 +143,8 @@ Technical unknowns surfaced:
 **Do NOT:** Call `advisor()` multiple times in Phase 2.
 → One call after ALL methods complete. Multiple calls create redundancy.
 
-**Do NOT:** Skip the advisor call because "the synthesis is obvious".
-→ Gate 2 is mandatory. The advisor catches patterns and discards noise that the main agent misses.
+**Do NOT:** Skip independent advisor curation because "the synthesis is obvious".
+→ Independent curation is required. Use the advisor tool or the `advisor` subagent fallback to catch patterns and discard noise the main agent may miss.
 
 ---
 

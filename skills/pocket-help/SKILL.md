@@ -15,14 +15,15 @@ Pocket is a set of skills for systematic development — from a vague idea to re
 
 Each stage produces an artifact (pitch doc → spec → execution plan → task files → commits → review reports) that the next stage consumes.
 
-## Two Kinds of Skills
+## Skill Roles
 
-| Kind | Skills | Use for |
+| Role | Skills | Use for |
 |------|--------|---------|
-| **Chained** (`pocket-*`) | pocket-pitching · pocket-grinding · pocket-planning · pocket-structuring · pocket-development · pocket-closing | Real features and non-trivial work that need a reviewed handoff between stages. |
-| **Standalone** | bug-hunting · hotfix · brand-design · structured-research · pocket-help · pocket-init · pocket-education | Everyday work that does not need the full pipeline. |
+| **Chained workflow** | `pocket-pitching` · `pocket-grinding` · `pocket-planning` · `pocket-structuring` · `pocket-development` · `pocket-closing` | Features and non-trivial work that benefit from reviewed handoffs between stages. |
+| **Standalone workflow** | `bug-hunting` · `hotfix` · `brand-design` · `structured-research` · `pocket-help` · `pocket-init` · `pocket-education` | Focused work, onboarding, or guidance that does not need the full pipeline. |
+| **Optional adapter** | `pocket-enterprise` | Remote lifecycle synchronization, only when the user explicitly enables Enterprise. |
 
-The `pocket-*` prefix marks pipeline stages, with `pocket-help`, `pocket-init`, and `pocket-education` as standalone orientation/onboarding/mentor helpers. `bug-hunting`, `hotfix`, `brand-design`, and `structured-research` are also standalone.
+The `pocket-*` prefix identifies Pocket-owned skills; it does not mean every one is a pipeline stage. `pocket-help`, `pocket-init`, and `pocket-education` are standalone helpers, while `pocket-enterprise` is an optional adapter.
 
 ## Router — Which Skill Right Now?
 
@@ -41,6 +42,7 @@ The `pocket-*` prefix marks pipeline stages, with `pocket-help`, `pocket-init`, 
 | New to Pocket or unsure which skill fits | `pocket-help` | standalone |
 | Existing repo needs a local project guide or learner calibration | `pocket-init` | standalone |
 | Learner wants to do the task themselves, with guidance and review | `pocket-education` | standalone (education) |
+| User explicitly enables remote lifecycle synchronization for a compatible Core install | `pocket-enterprise` | optional adapter |
 
 **Routing rules of thumb:**
 - Don't know if the problem is well-formed? → `pocket-pitching`.
@@ -50,6 +52,7 @@ The `pocket-*` prefix marks pipeline stages, with `pocket-help`, `pocket-init`, 
 - Holding an unverified assumption? → `structured-research`.
 - Already have an approved spec? → `pocket-planning`.
 - Repo has Pocket Education on, or the user says "teach me / I want to do it myself"? → `pocket-education` (the human implements).
+- User explicitly asks to enable Enterprise lifecycle synchronization? → `pocket-enterprise`; never infer this from credentials or repo configuration.
 
 ## The End-to-End Flow
 
@@ -64,31 +67,35 @@ approved spec
    │  pocket-planning     TDD plan → full task packets    [routes to structuring]
    ▼
 execution plan
-   │  pocket-structuring  index + task files              [execution approval]
+   │  pocket-structuring  index + task files              [development handoff]
    ▼
 plan / phase file
    │  pocket-development  task execution + in-loop audits [phase-level pass]
    ▼
 reviewed phase
-   │  pocket-closing      verdict reconciliation + close  [user-triggered]
+   │  pocket-closing      verdict reconciliation + close  [when closeout is authorized]
 ```
 
 **Handoff facts that matter:**
 - `pocket-grinding` hands an approved spec to `pocket-planning`.
 - `pocket-planning` validates the plan and routes all plans to `pocket-structuring`.
-- `pocket-structuring` creates an execution index and per-task files, then asks for execution approval.
-- `pocket-development` executes tasks, records per-task verdicts, and runs a phase-level pass. It leaves the phase in `REVIEW` and names `pocket-closing` as the next user-triggered step.
-- `pocket-closing` reconciles verdicts and advances a reviewed phase; it does not review implementation code.
+- `pocket-structuring` creates an execution index and per-task files. It hands off to `pocket-development` when the user's existing instruction authorizes execution; otherwise it asks once for the missing authorization.
+- `pocket-development` executes tasks, records per-task verdicts, runs a phase-level pass, and writes a durable phase handoff. It leaves the phase in `REVIEW`; if the user's request already authorizes end-to-end closeout, continue to `pocket-closing`, otherwise name it as the next step.
+- `pocket-closing` reconciles verdicts and advances a reviewed phase; it appends that phase's section to `closeout.md` and does not review implementation code. It appends the final plan section after all phases close.
 - `pocket-pitching` does not auto-chain — the user chooses whether to start `pocket-grinding`.
 
 For the full stage-by-stage walkthrough, load `references/end-to-end-flow.md`. For concise inputs, outputs, and routing notes, load `references/skill-map.md`.
 
 ## Pocket Education (opt-in mentor mode)
 
-With **Pocket Education** enabled (`/pocketto:pocket-init` Education Gate), the human writes the code and the agent teaches, reviews, and guides with progressive hints (`pocket-education`). A skill-specific learner profile (`foundation` / `guided` / `independent` per skill) is calibrated once and kept in a `## Pocket Education` block in `AGENTS.md`/`CLAUDE.md`, so later sessions reuse it instead of recalibrating. The agent may recommend a level change; only the learner decides (`pocketto-pi edu set`).
+With **Pocket Education** enabled (`/pocketto:pocket-init` Education Gate), the human writes the code and the agent teaches, reviews, and guides with progressive hints (`pocket-education`). The skill-specific learner profile (`foundation` / `guided` / `independent` per skill) lives in a `## Pocket Education` block in `AGENTS.md`/`CLAUDE.md` and is reused across sessions. It can gain a skill dimension when a task needs one; recalibration and persistent level changes remain learner-controlled.
 
-- `hotfix`, `bug-hunting` (fixes), and `pocket-development` ask once before implementing in an Education repo — guide the learner, or explicitly hand the task over.
+- In an Education repo, implementation skills check whether the learner wants guidance or a handoff. An explicit handoff already given in `pocket-education` authorizes that task; do not ask for the same confirmation again.
 - Education is local and independent of optional adapters. Without the block, nothing changes and no `edu` call is made.
+
+## Optional Enterprise Adapter
+
+Use `pocket-enterprise` only after the user explicitly enables remote lifecycle synchronization for a compatible Core installation. Core remains local-first without it; do not infer consent from credentials or an existing registration.
 
 ## When Pocket Beats a Lighter Flow
 

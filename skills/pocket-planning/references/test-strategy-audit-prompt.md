@@ -147,20 +147,24 @@ Prompt:
      protocol, scoped to the tasks the audit touched plus — if a task was added — the file map,
      task count, and the refreshed overview blocks).
 
-   Gate 4 covers the plan the user actually sees, so audit-applied *edits* must not reach
-   Phase 7 unreviewed. A `Clean` audit edits nothing, so re-reviewing it would be a whole-plan
+   The Spec Reviewer must cover the plan the user actually sees, so audit-applied *edits* must
+   not reach Phase 7 unreviewed. A `Clean` audit edits nothing, so re-reviewing it would be a whole-plan
    pass with no changed input — exactly the cost this phase exists to avoid.
 
-   When it does run, it is a **single confirmation cycle, independent of Phase 5's 2-cycle
-   budget**: Issues Found → fix inline, re-dispatch once → still Issues Found → output
-   `REVIEW BLOCKED` and stop.
+   When it does run, review the changed tasks through the two-round recovery budget. If findings
+   repeat or the review becomes inconclusive, narrow the prompt or use a fresh reviewer route.
+   Allow at most two materially different correction/review rounds. At the cap,
+   report `RECOVERY_CHECKPOINT` for the affected tasks, preserve the unresolved findings, and
+   wait for explicit user authorization before another bounded window.
 6. Record the outcome for the Phase 7 approval message — one of:
    - `Test strategy audit: skipped — no trigger fired`
    - `Test strategy audit: run on <tasks> — Clean, no findings`
    - `Test strategy audit: run on <tasks> — <N> findings applied, changed tasks re-reviewed`
+   - `Test strategy audit: incomplete on <tasks> — <specific gap and impact>`
 
 **If the audit returns BLOCKED or NEEDS_CONTEXT:**
 
-- Common cause: test framework not identified in preflight → confirm the framework with the user, update Preflight Summary, re-dispatch once
-- Common cause: a task's OBJECTIVE is too vague to judge its test level → fix that OBJECTIVE, re-dispatch once
-- **Maximum 1 retry.** Blocked again → escalate: "Test strategy audit blocked on task `<task name>`. OBJECTIVE text: `<text>`. Please clarify scope or confirm the task is non-testable `[no-tdd — structural task]`."
+- First inspect the spec, Preflight Summary, relevant code, and task objective for the missing context. Do not ask the user for information already present there.
+- If the plan is unclear, revise the affected objective or test intent and dispatch a focused review of that task. If the reviewer cannot assess it, improve the review prompt or try another independent reviewer route.
+- Preserve partial findings and continue with tasks the audit could assess. Ask the user only when a missing product decision or framework choice cannot be inferred from project evidence.
+- If no independent route can assess the affected task within the two-round budget, mark that task's audit `INCOMPLETE`, explain the gap and consequence, and do not call it clean. This checkpoint does not block unrelated planning work, but the plan cannot be handed off while the affected blocking audit remains incomplete.
