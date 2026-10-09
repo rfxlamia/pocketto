@@ -54,6 +54,12 @@ function assertExplicitPackageListIncludesReleaseAssets() {
     (pkg.files || []).includes('surfaces.json'),
     'package file list must ship the surface manifest',
   );
+  for (const rel of [
+    'skills/validate-plan/SKILL.md',
+    'skills/validate-plan/references/**',
+  ]) {
+    assert.ok((pkg.files || []).includes(rel), `package file list must explicitly include ${rel}`);
+  }
   // The packed tarball must carry the release archives and mode dotfiles:
   // at least one .skill archive and one .skillkit-mode dotfile.
   {
@@ -78,6 +84,16 @@ function assertExplicitPackageListIncludesReleaseAssets() {
       packed.includes('skills/pocket-development/.skillkit-mode'),
       'packed tarball must include the pocket-development .skillkit-mode dotfile',
     );
+    for (const rel of [
+      'skills/validate-plan/validate-plan.skill',
+      'skills/validate-plan/SKILL.md',
+      'skills/validate-plan/references/dry-principles.md',
+      'skills/validate-plan/references/yagni-checklist.md',
+      'skills/validate-plan/references/tdd-patterns.md',
+      'skills/validate-plan/references/gap-analysis-guide.md',
+    ]) {
+      assert.ok(packed.includes(rel), `packed tarball must include ${rel}`);
+    }
     assert.ok(
       packed.includes('surfaces.json'),
       'packed tarball must include surfaces.json',

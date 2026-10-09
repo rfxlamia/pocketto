@@ -1,6 +1,6 @@
 ---
 name: validate-plan
-description: Validate implementation plans against DRY, YAGNI, TDD principles and best practices. Use when reviewing development plans created by writing-plans or similar planning workflows to identify gaps, anti-patterns, and improvement opportunities before execution.
+description: Validate implementation plans against DRY, YAGNI, TDD principles and best practices. Use when reviewing plans from pocket-planning or another planning workflow to identify gaps, anti-patterns, and improvement opportunities before execution.
 category: planning
 ---
 
@@ -11,7 +11,7 @@ category: planning
 Comprehensive validation workflow for development implementation plans. This skill systematically analyzes plans against DRY (Don't Repeat Yourself), YAGNI (You Aren't Gonna Need It), and TDD (Test-Driven Development) principles while performing codebase-aware gap analysis to prevent implementation disasters.
 
 **Use when:**
-- Reviewing implementation plans created by /writing-plans
+- Reviewing implementation plans created by the Pocket planning workflow or another source
 - Validating development plans before execution
 - Checking plans for DRY/YAGNI/TDD compliance
 - Preventing over-engineering and scope creep
@@ -25,12 +25,14 @@ Comprehensive validation workflow for development implementation plans. This ski
 
 ### Step 1: Plan Discovery
 
-**Ask user:** "Which plan should I validate? (Provide file path or plan name)"
+Accept either a plan file path or plan text supplied directly in the request. When invoked as a non-interactive reviewer (including the hotfix reviewer dispatch), use the supplied inline plan and do not ask questions or request a file path. If neither a path nor plan text is available in an interactive session, ask the user which plan to review.
 
-If user provides plan:
+For a file path:
 1. Load plan file
 2. Extract metadata: feature name, tech stack, hypothesis
 3. Identify all tasks and their structure
+
+For inline plan text, perform the same analysis from the supplied content without looking for or editing a plan file.
 
 ### Step 2: Codebase Analysis
 
@@ -122,6 +124,18 @@ If user provides plan:
 
 ### Step 7: Generate Validation Report
 
+Assign an overall grade using this rubric:
+
+| Grade | Criteria |
+|-------|----------|
+| **A** | No critical issues or warnings; any findings are informational only. |
+| **B** | No critical issues and one or two warnings. |
+| **C** | No critical issues and three or more warnings. |
+| **D** | Exactly one critical issue. |
+| **F** | Two or more critical issues, or a critical security/safety issue that makes execution unsafe. |
+
+A critical finding always makes the verdict **BLOCKED**, regardless of the grade. With no critical findings, the verdict is **APPROVED**; warnings may still need an explicit exception or plan change before execution.
+
 **Report Structure:**
 
 ```markdown
@@ -132,6 +146,7 @@ If user provides plan:
 - **Warnings:** [N] improvements recommended
 - **Info:** [N] suggestions for enhancement
 - **Overall Grade:** [A-F]
+- **VERDICT:** [APPROVED or BLOCKED]
 
 ## DRY Analysis
 [Findings with specific recommendations]
@@ -147,9 +162,26 @@ If user provides plan:
 
 ## Codebase Context
 [Reusable components, patterns found]
+
+## Findings
+### CRITICAL
+- [Blockers, or "None"]
+
+### WARNING
+- [Recommended fixes, or "None"]
+
+### INFO
+- [Optional suggestions, or "None"]
+
+## Verdict
+Emit exactly one verdict line: `VERDICT: APPROVED` when there are no critical findings, or `VERDICT: BLOCKED` when one or more critical findings remain.
 ```
 
-### Step 8: Interactive Improvement
+### Step 8: Optional Plan Changes (Interactive Mode Only)
+
+Validation is read-only by default. Never rewrite a plan automatically, make edits merely to make them "look natural," or continue directly to execution after changing a plan.
+
+This step is available only when the user is interacting directly. For an inline plan or subagent review, skip this step and return the report without asking questions or modifying files.
 
 **Present findings to user:**
 
@@ -169,17 +201,18 @@ Found [N] critical issues, [N] warnings, [N] info suggestions.
 1. [Suggestion]
 
 **IMPROVEMENT OPTIONS:**
-- **all** - Apply all suggested improvements
-- **critical** - Apply only critical issues
-- **select** - Choose specific items
-- **none** - Keep plan as-is
+- **all** - Select all proposed changes for review
+- **critical** - Select critical fixes for review
+- **select** - Select specific findings for review
+- **none** - Keep plan unchanged
 - **details** - Show more details
 ```
 
-**After user selection:**
-- Apply accepted changes to plan
-- Ensure changes look natural (not "added" or "enhanced")
-- Maintain original plan structure
+After the user selects changes, show the proposed unified diff and wait for the user's explicit approval before writing to the plan file. Preserve the surrounding format and structure. Do not save changes to an inline plan unless the user provides a destination and explicitly approves the diff.
+
+If an approved Pocket plan is changed, set its existing approval/status marker to unapproved using the plan's established format. If it has no such marker, add a clear note that validation edits require another `pocket-planning` Spec Reviewer review before the plan can be treated as approved. Do not proceed to structuring or development; return the changed plan to `pocket-planning` for review, including its recovery checkpoint limits.
+
+If the user declines or has not approved the diff, leave the source plan unchanged.
 
 ---
 
@@ -280,11 +313,14 @@ export function LoginForm() {
 ```
 
 **Step 4: Run test to verify pass**
+```bash
+npm test -- LoginForm.test.tsx
+```
 Expected: PASS
 
 **Step 5: Commit**
 ```bash
-git add .
+git add src/components/LoginForm.tsx test/LoginForm.test.tsx
 git commit -m "feat: add LoginForm component with tests"
 ```
 ```
@@ -298,7 +334,8 @@ git commit -m "feat: add LoginForm component with tests"
 - **Critical Issues:** 0
 - **Warnings:** 1
 - **Info:** 1
-- **Overall Grade:** A
+- **Overall Grade:** B
+- **VERDICT:** APPROVED
 
 ## DRY Analysis
 - No duplicate functionality detected
@@ -309,7 +346,7 @@ git commit -m "feat: add LoginForm component with tests"
 
 ## TDD Analysis
 - Follows red-green-refactor cycle
-- Test commands are specific
+- The test command is specific and the expected result is PASS
 - Minor: Add edge case test for invalid email format
 
 ## Codebase Context
@@ -319,7 +356,9 @@ git commit -m "feat: add LoginForm component with tests"
 
 ## Recommendations
 1. **INFO:** Reuse `Input` component for consistency
-2. **WARNING:** Add error handling test case
+2. **WARNING:** Add an error handling test case
+
+The grade is B because this example contains one warning and no critical issues.
 ```
 
 ---
@@ -378,18 +417,19 @@ git commit -m "feat: add LoginForm component with tests"
 
 ## Integration with Workflows
 
-### With /writing-plans
+### With pocket-planning
 
-After writing-plans creates a plan:
+After `pocket-planning` creates a plan:
 1. User runs `/validate-plan`
 2. Load the generated plan
 3. Perform comprehensive validation
-4. Apply improvements if needed
-5. Proceed to /executing-plans
+4. Report findings without changing the plan
+5. If the user approves proposed edits, show the diff and wait for approval before saving
+6. Return any changed Pocket plan to `pocket-planning` for a new Spec Reviewer review
 
-### With /executing-plans
+### With pocket-structuring and pocket-development
 
-Validated plans have:
+After approval is confirmed by `pocket-planning`, the Pocket pipeline continues through `pocket-structuring` and `pocket-development`. A validation report alone does not approve a plan. Validated plans have:
 - Clear, testable steps
 - Exact file paths
 - Verified DRY/YAGNI/TDD compliance

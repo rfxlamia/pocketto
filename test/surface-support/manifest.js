@@ -1,6 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const { EXPECTED_ROLES, LIB, MANIFEST_PATH, NAMED_CLI_MODULES } = require('./shared');
+const { ROOT, expandManifestIncludes, walkFiles, posixPath } = require('../../test-support/surface-test-utils');
 
 function assertRoleContract(manifest) {
   for (const name of EXPECTED_ROLES) {
@@ -55,4 +57,21 @@ test('manifest declares exactly four explicit roles with no wildcard package sur
 
   assertManifestRelease(manifest);
   assertRoleContract(manifest);
+});
+
+test('every skill entrypoint is owned by exactly one role for each host', () => {
+  const manifest = require(MANIFEST_PATH);
+  const skillEntrypoints = walkFiles(path.join(ROOT, 'skills'))
+    .filter((file) => path.basename(file) === 'SKILL.md')
+    .map((file) => posixPath(path.relative(ROOT, file)));
+
+  for (const entrypoint of skillEntrypoints) {
+    for (const host of ['pi', 'claude']) {
+      const owners = Object.entries(manifest.roles)
+        .filter(([name]) => name.startsWith(`${host}/`))
+        .filter(([, role]) => expandManifestIncludes(role.includes).includes(entrypoint))
+        .map(([name]) => name);
+      assert.equal(owners.length, 1, `${entrypoint} must have exactly one ${host} role owner`);
+    }
+  }
 });

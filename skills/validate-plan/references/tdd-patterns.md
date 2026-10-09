@@ -82,7 +82,7 @@ Expected: PASS
 **Step 6: Commit**
 
 ```bash
-git add .
+git add path/to/changed-file.js path/to/changed-file.test.js
 git commit -m "feat: add functionUnderTest"
 ```
 ```

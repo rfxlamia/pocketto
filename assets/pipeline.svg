@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 460" font-family="'Virgil','Excalifont','Segoe Print','Comic Sans MS',cursive" width="980" height="460">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 520" font-family="'Virgil','Excalifont','Segoe Print','Comic Sans MS',cursive" width="980" height="520">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#8b919b"/>
@@ -94,5 +94,9 @@
   <text class="lbl" x="850" y="350">pocket-education</text>
   <text class="sub" x="850" y="371">you code, it mentors</text>
 
-  <text class="caption" x="490" y="428">14 skills total · works in Claude Code and Pi</text>
+  <rect class="box" x="20" y="404" width="220" height="64" fill="#f1f3f5"/>
+  <text class="lbl" x="130" y="430">validate-plan</text>
+  <text class="sub" x="130" y="451">review plans before execution</text>
+
+  <text class="caption" x="490" y="500">15 skills total · works in Claude Code and Pi</text>
 </svg>

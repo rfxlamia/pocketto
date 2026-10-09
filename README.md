@@ -22,10 +22,10 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 - **Delegate with contracts.** Every subagent gets a "Pocket Packet" — objective, verification, stop conditions. No packet, no spawn.
 - **Gate before done.** Reviews and a hard close step keep finished work from rotting in `IN_PROGRESS` limbo.
 
-14 skills across a local-first Core and an optional Enterprise adapter. Use Core for the full pipeline or standalone skills without GitHub access. If your team opts in, Enterprise consumes Core's durable lifecycle events and owns GitHub reconciliation; Core itself does not call `gh`. Core does not perform remote synchronization. Learning? Opt into [Pocket Education](#pocket-education-opt-in) and the agent becomes a repository-aware mentor — you write the code, it teaches, reviews, and guides.
+15 skills across a local-first Core and an optional Enterprise adapter. Use Core for the full pipeline or standalone skills without GitHub access. If your team opts in, Enterprise consumes Core's durable lifecycle events and owns GitHub reconciliation; Core itself does not call `gh`. Core does not perform remote synchronization. Learning? Opt into [Pocket Education](#pocket-education-opt-in) and the agent becomes a repository-aware mentor — you write the code, it teaches, reviews, and guides.
 
 <p align="center">
-  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development (in-loop audit + phase-level pass) → closing, plus standalone skills (pocket-help, pocket-init, bug-hunting, hotfix, brand-design, structured-research, create-pr, pocket-education)" width="100%">
+  <img src="assets/pipeline.svg" alt="The Pocket pipeline: pitching → grinding → planning → structuring → development (in-loop audit + phase-level pass) → closing, plus standalone skills (pocket-help, pocket-init, bug-hunting, hotfix, brand-design, structured-research, validate-plan, create-pr, pocket-education)" width="100%">
 </p>
 
 ## Install
@@ -102,7 +102,7 @@ Or just fix something:
 /pocketto:hotfix        "bump the rate-limit window to 60s"
 ```
 
-## The 14 skills
+## The 15 skills
 
 ### Pipeline (chained)
 
@@ -130,6 +130,7 @@ Lighter, single-purpose, no pipeline. Reach for these for everyday work.
 | `hotfix` | Small-to-medium change where the full pipeline is overkill |
 | `brand-design` | Design system, creative brief, brand identity, UI tokens |
 | `structured-research` | Validate an explicit assumption before it enters planning |
+| `validate-plan` | Review plans against DRY, YAGNI, TDD, and codebase context |
 | `create-pr` | Open the phase PR linked to the Pocket issue (enterprise mode) |
 
 <details>

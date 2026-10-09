@@ -40,6 +40,7 @@ const TASK_ARCHIVES = [
   'skills/pocket-grinding/pocket-grinding.skill',
   'skills/pocket-init/pocket-init.skill',
   'skills/pocket-help/pocket-help.skill',
+  'skills/validate-plan/validate-plan.skill',
   'skills/create-pr/create-pr.skill',
   'skills/pocket-enterprise/pocket-enterprise.skill',
 ];

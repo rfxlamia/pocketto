@@ -46,6 +46,7 @@ const STANDALONE_DIAGRAM_LABELS = [
 	"hotfix",
 	"brand-design",
 	"structured-research",
+	"validate-plan",
 	"create-pr",
 	"pocket-education",
 ];
@@ -141,7 +142,7 @@ test("pipeline diagram inventory stays aligned across published assets", () => {
 		.map((match) => match[1])
 		.sort();
 	assert.deepEqual(svgLabels, [...ALL_DIAGRAM_LABELS].sort(), "SVG skill inventory differs");
-	assert.match(svg, />14 skills total[^<]*<\/text>/, "SVG total must be 14");
+	assert.match(svg, />15 skills total[^<]*<\/text>/, "SVG total must be 15");
 
 	const activeElements = drawing.elements.filter((element) => !element.isDeleted);
 	const drawingIds = new Set(activeElements.map((element) => element.id));
@@ -156,7 +157,7 @@ test("pipeline diagram inventory stays aligned across published assets", () => {
 	);
 	assert.ok(
 		activeElements.some(
-			(element) => element.type === "text" && element.text.startsWith("14 skills total"),
+		(element) => element.type === "text" && element.text.startsWith("15 skills total"),
 		),
 		"Excalidraw total must be 14",
 	);
