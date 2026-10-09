@@ -243,6 +243,7 @@ module.exports = {
   ROOT,
   assertArchiveMatchesSource,
   expectedRoleArchiveMembers,
+  expandManifestIncludes,
   findForbiddenPaths,
   inspectRoleArchive,
   posixPath,

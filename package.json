@@ -115,6 +115,8 @@
     "skills/pocket-structuring/SKILL.md",
     "skills/structured-research/SKILL.md",
     "skills/structured-research/references/**",
+    "skills/validate-plan/SKILL.md",
+    "skills/validate-plan/references/**",
     "assets/**",
     "llms.txt",
     "README.md"

@@ -17,6 +17,7 @@ const {
 
 const CORE_ROLES = ['pi/core', 'claude/core'];
 const CORE_SKILLS = [
+  'validate-plan',
   'pocket-grinding',
   'pocket-init',
   'pocket-help',
