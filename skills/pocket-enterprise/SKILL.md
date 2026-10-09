@@ -11,7 +11,7 @@ Pocket Enterprise is an optional, additive adapter for teams that explicitly cho
 
 ## Release and compatibility
 
-The `surfaces.json` manifest has schema `1` and defines exactly `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Enterprise roles are deltas requiring their matching Core role. Release versions are package `4.0.0`, CLI `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `1`, adapter contract `1`, and surface manifest `1`; these are independent version boundaries.
+The `surfaces.json` manifest has schema `1` and defines exactly `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Enterprise roles are deltas requiring their matching Core role. Release versions are package `4.1.0`, CLI `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `1`, adapter contract `1`, and surface manifest `1`; these are independent version boundaries.
 
 | Core | Enterprise | Result |
 |------|------------|--------|

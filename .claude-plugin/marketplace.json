@@ -5,7 +5,7 @@
     "url": "https://github.com/rfxlamia"
   },
   "description": "Pocket-driven development skills for Claude Code",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "surface_manifest": "./surfaces.json",
   "surfaces": {
     "core": "claude/core",

@@ -53,7 +53,7 @@ pi install npm:pocketto-pi
 
 ### Release surfaces
 
-Version `4.0.0` is built from the explicit `surfaces.json` manifest. It defines exactly four role names:
+Version `4.1.0` is built from the explicit `surfaces.json` manifest. It defines exactly four role names:
 
 | Role | Host | Contents |
 |------|------|----------|
@@ -312,7 +312,7 @@ The cross-platform Node CLI requires Node.js ≥ 18. Core commands work locally.
 
 For progressed v3 plans refused by migration (`PIN_V3_REQUIRED`), pin the compatible v3 CLI with `npx -y pocketto-pi@3.1.3` and finish the plan under v3.
 
-Lifecycle CLI flags above use `CONTRACT=3`; distribution version `4.0.0`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1` are independently versioned. State flow remains `WAITING` → `REVIEW` → `DONE` | `BLOCKED`. Core lifecycle events contain artifact references and opaque proof references, never GitHub IDs or credentials.
+Lifecycle CLI flags above use `CONTRACT=3`; distribution version `4.1.0`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1` are independently versioned. State flow remains `WAITING` → `REVIEW` → `DONE` | `BLOCKED`. Core lifecycle events contain artifact references and opaque proof references, never GitHub IDs or credentials.
 
 ## Changelog
 

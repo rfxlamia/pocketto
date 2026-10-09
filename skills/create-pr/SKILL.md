@@ -9,7 +9,7 @@ Enterprise-owned recorder for opening or reusing a pull request on the **current
 
 **Core principle:** This is an explicit user-triggered recorder. It creates or discovers a PR, records its identity, and surfaces non-blocking warnings. Phase summaries and inline verdicts belong to the Enterprise adapter, not this skill or Core.
 
-**v4 boundary:** Package `4.0.0` uses `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `1`, adapter contract `1`, and surface manifest `1`. This skill is part of the additive Enterprise role and requires matching Core. Core is local-first: it does not call `gh`, it does not merge pull requests, and it does not close issues. This recorder may call GitHub only after explicit user invocation and successful Enterprise preflight; it never merges a PR or closes an issue.
+**v4 boundary:** Package `4.1.0` uses `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `1`, adapter contract `1`, and surface manifest `1`. This skill is part of the additive Enterprise role and requires matching Core. Core is local-first: it does not call `gh`, it does not merge pull requests, and it does not close issues. This recorder may call GitHub only after explicit user invocation and successful Enterprise preflight; it never merges a PR or closes an issue.
 
 **Use this when:** The user requests a phase PR, or explicitly confirms an Enterprise offer, and the target phase is in `REVIEW`.
 

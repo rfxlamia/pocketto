@@ -43,7 +43,7 @@ function assertArchiveRebuildConsumesTheManifest() {
 
 function assertExplicitPackageListIncludesReleaseAssets() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  assert.equal(pkg.version, '4.0.0');
+  assert.equal(pkg.version, '4.1.0');
   for (const entry of pkg.files || []) {
     assert.ok(
       entry !== 'skills/**' && entry !== 'skills/*' && entry !== 'cli/**',

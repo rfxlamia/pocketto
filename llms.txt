@@ -1,6 +1,6 @@
 # Pocketto
 
-> Pocketto `4.0.0` provides local-first AI coding workflows for Claude Code and Pi. Core is useful without GitHub or Enterprise; the optional Enterprise adapter consumes durable neutral lifecycle events and owns all remote reconciliation. An opt-in Pocket Education mode turns the agent into a repository-aware mentor — the human implements, the agent teaches and reviews. The 14 skills include a 6-stage pipeline and 8 standalone skills.
+> Pocketto `4.1.0` provides local-first AI coding workflows for Claude Code and Pi. Core is useful without GitHub or Enterprise; the optional Enterprise adapter consumes durable neutral lifecycle events and owns all remote reconciliation. An opt-in Pocket Education mode turns the agent into a repository-aware mentor — the human implements, the agent teaches and reviews. The 15 skills include a 6-stage pipeline and 9 standalone skills.
 
 ## Release surfaces
 

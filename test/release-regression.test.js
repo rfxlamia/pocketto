@@ -144,7 +144,7 @@ function assertPackedPackageMetadata(extracted) {
   const packageJson = JSON.parse(fs.readFileSync(path.join(extracted, 'package.json'), 'utf8'));
   const packedManifest = JSON.parse(fs.readFileSync(path.join(extracted, 'surfaces.json'), 'utf8'));
   const packedVersion = require(path.join(extracted, 'cli', 'lib', 'version.js'));
-  assert.equal(packageJson.version, '4.0.0');
+  assert.equal(packageJson.version, '4.1.0');
   assert.equal(packedManifest.schema, 1);
   assert.equal(packedManifest.release.major, 4);
   assert.deepEqual(Object.keys(packedManifest.roles).sort(), [...RELEASE_ROLES].sort());
@@ -158,7 +158,7 @@ function assertPackedPackageMetadata(extracted) {
       SURFACE_MANIFEST: packedVersion.SURFACE_MANIFEST,
     },
     {
-      CLI_VERSION: '4.0.0',
+      CLI_VERSION: '4.1.0',
       CONTRACT: 3,
       PIPELINE: 5,
       LIFECYCLE_SCHEMA: 1,
@@ -213,7 +213,7 @@ function assertPackedRoleArchives(extracted, staged, manifest, selectedPaths) {
 function assertPublicCli(extracted, temporaryRoot) {
   const packedCli = path.join(extracted, 'cli', 'index.js');
   const versionOutput = execFileSync('node', [packedCli, '--version'], { cwd: temporaryRoot, encoding: 'utf8' });
-  assert.equal(versionOutput, 'pocketto-pi 4.0.0 (contract 3)\n');
+  assert.equal(versionOutput, 'pocketto-pi 4.1.0 (contract 3)\n');
 
   const planPath = path.join(temporaryRoot, 'execution-plan.md');
   fs.writeFileSync(planPath, PLAN, 'utf8');

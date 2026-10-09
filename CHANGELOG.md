@@ -2,6 +2,18 @@
 
 All notable changes to Pocketto are documented here, newest first. Dates are the tag's commit date.
 
+## 4.1.0 — 2026-10-09
+
+**Fixed (issue #64, artifact lifecycle).** Event validation no longer masks nested artifact-ref errors: a bad `root`, escaping `path`, invalid `sha256`, or stale digest now surfaces its specific `LIFECYCLE_*` code instead of collapsing to `LIFECYCLE_BAD_ARTIFACT`. Artifact-ref canonicalization treats `path` as an exact code-point identity rather than normalizing it, so two references that differ only by Unicode normalization no longer hash the same.
+
+**Fixed (CLI correctness).** `structure` now rejects duplicate task IDs, unknown task references, dependency cycles, and dependency-order inversions, and fails cleanly when the plan file is missing. `reconcile` requires each finding to carry a non-empty string `fingerprint`. The Enterprise `install`/`preflight` parser accepts exactly one project root and rejects unknown options. Enterprise retry redaction also masks `--token`, `--secret`, `--password`, `--auth`, and `--credential` flags.
+
+**Added.** Standalone `validate-plan` skill — reviews a plan against DRY, YAGNI, TDD, and codebase context (15 skills total). `pocket-development` writes durable phase completion notes and an append-only closeout journal, with a new `parallel-group.md` reference for parallel execution.
+
+**Pin guidance.** `PIPELINE_FLOOR_CLI` moves `3.0.1` → `3.1.3`, so a plan stuck under the prior pipeline pins to the release that last spoke it; the README recovery command now uses `npx -y pocketto-pi@3.1.3`.
+
+No protocol change: `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1` are unchanged from 4.0.0.
+
 ## 4.0.0 — 2026-09-19
 
 **Core / Enterprise split.** Package version `4.0.0` ships four manifest roles: `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Core is local-first and commits neutral lifecycle state/events without GitHub calls. Enterprise is an optional additive adapter that requires matching Core and fails closed on missing or incompatible installations.
