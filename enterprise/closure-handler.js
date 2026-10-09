@@ -142,7 +142,7 @@ function appendCloseoutFile(planDir, content, opts, expectedRoot) {
     } catch (error) {
       if (!error || error.code !== 'ENOENT') throw error;
     }
-    if (current.includes('<!-- pocket-closeout:plan-closed -->')) return;
+    if (current.includes('<!-- pocket-closeout:enterprise-plan-closed -->')) return;
 
     const separator = current.length === 0
       ? ''

@@ -63,7 +63,7 @@ Write for a reader who did not follow the agent session: translate task names in
 
 ## Final plan section
 
-Append this once, after `log close` succeeds:
+Append this once, after `log close` succeeds. This Core marker identifies the plan summary; it is distinct from Enterprise's `<!-- pocket-closeout:enterprise-plan-closed -->` marker so Core and Enterprise summaries can coexist regardless of write order.
 
 ```markdown
 ## Plan closed

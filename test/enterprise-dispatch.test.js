@@ -617,6 +617,11 @@ test('plan-closed drain appends one marked final section and preserves the phase
     '',
     'The phase report must survive Enterprise closure reconciliation.',
     '',
+    '## Plan closed',
+    '<!-- pocket-closeout:plan-closed -->',
+    '',
+    'Core already wrote its final plan summary.',
+    '',
   ].join('\n');
   fs.writeFileSync(closeoutPath, phaseJournal);
 
@@ -624,9 +629,11 @@ test('plan-closed drain appends one marked final section and preserves the phase
   assert.equal(first.delivery.status, 'succeeded');
   const afterFirstDrain = fs.readFileSync(closeoutPath, 'utf8');
   assert.ok(afterFirstDrain.startsWith(phaseJournal), 'closure reconciliation must preserve the existing phase journal verbatim');
-  assert.match(afterFirstDrain, /<!-- pocket-closeout:plan-closed -->/,
-    'the appended final section must carry a stable idempotency marker');
-  assert.equal((afterFirstDrain.match(/<!-- pocket-closeout:plan-closed -->/g) || []).length, 1);
+  assert.match(afterFirstDrain, /<!-- pocket-closeout:enterprise-plan-closed -->/,
+    'Enterprise must append its summary under an adapter-specific marker');
+  assert.equal((afterFirstDrain.match(/<!-- pocket-closeout:enterprise-plan-closed -->/g) || []).length, 1);
+  assert.equal((afterFirstDrain.match(/<!-- pocket-closeout:plan-closed -->/g) || []).length, 1,
+    'the existing Core marker must remain independent');
 
   const replay = runCoreDrainEvent(fixture, lifecyclePath, lifecycle, env, fixture.closeEvent);
   assert.equal(replay.delivery.status, 'succeeded');

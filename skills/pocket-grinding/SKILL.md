@@ -27,8 +27,8 @@ Do NOT use for:
 - **Follow the user's stated scope.** Treat clear instructions, corrections, and approvals already given as authorization. Ask only when a consequential product decision remains open; do not ask the user to repeat a decision or choose a numbered option.
 - **Keep grinding in discovery.** Do not implement product code, scaffolding, or migrations as part of this skill. Hand off an approved or already-authorized spec to pocket-planning for implementation planning.
 - **Ground validation in evidence.** A checklist item passes only when supported by inspected codebase evidence or, for version-dependent external behavior, current documentation for the relevant version. Record the evidence with the result.
-- **Keep independent review.** Run the edge-case hunter after writing GWT scenarios. If a review is inconclusive or its dispatch fails, change the prompt or dispatch route and try again; a cycle count alone is not a reason to stop.
-- **Resolve failed validation with a changed action.** When evidence contradicts a design, revise the proposal and re-check the affected claims. When evidence is missing, inspect another relevant source or record the specific unresolved question; do not mark it PASS by assumption.
+- **Keep independent review with bounded recovery.** Run the edge-case hunter after writing GWT scenarios. After the initial review attempt, allow at most two materially different prompt/context or reviewer-route recovery rounds. At the cap, report `RECOVERY_CHECKPOINT`; leave the review unresolved and do not hand off as approved. Resume only after explicit user authorization for a new bounded window.
+- **Resolve failed validation with a changed action.** When evidence contradicts a design, revise the proposal and re-check the affected claims. When evidence is missing, inspect up to two distinct relevant sources or modes after the initial attempt, then record `UNVERIFIED` and the unresolved question rather than searching indefinitely or marking it PASS by assumption.
 - **Honor the authorized handoff.** If the user asked for the full spec-to-planning flow, that instruction authorizes the handoff once the required artifacts are ready. Otherwise, present the completed spec and wait for approval before invoking pocket-planning.
 
 ---
@@ -250,8 +250,8 @@ Dispatch a read-only subagent named `edge-case-hunter` to review the Phase 4 sto
 **Next action:**
 - `Clear` → proceed to Phase 5.
 - `Needs Clarification` → resolve consequential behavior questions, update the affected scenarios, and run a focused independent review of the changes.
-- Review is inconclusive or dispatch fails → improve the review prompt or try another available subagent route. Do not repeat an unchanged attempt or treat a retry count as a terminal limit.
-- If no independent reviewer can run, state that limitation and leave the review status unresolved. Do not claim it passed; ask the user only if they want to proceed without the required independent review.
+- Review is inconclusive or dispatch fails → improve the review prompt or try another available subagent route, for at most two materially different recovery rounds. At the cap, report `RECOVERY_CHECKPOINT`, state why the independent review is incomplete, and wait for explicit user authorization before another window. Do not claim it passed.
+- If no independent reviewer can run within the two-round budget, state that limitation and leave the review unresolved at `RECOVERY_CHECKPOINT`. Do not claim it passed or hand off; wait for explicit user authorization before a new bounded window or an explicit decision to proceed without the required independent review.
 - Do not move to design or handoff while blocking behavior questions remain unresolved.
 
 ---
@@ -300,7 +300,7 @@ Do not mark this phase complete from the Phase 1 summary or a checklist alone. R
 2. **Inspect the codebase.** Read the affected modules and their callers, interfaces, data models or schemas, configuration, tests, migrations, and existing patterns. Use repository search to find all relevant references; do not infer that a pattern is absent from one empty search result.
 3. **Verify external behavior.** For each version-dependent library/framework/API/platform claim, identify the version in the lockfile or the version proposed for adoption. Use Context7 MCP's `resolve-library-id` followed by `query-docs`, selecting the matching version ID when available. If Context7 is unavailable or inconclusive, use the vendor's versioned documentation, API reference, or release notes. For standards or other changing external constraints, use current primary sources. Record the direct source, version, and publication or access date.
 4. **Compare evidence with the spec.** For each claim, state whether the code or documentation supports it, contradicts it, or leaves it unresolved. Use file paths and symbols (or line references where stable) for code evidence, and direct source links plus version/date for external evidence.
-5. **Resolve findings.** Revise the proposal when evidence contradicts it, then re-check the changed claims. If a source is unavailable or inconclusive, try a different relevant source or mode. Do not repeat an unchanged search or stop solely because a retry count was reached.
+5. **Resolve findings.** Revise the proposal when evidence contradicts it, then re-check the changed claims. If a source is unavailable or inconclusive, try up to two distinct relevant sources or modes after the initial attempt. Do not repeat an unchanged search. If the evidence remains inconclusive at the cap, mark the claim `UNVERIFIED`, explain its impact, and carry it as an open question or explicit assumption.
 
 Use Context7 for library documentation; it cannot validate this repository's internal architecture. Use the codebase for internal structure and official current sources for external behavior. If a claim cannot be verified after distinct sources, mark it `UNVERIFIED`, explain its impact, and carry it as an open question or explicit assumption. Never mark it `PASS` by inference.
 

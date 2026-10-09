@@ -25,7 +25,7 @@ Do NOT use:
 
 - **Start from the user's request.** Use a clear handoff, correction, or approval already given. Do not ask the user to repeat a decision or choose a numbered option.
 - **Recover missing context first.** Search the conversation and expected spec directory before reporting an input missing. Treat open questions as optional; record `none identified` when there are none.
-- **Preserve independent review.** A separate Spec Reviewer must review the plan, and a Test Strategy Audit must run when its triggers fire. If review is inconclusive, fix the review context or try another available reviewer route; a cycle count alone is not a reason to stop.
+- **Preserve independent review with bounded recovery.** A separate Spec Reviewer must review the plan, and a Test Strategy Audit must run when its triggers fire. After the initial review, allow at most two materially different correction/review or reviewer-recovery rounds for each review gate. At the cap, report `RECOVERY_CHECKPOINT`, preserve findings, and wait for explicit user authorization before another bounded window. Never claim approval or hand off with unresolved blocking findings.
 - **Use evidence for library decisions.** Check the version in the lockfile or proposed dependency and query version-matched documentation. When a source is missing, try official documentation or release notes and record what remains unverified.
 - **Honor the authorized handoff.** If the user clearly requested plan generation and structuring, that instruction authorizes the plan handoff once the required checks pass. Otherwise, present the completed plan and wait for approval before generating derived execution artifacts. This approval never authorizes implementation.
 
@@ -343,8 +343,8 @@ Return: Status (Approved | Issues Found | Needs Context) + specific findings wit
 - Status = Needs Context → check the spec, preflight summary, and plan for the missing information; provide it and request a focused review. If the missing item is a consequential user decision, ask only for that decision.
 - If the reviewer repeats a finding, verify whether the plan addresses it. Correct the plan or provide evidence that the finding does not apply; do not accept or reject it by repetition alone.
 - If the review is vague, repair the prompt with the exact task and step, then try a fresh reviewer or another available dispatch route. Never re-run an unchanged failed attempt.
-- If no independent reviewer can run after trying available routes, report the review as incomplete. Do not claim approval; ask the user only if they want to proceed without the required review.
-- A cycle count is a cue to change the review approach, not a terminal limit. Continue until the plan is approved or a specific human decision or unavailable capability remains.
+- If no independent reviewer can run within the two-round budget, report the review as incomplete at `RECOVERY_CHECKPOINT`. Do not claim approval or hand off; wait for explicit user authorization before a new bounded window or an explicit decision to proceed without the required review.
+- A review recovery round must change the plan, context, prompt, or independent review route. After two rounds with blocking findings or an incomplete review, stop at `RECOVERY_CHECKPOINT`; name the findings, attempts, evidence, and one proposed next strategy. Keep the plan unapproved and do not hand it off. Resume only after the user explicitly authorizes a new bounded window.
 - Full reviewer dispatch protocol → `references/spec-reviewer-prompt.md`
 
 ---
@@ -377,7 +377,7 @@ Return: FINDINGS ONLY — missing behavior/edge case, wrong test level,
 Apply findings by editing affected tasks in place. Then, before Phase 7:
 
 - Task added → re-run the Phase 3 circular dependency check, refresh the Phase 2 file map, and update `**Total tasks:**`, the `Recommended Order` and `Parallelizable Groups` blocks, and the Plan Summary table. A new task changes the topology; stale overview blocks contradict the packets.
-- **The confirmation review is triggered by mutation, not by the audit having run.** `Clean` → nothing changed → skip it → Phase 7. `Findings` applied → re-dispatch the Spec Reviewer on the changed tasks, since the review must cover the plan the user actually sees. If further valid changes are needed, fix them and review the changed tasks again. If feedback repeats or becomes inconclusive, change the prompt or reviewer route; do not stop solely because a retry count was reached.
+- **The confirmation review is triggered by mutation, not by the audit having run.** `Clean` → nothing changed → skip it → Phase 7. `Findings` applied → re-dispatch the Spec Reviewer on the changed tasks, since the review must cover the plan the user actually sees. If further valid changes are needed, fix them and review the changed tasks again, up to the same two-round cap. If feedback repeats or becomes inconclusive, change the prompt or reviewer route; at the cap, stop at `RECOVERY_CHECKPOINT` and keep the plan unapproved.
 
 ---
 
@@ -451,9 +451,11 @@ Preserve existing authorization when the user requests edits to that plan unless
 change the requested scope or withdraw the handoff. **Only a version that has passed
 the tier its edits require may be approved or handed off.**
 
-Each user-requested edit round is revalidated at its own tier. Reviewer retries are separate:
-when findings repeat or the review becomes inconclusive, change the prompt or reviewer route
-and continue until approved or a specific human decision or unavailable capability remains.
+Each user-requested edit round is revalidated at its own tier. Reviewer recovery is separate
+from user-requested edits but remains bounded to two materially different rounds per review
+gate. When findings repeat or the review becomes inconclusive, change the prompt or reviewer
+route. At the cap, report `RECOVERY_CHECKPOINT`, preserve the unresolved findings, and wait
+for explicit user authorization before another bounded window. Do not hand off an unapproved plan.
 
 ### Step 4: Route to pocket-structuring (when authorized)
 

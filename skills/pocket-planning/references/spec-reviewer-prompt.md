@@ -88,10 +88,11 @@ Prompt:
 | Issues Found | Check each finding against the spec and plan, fix valid issues, and request an independent review of the changed plan |
 | Needs Context | Inspect the spec, preflight summary, and plan for the missing input; provide it and request a focused review. Ask the user only if it is a consequential decision unavailable from context. |
 
-**Fix loop:** Fix → re-dispatch → repeat until Approved or a specific human decision or unavailable review capability remains. Do not proceed past Phase 5 with unresolved blocking issues.
+**Bounded fix loop:** After the initial review, allow at most two materially different plan-correction/review rounds. If blocking issues remain or no independent review route can complete within that budget, report `RECOVERY_CHECKPOINT` with findings, attempts, evidence, and one proposed next strategy. Do not proceed past Phase 5 or hand off an unapproved plan. Resume only after explicit user authorization for a new bounded window.
 
 If the reviewer repeats a finding, check whether the plan changed and whether the finding still applies. If the review is vague, narrow the prompt to the affected task and step. If the same disagreement persists, dispatch a fresh `spec-reviewer` subagent or use another independent review route; include the reviewer persona and the relevant spec and plan excerpts.
 
-Do not claim approval without an independent review result. If no reviewer route is
-available after trying alternatives, report the exact limitation and unresolved
-findings. Ask the user only if they need to decide whether to proceed without review.
+Do not claim approval without an independent review result. Bound alternative reviewer
+routes to the two-round recovery budget. At the cap, report the exact limitation and unresolved
+findings and wait for explicit user authorization before another window. Never proceed as if
+review passed when it did not.

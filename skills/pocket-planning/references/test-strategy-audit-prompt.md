@@ -151,9 +151,11 @@ Prompt:
    not reach Phase 7 unreviewed. A `Clean` audit edits nothing, so re-reviewing it would be a whole-plan
    pass with no changed input — exactly the cost this phase exists to avoid.
 
-   When it does run, review the changed tasks until they are approved. If findings repeat or the
-   review becomes inconclusive, narrow the prompt or use a fresh reviewer route. Do not stop
-   solely because a retry count was reached.
+   When it does run, review the changed tasks through the two-round recovery budget. If findings
+   repeat or the review becomes inconclusive, narrow the prompt or use a fresh reviewer route.
+   Allow at most two materially different correction/review rounds. At the cap,
+   report `RECOVERY_CHECKPOINT` for the affected tasks, preserve the unresolved findings, and
+   wait for explicit user authorization before another bounded window.
 6. Record the outcome for the Phase 7 approval message — one of:
    - `Test strategy audit: skipped — no trigger fired`
    - `Test strategy audit: run on <tasks> — Clean, no findings`
@@ -165,4 +167,4 @@ Prompt:
 - First inspect the spec, Preflight Summary, relevant code, and task objective for the missing context. Do not ask the user for information already present there.
 - If the plan is unclear, revise the affected objective or test intent and dispatch a focused review of that task. If the reviewer cannot assess it, improve the review prompt or try another independent reviewer route.
 - Preserve partial findings and continue with tasks the audit could assess. Ask the user only when a missing product decision or framework choice cannot be inferred from project evidence.
-- If no independent route can assess the affected task, mark that task's audit `INCOMPLETE`, explain the gap and consequence, and do not call it clean. A retry count alone does not block unrelated planning work.
+- If no independent route can assess the affected task within the two-round budget, mark that task's audit `INCOMPLETE`, explain the gap and consequence, and do not call it clean. This checkpoint does not block unrelated planning work, but the plan cannot be handed off while the affected blocking audit remains incomplete.

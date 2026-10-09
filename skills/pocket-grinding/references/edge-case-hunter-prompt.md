@@ -89,4 +89,4 @@ Prompt:
 - Ask only one blocking clarification per user message.
 - After an answer changes behavior, update the affected scenarios and request an independent review of those changes.
 - If the review is vague or repeats a resolved finding, narrow the prompt to the affected scenario, provide the corrected context, or dispatch a fresh `edge-case-hunter` subagent through another available route.
-- A review-cycle count is a cue to change the review approach, not a stopping condition. If no independent reviewer can run after trying available routes, report that limitation accurately; never claim the review passed.
+- After the initial review, use at most two materially different recovery rounds (for example, repair the context, then try a distinct independent reviewer route). At the cap, report `RECOVERY_CHECKPOINT` with the unresolved scenarios and exact review limitation. Do not claim the review passed or hand off until the user explicitly authorizes another bounded window or proceeding without review.

@@ -34,7 +34,7 @@ test('CYCLE 1: plan-closed persists canonical tasklist proof and reconciles loca
   assert.match(successGh.comments[0].body, /\*\*Status:\*\* DONE/);
   assert.match(successGh.comments[0].body, /T1/);
   assert.ok(fs.readFileSync(path.join(success.planDir, 'closeout.md'), 'utf8')
-    .startsWith('<!-- pocket-closeout:plan-closed -->\n\n## Plan closed — demo-plan\n'));
+    .startsWith('<!-- pocket-closeout:enterprise-plan-closed -->\n\n## Plan closed — demo-plan\n'));
   const successMeta = enterpriseMeta.readMetaFor(success.specDir);
   assert.equal(successMeta.github_issue.tasklist.event_id, successEvent.event_id);
   assert.equal(successMeta.github_issue.tasklist.marker, TASKLIST_MARKER);

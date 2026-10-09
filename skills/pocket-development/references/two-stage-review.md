@@ -39,9 +39,9 @@ The gate SHALL check, in order:
 4. **Parallel-group in-worktree pass:** with cwd set to the task worktree, `git branch --show-current` MUST equal `task/<task_id>`. A mismatch is a mechanical gate failure (wrong branch / CWD discipline).
 5. If the plan specifies no command at all (neither a test command nor a validation command), the main agent SHALL skip every command check and proceed straight to the auditor.
 
-On any mechanical failure the main agent SHALL re-dispatch the implementer with the failure reason (for example, "tests failing" or "no commit") and SHALL NOT dispatch the auditor. A mechanical failure consumes no round: `loop_info` is unchanged.
+On a mechanical failure the main agent SHALL NOT dispatch the auditor. Each failed gate consumes one recovery round before an implementer re-dispatch, including a failure before the first audit. Decrement `loop_info.cycles_remaining` for that round and append the materially different attempt to `loop_info.strategies`. If no round remains, stop and report `RECOVERY_CHECKPOINT`; do not re-dispatch the implementer. A gate failure after a correction attempt that requires another implementer dispatch consumes the next round.
 
-After a refactor or fix round returns, the main agent SHALL run this same mechanical gate again before re-dispatching the auditor. Tests going red after a refactor is a mechanical failure: re-dispatch the implementer; record the recovery without treating it as a reason to stop (see [Review cycles and recovery](#review-cycles-and-recovery)).
+After a refactor or fix round returns, the main agent SHALL run this same mechanical gate again before re-dispatching the auditor. Tests going red after a refactor is a mechanical failure: re-dispatch the implementer only if another recovery round remains, and record the changed strategy (see [Review cycles and recovery](#review-cycles-and-recovery)).
 
 ## Audit input
 
@@ -91,14 +91,14 @@ A verdict that contains any Critical or Important finding SHALL enter a fix or r
 
 ## Review cycles and recovery
 
-`max_cycles: 2` is a hard cap of two correction rounds after the initial attempt. Each round must use a materially different recovery strategy and consumes one `cycles_remaining` when entered. A mechanical-gate failure before the first audit also consumes a round. `current_cycle` counts audits, so it may reach 3 (initial audit plus two re-audits), but never exceed `max_cycles + 1`. A cap is a mandatory user checkpoint, not a verdict that the task is BLOCKED.
+`max_cycles: 2` is a hard cap of two correction rounds per recovery window. Each round is one implementer correction/re-dispatch attempt, uses a materially different strategy, and consumes one `cycles_remaining` when entered. A failed mechanical gate consumes a round before its retry; if that retry also fails, the next dispatch needs another remaining round. `current_cycle` counts audits within the current window, so it may reach 3 (initial audit plus two re-audits), but never exceed `max_cycles + 1`. A cap is a mandatory user checkpoint, not a verdict that the task is BLOCKED. `loop_info.recovery_window` distinguishes a user-authorized new window; see [Resume](#resume).
 
 **Consumes one round** (decrement `loop_info.cycles_remaining` once when the round is entered):
 
-- a fix/refactor round entered because an audit emitted any Critical or Important finding, including a refactor-heuristic finding
-- another fix/refactor round entered because the re-audit still has a Critical or Important finding, including a new finding introduced by the previous fix
+- each implementer correction/re-dispatch entered because an audit emitted any Critical or Important finding, including a refactor-heuristic finding
+- each implementer re-dispatch needed after a mechanical-gate failure
 
-The finding and the fix/refactor it triggers are one consuming event, not two. A single re-audit that both re-states an unfixed Critical/Important and reports a new finding starts at most one next round.
+The findings that trigger one implementer dispatch are one consuming event, not one round per finding. A single re-audit that both re-states an unfixed Critical/Important and reports a new finding starts at most one next round.
 
 **Does not consume a fix round:**
 
@@ -114,9 +114,9 @@ Auditor infrastructure failure does not consume a correction round. Bound recove
 3. If the advisor cannot complete the review, diagnose recoverable tool or input failures, then stop and report the exact human action needed. Preserve the task state and review history.
 4. Use `auditor-unavailable` only when no independent review route is available until a human restores or authorizes a required capability. Record that exact dependency and how the user can unblock it.
 
-On a clean first PASS, the artifact SHALL record `loop_info.current_cycle: 1`, `max_cycles: 2`, and `cycles_remaining: 2`.
+On a clean first PASS, the artifact SHALL record `loop_info.recovery_window: 1`, `current_cycle: 1`, `max_cycles: 2`, and `cycles_remaining: 2`.
 
-After each correction round, update the same verdict artifact and decrement the remaining budget. If Critical or Important findings remain when `cycles_remaining` reaches zero, stop automatic correction and report `RECOVERY_CHECKPOINT` with the unresolved findings, attempted strategies, evidence, and one concrete next strategy. Keep `overall: "REVIEW_FAIL"`; do not label the task BLOCKED solely because the cap was reached. Ask the user whether to authorize another bounded correction window. Resume only under that explicit authorization, with a fresh two-round budget and a different strategy. `REVIEW_BLOCKED` with `audit-failed` remains reserved for a specific human decision, information, access, or authorization needed to choose a safe correction; record that dependency and unblock action in `fix_instructions`.
+After each correction round, update the same verdict artifact and decrement the remaining budget. If Critical or Important findings remain when `cycles_remaining` reaches zero, stop automatic correction and report `RECOVERY_CHECKPOINT` with the unresolved findings, attempted strategies, evidence, and one concrete next strategy. Keep `overall: "REVIEW_FAIL"`; do not label the task BLOCKED solely because the cap was reached. On resume, a checkpoint never triggers an automatic dispatch. Ask the user whether to authorize another bounded correction window. Only with explicit authorization, append a snapshot of the closed window to `loop_info.prior_windows`, increment `loop_info.recovery_window`, reset `current_cycle` to 1 and `cycles_remaining` to 2, and start with a materially different strategy. Do not reset `max_cycles`. `REVIEW_BLOCKED` with `audit-failed` remains reserved for a specific human decision, information, access, or authorization needed to choose a safe correction; record that dependency and unblock action in `fix_instructions`.
 
 ## BLOCKED categories
 
@@ -169,7 +169,7 @@ The skip stub JSON (verbatim):
   "stage_2": { "status": "PASS", "strengths": [], "issues": [], "assessment": "Approved" },
   "overall": "REVIEW_PASS",
   "fix_instructions": "",
-  "loop_info": { "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0 },
+  "loop_info": { "recovery_window": 1, "current_cycle": 1, "max_cycles": 1, "cycles_remaining": 0, "strategies": [], "prior_windows": [] },
   "skip_reason": "no_file_changes",
   "reviewed_sha": "<task.done_sha>"
 }
@@ -185,7 +185,7 @@ The file SHALL conform to `skills/pocket-development/references/review-report-te
 - `overall` (`REVIEW_PASS` | `REVIEW_FAIL` | `REVIEW_BLOCKED`)
 - `reviewed_sha`
 - `fix_instructions` (empty string on PASS)
-- `loop_info` — the durable round counter: `current_cycle`, `max_cycles: 2` (except the empty-diff skip stub, which keeps `max_cycles: 1` as written above), `cycles_remaining`
+- `loop_info` — durable per-window recovery state: `recovery_window` (starts at `1`), `current_cycle` (audit number within this window), `max_cycles: 2` (except the empty-diff skip stub, which keeps `max_cycles: 1` as written above), `cycles_remaining`, `strategies` (attempts in this window), and `prior_windows` (closed-window snapshots, if any)
 - `merge_recovery_consumed` (optional, boolean) — compatibility/history marker indicating that merge recovery has started
 - `merge_recovery_round` (optional, integer) — current bounded merge-conflict recovery round, maximum `2` before `RECOVERY_CHECKPOINT`; applies separately from the task's in-loop audit budget
 - `merge_recovery_stage` (optional) — `implementer` | `gate` | `auditor` | `merge_retry` | `parallel-conflict`; persist the current step on `<plan_dir>/reviews/<task_id>-review.json` and mirror it on peer group tasks involved in the conflict. Resume an interrupted step; after a failed merge retry, `parallel-conflict` records that attempt. See `parallel-group.md` for the two-round cap and user checkpoint. Distinct from phase-level `recovery_stage` on `phase-pass-*.json`
@@ -202,7 +202,9 @@ On resume, the main agent SHALL inspect `log.json` and each existing verdict art
 
 A task already DONE whose artifact's `reviewed_sha` equals its `done_sha` SHALL be skipped. `log update … DONE` SHALL never be re-issued for it.
 
-For any task that is not yet DONE, the round count SHALL be read from that task's `loop_info` (`current_cycle`, `max_cycles`, `cycles_remaining`) and SHALL NOT be reset.
+For any task that is not yet DONE, read its per-window recovery state from `loop_info`. `recovery_window` starts at `1`; `current_cycle`, `max_cycles`, `cycles_remaining`, and `strategies` apply only to that window. For a legacy artifact without `recovery_window`, treat the persisted counters as window `1` and do not infer a fresh budget. If unresolved findings remain and `cycles_remaining` is zero, or a legacy `current_cycle` is already beyond `max_cycles + 1`, treat the artifact as `RECOVERY_CHECKPOINT` and do not dispatch automatically.
+
+When and only when the user explicitly authorizes another bounded window, append a snapshot of the closed window (window number, counters, and strategies) to `loop_info.prior_windows`; increment `recovery_window`; reset `current_cycle` to `1`, `cycles_remaining` to `2`, and `strategies` to an empty list. Keep `max_cycles: 2`. The audit `cycle` field mirrors `current_cycle` within the active window; prior-window snapshots preserve the older counts.
 
 A BLOCKED task (`overall: REVIEW_BLOCKED` with `blocked_category` set) SHALL keep that task and its dependents halted; it does not prevent ready tasks that the plan confirms are independent. The phase SHALL NOT advance to `REVIEW` while any task remains blocked. On resume, first check whether the recorded human dependency has been resolved. If so, continue recovery from the saved artifact and counter; do not restart or erase review history. If it remains unresolved, report the specific action needed from the user and continue any independent work that remains safe.
 

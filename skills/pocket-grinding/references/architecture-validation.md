@@ -45,9 +45,11 @@ For every material architecture or feasibility claim in the recommended design:
 4. **Separate findings from assumptions.** Mark a claim `PASS`, `FAIL`,
    `UNVERIFIED`, or `N/A`. `PASS` requires supporting evidence. Explain every `N/A`.
    Never turn missing evidence into a pass.
-5. **Change the investigation when evidence stalls.** Search another relevant
-   module, test, official source, or version-specific reference. Do not repeat the
-   same query unchanged or stop only because a retry count was reached.
+5. **Change the investigation when evidence stalls.** After the initial source,
+   inspect at most two distinct relevant modules, tests, official sources, or
+   version-specific references. Do not repeat the same query unchanged. If the
+   evidence still does not establish the claim, mark it `UNVERIFIED`, explain its
+   effect, and carry it as an open question or explicit assumption.
 
 Context7 can establish external library behavior; it cannot establish how this
 repository is structured. Repository inspection and version-matched external docs
