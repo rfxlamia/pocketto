@@ -51,7 +51,7 @@ Main agent = **Reconciler + Closer only**. Does NOT review code.
 | Gate close on REVIEW_FAIL / REVIEW_BLOCKED | Close a plan with any failing or missing verdict |
 | Advance phases via `pocketto-pi log` CLI | Hand-edit log.json (CLI is the only writer) |
 | Run `log close` and write closeout.md | Mark a task DONE or re-touch any `done_sha` |
-| Emit a structured CLOSED / PHASE_ADVANCED / CLOSE_BLOCKED report | Silently block — every block names what, why, unblock |
+| Emit a structured CLOSED / PHASE_ADVANCED / NEXT_PHASE_READY / CLOSE_BLOCKED report | Silently block — every block names what, why, unblock |
 
 ## Preflight
 
@@ -82,7 +82,7 @@ If invoked with a dir path:
   if dir ends with 'execution-plan', plan_dir = parent dir; else plan_dir = dir
   Read log.json
   targets = phases where status == REVIEW
-  0 matches  → schedule reconciliation for missing closeout sections of phases already DONE; after preflight, if a phase is next to execute, report it and return PHASE_ADVANCED; if all phases are DONE but the header is IN_PROGRESS, run `log close` and append the final plan section on success; if the header is DONE, repair missing closeout sections and return ALREADY_CLOSED; otherwise report the missing phase-pass or human dependency.
+  0 matches  → schedule reconciliation for missing closeout sections of phases already DONE; after preflight, if a phase is next to execute, report it and return NEXT_PHASE_READY (no phase advanced); if all phases are DONE but the header is IN_PROGRESS, run `log close` and append the final plan section on success; if the header is DONE, repair missing closeout sections and return ALREADY_CLOSED; otherwise report the missing phase-pass or human dependency.
   >1 matches → sort by phase.order and target the lowest-order REVIEW phase; leave later phases for their turn
   1 match    → target = that phase
 ```
@@ -111,7 +111,7 @@ When Step 1 found no `REVIEW` target, do not treat the absent target as a verdic
 
 - If the header is already `DONE`, append a missing final plan section and report `ALREADY_CLOSED`.
 - If the header is `IN_PROGRESS` and every phase is `DONE`, run `log close`; append the final plan section only after it succeeds, then report `CLOSED`.
-- If the header is `IN_PROGRESS` and a later phase is `WAITING`, report the next phase and return `PHASE_ADVANCED`; continue into pocket-development when the user's authorization covers the plan.
+- If the header is `IN_PROGRESS` and the next phase is `WAITING`, report it and return `NEXT_PHASE_READY`; no phase changed state. Continue into pocket-development when the user's authorization covers the plan.
 - If the next phase is `BLOCKED`, report the recorded human dependency and its unblock action.
 
 Never repeat a phase transition during this recovery path.
@@ -194,7 +194,7 @@ Parse the envelope, confirm `ok: true` and `data.newStatus == "DONE"` before con
 
 If the target is already `DONE` and was selected for closeout recovery, do not run `log update`; continue directly to the missing closeout append after its verdicts pass reconciliation.
 
-Append the target phase's human-readable section to `<plan_dir>/closeout.md` after the transition succeeds. Keep the file append-only: one section per canonical `phase-${order}`. Before appending, check whether that phase section already exists; if it does, do not duplicate or rewrite it. If a prior run advanced the phase but stopped before appending, append the missing section from the same durable log and verdict artifacts, then resume.
+Append the target phase's human-readable section to `<plan_dir>/closeout.md` after the transition succeeds. Keep the file append-only: one section per canonical marker `<!-- pocket-closeout:phase-${order} -->`. Before appending, check for that exact marker; do not use heading substring matching, which can confuse Phase 1 with Phase 10. If the marker already exists, do not duplicate or rewrite the section. If a prior run advanced the phase but stopped before appending, append the missing section from the same durable log and verdict artifacts, then resume.
 
 ## Close
 
@@ -241,7 +241,8 @@ Closeout: <plan_dir>/closeout.md
 | State | Meaning |
 |-------|---------|
 | `CLOSED` | All phases DONE, header `DONE` + `date_completed`, phase sections and final closeout section written |
-| `PHASE_ADVANCED` | Target phase is DONE and recorded; other phases remain — plan continues |
+| `PHASE_ADVANCED` | A target phase was transitioned to DONE and recorded; other phases remain — plan continues |
+| `NEXT_PHASE_READY` | No phase was advanced; the next phase is WAITING and ready for pocket-development |
 | `CLOSE_BLOCKED` | Preflight failed, a verdict is missing, or a task is REVIEW_FAIL/REVIEW_BLOCKED |
 | `ALREADY_CLOSED` | Header already `DONE`; missing closeout sections, if any, were restored from recorded sources |
 

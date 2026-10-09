@@ -37,7 +37,7 @@ Preflight the codebase → parse the spec → map files → decompose acceptance
 ### 4. pocket-structuring — index + task files
 
 Run the structure command to create an execution index, per-task files, and phase manifests when the plan has multiple phases.
-- **Gate:** Execution approval is separate from plan approval.
+- **Gate:** Plan approval authorizes execution only when the user's instruction covers both; otherwise ask once for execution authorization.
 - **Produces:** `execution-plan/index.md`, `execution-plan/tasks/T*-*.md`, and phase files when needed.
 - **Next:** Hand one phase at a time to `pocket-development`.
 
@@ -60,7 +60,7 @@ Reconcile task verdicts against the execution log, advance an eligible phase, an
 1. The idea is fuzzy → `pocket-pitching` explores directions and produces a brief.
 2. `pocket-grinding` locks scope, writes concrete scenarios, validates the design, and saves the approved spec. Approval emits `spec-approved` before planning begins.
 3. `pocket-planning` maps the codebase and decomposes the criteria into bounded tasks.
-4. `pocket-structuring` creates task files and phase manifests, then asks for execution approval.
+4. `pocket-structuring` creates task files and phase manifests. It hands off to `pocket-development` when the user's instruction already authorizes execution; otherwise it asks once for the missing authorization.
 5. `pocket-development` executes and reviews each task, then runs the phase-level pass and emits `phase-complete` when the phase reaches `REVIEW`.
 6. If the original request included end-to-end closeout, the agent runs `pocket-closing`; otherwise the user invokes it next. Closing reconciles verdicts and appends a phase section. After every phase is complete, it appends the final plan section and emits `plan-closed`.
 

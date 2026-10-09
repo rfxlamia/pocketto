@@ -67,7 +67,7 @@ approved spec
    │  pocket-planning     TDD plan → full task packets    [routes to structuring]
    ▼
 execution plan
-   │  pocket-structuring  index + task files              [execution approval]
+   │  pocket-structuring  index + task files              [development handoff]
    ▼
 plan / phase file
    │  pocket-development  task execution + in-loop audits [phase-level pass]
@@ -79,7 +79,7 @@ reviewed phase
 **Handoff facts that matter:**
 - `pocket-grinding` hands an approved spec to `pocket-planning`.
 - `pocket-planning` validates the plan and routes all plans to `pocket-structuring`.
-- `pocket-structuring` creates an execution index and per-task files, then asks for execution approval.
+- `pocket-structuring` creates an execution index and per-task files. It hands off to `pocket-development` when the user's existing instruction authorizes execution; otherwise it asks once for the missing authorization.
 - `pocket-development` executes tasks, records per-task verdicts, runs a phase-level pass, and writes a durable phase handoff. It leaves the phase in `REVIEW`; if the user's request already authorizes end-to-end closeout, continue to `pocket-closing`, otherwise name it as the next step.
 - `pocket-closing` reconciles verdicts and advances a reviewed phase; it appends that phase's section to `closeout.md` and does not review implementation code. It appends the final plan section after all phases close.
 - `pocket-pitching` does not auto-chain — the user chooses whether to start `pocket-grinding`.

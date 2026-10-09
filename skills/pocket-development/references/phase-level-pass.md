@@ -98,7 +98,7 @@ Record shape (clean pass, zero findings):
 
 A pass with findings (before or between recovery cycles) uses the same shape with `findings` populated and `status` reflecting the current work (see [Review cycles and recovery](#review-cycles-and-recovery)). The main agent SHALL create `reviews/` before the first write if it does not already exist. Re-dispatch of the pass overwrites this same path — it is the durable recovery record for the phase-level pass, exactly as `loop_info` inside a task's own verdict artifact is the durable audit record for that task.
 
-Optional recovery fields on the same record: `recovery_attempt_consumed` (boolean, retained as a compatibility/history marker) and `recovery_stage` (`implementer` | `correction` | `refresh` | `confirm`). Persist the stage before each recovery step so resume continues that step. The marker records prior recovery; it is not a retry limit.
+Optional recovery fields on the same record: `recovery_attempt_consumed` (boolean, retained as a compatibility/history marker) and `recovery_stage` (`implementer` | `correction` | `refresh` | `confirm`). Persist the stage before each recovery step so resume continues that step. The marker records prior recovery; it is not a retry limit. When the two-round cap is reached with findings unresolved, persist `status: "RECOVERY_CHECKPOINT"`, the findings, `loop_info` at zero remaining, and the two strategies tried. Do not write a terminal pass status or advance the phase to `REVIEW`.
 
 No per-task verdict artifact is modified by a clean pass. Only `reviews/phase-pass-<phase_key>.json` is written.
 
@@ -119,11 +119,11 @@ Sequence:
 
 This ordering is what makes a mid-flight death detectable: if `reviews/phase-pass-<phase_key>.json` is absent or does not carry a terminal `status`, and the phase's `log.json` status is not yet `REVIEW`, the pass did not finish and SHALL be re-dispatched (or resumed — see [Resume](#resume)). The phase status transition is the last action of this contract, not an early one; nothing about the pass writes `REVIEW` before its record is terminal.
 
-The phase SHALL NOT advance to `REVIEW` while findings remain. A cycle or recovery counter reaching its limit does not make the phase `PHASE_BLOCKED`; continue with a materially different recovery strategy.
+The phase SHALL NOT advance to `REVIEW` while findings remain. The two-round recovery cap is a mandatory user checkpoint, not `PHASE_BLOCKED`.
 
 ## Review cycles and recovery
 
-Cycle fields record history and support resume; they are **not a stop condition**. Keep `max_cycles: 2` and `cycles_remaining` for compatibility with existing artifacts, but reaching zero SHALL NOT by itself make the phase `PHASE_BLOCKED`. Record every pass in `current_cycle`; it may exceed `max_cycles`, and `cycles_remaining` may remain zero while recovery continues.
+`max_cycles: 2` is a hard cap of two correction rounds after the initial phase pass. Each round must use a materially different strategy and consumes one `cycles_remaining` when entered. `current_cycle` counts passes, so it may reach 3 (initial pass plus two re-passes), but never exceed `max_cycles + 1`. Reaching the cap with findings unresolved requires `RECOVERY_CHECKPOINT`; it does not make the phase `PHASE_BLOCKED`.
 
 For findings that need corrections:
 
@@ -132,9 +132,9 @@ For findings that need corrections:
 3. Refresh every affected task verdict per [Verdict refresh](#verdict-refresh-fan-out).
 4. Re-run the phase-level pass and record the result.
 
-If findings remain, inspect the evidence and choose a materially different next step: split unrelated findings, improve the packet with code or official-documentation evidence, dispatch a fresh implementer, or ask a fresh read-only subagent named `advisor` with the `advisor` persona to challenge the findings and proposed correction. Preserve the full history and never repeat an unchanged dispatch merely to increment a counter. Continue until findings are resolved or the next safe action requires a human decision, access, information, or authorization.
+If findings remain after a pass, inspect the evidence and choose a materially different correction strategy: split unrelated findings, improve the packet with code or official-documentation evidence, dispatch a fresh implementer, or ask a fresh read-only subagent named `advisor` with the `advisor` persona to challenge the findings and proposed correction. Preserve the full history and never repeat an unchanged dispatch. After two correction rounds, persist `status: "RECOVERY_CHECKPOINT"` with outstanding findings, both strategies tried, evidence, and one concrete next strategy. Keep the phase out of `REVIEW`; do not set `PHASE_BLOCKED` solely because the cap was reached. Ask the user whether to authorize another bounded two-round window, and resume only under that explicit authorization with a different strategy. On authorization, reset only the new window's `max_cycles` and `cycles_remaining`; preserve prior window details in the record and increment its `recovery_window` number.
 
-If the pass reviewer fails, diagnose recoverable tool or input failures and try a fresh independent reviewer. If that route also fails, dispatch a fresh subagent named `advisor` with the `advisor` persona to perform the same read-only pass. `PHASE_BLOCKED` is reserved for an actual human dependency; record the exact decision or capability required and the concrete unblock action. Do not mark the phase blocked because a review or correction counter is exhausted.
+If the pass reviewer fails, bound infrastructure recovery to the original reviewer attempt, one fresh independent reviewer, and one fresh subagent named `advisor` with the `advisor` persona performing the same read-only pass. If all three fail, stop and report the exact human action needed to restore an independent review route. `PHASE_BLOCKED` is reserved for an actual human dependency; record the exact decision or capability required and the concrete unblock action. Do not mark the phase blocked because a review or correction counter is exhausted.
 
 A clean pass writes `status: "PHASE_PASS_CLEAN"`; a pass resolved through corrections writes `status: "PHASE_PASS_RESOLVED"`. Only then may the phase advance to `REVIEW` per [Ordering](#ordering-review-only-after-the-pass-records-a-result).
 
@@ -204,7 +204,8 @@ On resume, the main agent SHALL read `reviews/phase-pass-<phase_key>.json` along
 - If the file is absent and the phase's `log.json` status is not yet `REVIEW`, the pass has not completed (it may never have started, or it died before its first write) — dispatch it fresh.
 - If the file exists with `status: "PHASE_PASS_CLEAN"` or `"PHASE_PASS_RESOLVED"` and the phase's `log.json` status is already `REVIEW`, the pass is done — do not re-dispatch it and do not re-issue the `REVIEW` transition.
 - If the file exists with `status: "PHASE_PASS_CLEAN"` or `"PHASE_PASS_RESOLVED"` but the phase's `log.json` status is not yet `REVIEW`, the pass result is terminal — perform the pending `log update <plan_dir> <phase_file> REVIEW` transition per [Ordering](#ordering-review-only-after-the-pass-records-a-result), then continue (do not re-dispatch the pass).
-- If the file exists with findings recorded but no terminal `status` (i.e. it stopped between corrections and the confirming pass), resume from its persisted `loop_info` and `recovery_stage`, not from cycle 1. Preserve history; the counters do not gate further recovery.
+- If the file exists with findings recorded but no terminal `status` (i.e. it stopped between corrections and the confirming pass), resume from its persisted `loop_info` and `recovery_stage`, not from cycle 1. Preserve history and obey the remaining two-round budget.
+- If the file records `status: "RECOVERY_CHECKPOINT"`, do not resume correction automatically. Wait for explicit user authorization; when granted, begin a new two-round window with a materially different strategy and preserve the prior window in the artifact.
 - If the file records `status: "PHASE_BLOCKED"`, check the recorded human dependency. If it has been resolved, continue from the saved state; otherwise report the exact action needed. Do not erase prior findings or restart the pass from cycle 1.
 
 [RESTATE: `done_sha` never moves. `--correction` is phase-level-pass-only — in-loop fixes are plain commits, never `--correction`. `reviewed_sha(T)` after a fan-out is `max-by-commit-time` over `{done_sha} ∪ {corrections in data.correction.affectedTasks attributed to T}` — this is provably `pocket-closing`'s `latest_owned_sha(T)`, not the correction sha in isolation. Phase status becomes `REVIEW` only after `reviews/phase-pass-<phase_key>.json` records a terminal result.]

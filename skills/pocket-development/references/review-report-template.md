@@ -155,12 +155,18 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     },
     "merge_recovery_consumed": {
       "type": "boolean",
-      "description": "Parallel group merge-conflict recovery has started; historical marker that does not limit materially different recovery strategies."
+      "description": "Compatibility/history marker showing that parallel group merge-conflict recovery has started."
+    },
+    "merge_recovery_round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2,
+      "description": "Current bounded merge-conflict recovery round; after round 2, report RECOVERY_CHECKPOINT and wait for explicit user authorization."
     },
     "merge_recovery_stage": {
       "type": "string",
       "enum": ["implementer", "gate", "auditor", "merge_retry", "parallel-conflict"],
-      "description": "Current merge-recovery step for resume; a failed strategy may be followed by a materially different strategy. Distinct from phase-level recovery_stage."
+      "description": "Current merge-recovery step for resume; follow the two-round cap in parallel-group.md. Distinct from phase-level recovery_stage."
     },
     "reviewed_sha": {
       "type": "string",
@@ -264,7 +270,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
   "loop_info": {
     "current_cycle": 2,
     "max_cycles": 2,
-    "cycles_remaining": 0
+    "cycles_remaining": 1
   },
   "reviewed_sha": "d4e5f6g7h8i9j0"
 }
@@ -276,7 +282,7 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
 {
   "task_id": "T3",
   "task_name": "Extract auth layer",
-  "cycle": 3,
+  "cycle": 1,
   "timestamp": "2026-05-08T14:00:00Z",
   "reviewer_mode": "read-only",
   "reviewer_config": "deep",
@@ -301,9 +307,9 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
   "blocked_category": "audit-failed",
   "fix_instructions": "ESCALATE: The approved requirements do not say whether an expired refresh token revokes other active sessions. A product decision is required before the auditor can determine the expected behavior. Choose whether to revoke all sessions or deny only this request.",
   "loop_info": {
-    "current_cycle": 3,
+    "current_cycle": 1,
     "max_cycles": 2,
-    "cycles_remaining": 0
+    "cycles_remaining": 2
   },
   "reviewed_sha": "def4567ghi8901"
 }
@@ -370,7 +376,7 @@ Whenever pocket-development writes or rewrites this artifact — the per-task in
 | `reviewer_config` | `"batch-parallel"` |
 | `loop_info.current_cycle` | `1` on first cycle; prior cycle + 1 on re-review (mirrors `cycle`) |
 | `loop_info.max_cycles` | `2` for in-loop and phase-level audits; `1` only for the empty-diff skip stub defined by `two-stage-review.md` |
-| `loop_info.cycles_remaining` | Historical counter for resume; it may stay at `0` during recovery and does not stop work. A clean first pass records `2`. |
+| `loop_info.cycles_remaining` | Remaining correction rounds in the current two-round window. Decrement when a correction round starts; zero with unresolved findings requires `RECOVERY_CHECKPOINT`. A clean first pass records `2`. |
 | `overall` | `"REVIEW_PASS"` \| `"REVIEW_FAIL"` \| `"REVIEW_BLOCKED"` |
 | `reviewed_sha` | `done_sha` on first cycle; max-by-commit-time of `done_sha` and all owned correction SHAs on re-review |
 

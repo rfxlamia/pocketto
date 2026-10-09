@@ -42,7 +42,7 @@ Treat a subagent's `BLOCKED` status as a diagnosis request. Do not simply repeat
 - **Reviewer or tool failure:** diagnose the input or capability issue and try a fresh independent reviewer, including the `advisor` fallback. The main agent must not replace independent review with its own code judgment.
 - **Parallel merge conflict:** abort the merge safely, inspect both diffs and the conflict, and try a materially different resolution with independent review. Ask the user only if the conflict requires a product or architectural choice that evidence cannot resolve.
 
-Cycle counters and retry counts record history and help resume. Reaching zero is never, by itself, a reason to stop, mark a task BLOCKED, or mark a phase `PHASE_BLOCKED`. Preserve the counter and audit artifacts while recovery continues; do not repeat an unchanged attempt.
+The two-round recovery budget is a hard stop for automatic correction. When it reaches zero with findings unresolved, report `RECOVERY_CHECKPOINT`, preserve the findings and attempted strategies, and request explicit user authorization before another bounded window. This is not a task `BLOCKED` or phase `PHASE_BLOCKED` verdict. Never repeat an unchanged attempt.
 
 ## User-Facing `BLOCKED`
 

@@ -189,7 +189,7 @@ Done when:
 Uncertain when:
 - Auth behavior differs from existing (inspect current behavior and tests before changing it)
 - Security implications are unclear (gather evidence and request independent review)
-- A test still fails (diagnose the failure, change the recovery approach, and continue until fixed or a human decision is required)
+- A test still fails (diagnose it, use a materially different recovery strategy, and stop at the two-round cap for a `RECOVERY_CHECKPOINT` unless the failure requires a specific human decision)
 
 Escalate when:
 - Requires architectural decision not in scope
@@ -197,7 +197,7 @@ Escalate when:
 - A security finding requires a human product/security decision, access, or authorization after investigation and independent review
 ```
 
-Escalation is for a genuine human dependency. A security concern alone is not a stop signal: gather evidence, continue safe investigation or remediation within the approved scope, and request independent review. If no human decision, access, or authorization is needed, report and address the finding through the normal audit flow.
+Escalation is for a genuine human dependency. A security concern alone does not prevent read-only investigation: gather evidence and request independent review. Do not implement remediation that changes authentication, authorization, permission, or security-policy behavior until the user explicitly authorizes that specific change after seeing the finding and its impact. Keep any investigation read-only while awaiting that checkpoint. If a finding can be addressed without changing those behaviors, continue through the normal audit flow within the approved scope.
 
 ## Packet Quality Checklist
 

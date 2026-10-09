@@ -19,10 +19,11 @@ This journal records phase outcomes as they are closed. Each section separates v
 
 ## Phase section
 
-Append one section per canonical phase key (`phase-<order>`). Check for that key before writing; an existing section must not be duplicated.
+Append one section per canonical phase key (`phase-<order>`). Emit the exact marker `<!-- pocket-closeout:phase-<order> -->` immediately below its heading. Check for that exact marker before writing; do not search headings or phase-name substrings, since `Phase 1` can match `Phase 10`.
 
 ```markdown
 ## Phase <order> of <phase_count> — <human-readable phase name>
+<!-- pocket-closeout:phase-<order> -->
 
 **Status:** Complete — `REVIEW` → `DONE`
 **Closed:** <date and time, if recorded>
@@ -66,6 +67,7 @@ Append this once, after `log close` succeeds:
 
 ```markdown
 ## Plan closed
+<!-- pocket-closeout:plan-closed -->
 
 **Result:** Complete — all <phase_count> phases are `DONE`
 **Closed:** <date_completed>

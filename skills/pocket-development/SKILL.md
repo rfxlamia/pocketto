@@ -82,7 +82,7 @@ pocket-development receives two distinct input formats. Identify which type befo
   2. Confirm `**Prerequisite:** Phase N-1 must be COMPLETE` is satisfied
   3. If the prerequisite is not COMPLETE, inspect its log and review artifacts. If it is at `REVIEW`, report that `pocket-closing` must be invoked directly by the user; do not start this phase until it confirms `DONE`. Otherwise report the exact gate or human dependency and do not start this phase.
 - Track "Phase N of M" context throughout execution — surface it in all status reports
-- Terminal step is a structured PHASE_COMPLETE or PHASE_BLOCKED report (see Phase Completion Protocol)
+- Terminal step is a structured PHASE_COMPLETE, RECOVERY_CHECKPOINT, or PHASE_BLOCKED report (see Phase Completion Protocol)
 
 ## Main Agent Role
 
@@ -255,7 +255,7 @@ digraph pocket_process {
     "Different recovery strategy" -> "Dispatch implementer/advisor -> confirm pass";
     "Pass clean or resolved" -> "Evaluate applicable Phase Completion Gate";
     "Human dependency" -> "PHASE_BLOCKED report";
-    "Evaluate Phase Completion Gate" -> { "PHASE_COMPLETE report" "PHASE_BLOCKED report" };
+    "Evaluate applicable Phase Completion Gate" -> { "PHASE_COMPLETE report" "RECOVERY_CHECKPOINT report" "PHASE_BLOCKED report" };
 }
 ```
 
@@ -377,7 +377,17 @@ Next: run `/pocketto:pocket-closing <plan_dir>/<phase_file>`.
 → If the user's instruction explicitly covers end-to-end closeout, continue into pocket-closing; otherwise stop at this handoff.
 ```
 
-If a condition fails, first attempt an evidence-backed correction that stays within the approved outcome, then rerun the relevant gate. Report `PHASE_BLOCKED` only when the next safe action requires a human decision, access, information, or authorization:
+If a condition fails, use the bounded recovery contract in `references/phase-level-pass.md`. After two materially different correction rounds with findings remaining, stop and report `RECOVERY_CHECKPOINT`; keep the phase out of `REVIEW`, preserve findings, and ask whether the user authorizes another bounded window. This checkpoint is not `PHASE_BLOCKED`. Use `PHASE_BLOCKED` only when the next safe action itself requires a specific human decision, access, information, or authorization:
+```
+RECOVERY_CHECKPOINT: Phase N of M
+Unresolved findings: [from the phase-pass record]
+Strategies tried: [two materially different strategies and evidence]
+Next proposed strategy: [one concrete, bounded action]
+Phase status: [must remain outside REVIEW]
+→ Await the user's authorization before starting another recovery window.
+```
+
+For a genuine human dependency, report:
 ```
 PHASE_BLOCKED: Phase N of M
 Failed gate condition: [which condition]
@@ -386,7 +396,7 @@ Unblocking action: [specific required action]
 → Do NOT proceed to Phase N+1
 ```
 
-If findings remain after a phase-level recovery, reassess them and continue with a materially different correction or fresh independent review. Do not set `PHASE_BLOCKED` because a cycle or recovery counter reached its limit. Set `PHASE_BLOCKED` only when the next safe action requires a human decision, access, information, or authorization. Until then, keep the phase out of `REVIEW` and report the concrete recovery underway.
+If findings remain after two phase-level correction rounds, stop automatic recovery and use `RECOVERY_CHECKPOINT` as defined in `references/phase-level-pass.md`. Do not exceed the cap or set `PHASE_BLOCKED` solely because it was reached.
 
 When a human dependency is real, the pass record carries `status: "PHASE_BLOCKED"` and the outstanding findings (`references/phase-level-pass.md`). Report:
 ```
@@ -406,7 +416,7 @@ After closing reports the phase `DONE`, proceed to Phase N+1 only if the user's 
 
 Follow the user's explicit instruction when it authorizes a workflow choice or gate. State a material consequence briefly, then proceed. Preserve independent review when the user expects Pocket verification, and report any gate the user chose to skip; never claim a skipped gate passed.
 
-Before escalating `NEEDS_CONTEXT` or `BLOCKED`, inspect the repository, plan, logs, and available documentation; repair the packet or dispatch a fresh subagent when that can resolve the issue. A cycle count, retry count, uncertainty that can be investigated, or subagent failure alone is not a human blocker. See `references/status-handling.md`, `references/two-stage-review.md`, and `references/phase-level-pass.md` for recovery contracts.
+Before escalating `NEEDS_CONTEXT` or `BLOCKED`, inspect the repository, plan, logs, and available documentation; repair the packet or dispatch a fresh subagent when that can resolve the issue. A cycle count, retry count, uncertainty that can be investigated, or subagent failure alone is not a human blocker. A recovery cap requires a user checkpoint; it does not authorize endless retries. See `references/status-handling.md`, `references/two-stage-review.md`, and `references/phase-level-pass.md` for recovery contracts.
 
 ## Red Flags
 
@@ -436,7 +446,7 @@ Before escalating `NEEDS_CONTEXT` or `BLOCKED`, inspect the repository, plan, lo
 **If reviewer finds issues:**
 - Implementer fixes them
 - Reviewer reviews again
-- Repeat until approved
+- Use at most two materially different correction rounds, then stop at `RECOVERY_CHECKPOINT` and wait for explicit user authorization before another bounded window
 
 ## Reference Triggers
 

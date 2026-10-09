@@ -32,7 +32,7 @@ One block per Core skill: what it does, what it consumes, what it produces, and 
 - **What:** Creates a manifest and per-task files from an execution plan, adding phase files when needed.
 - **Input:** A completed execution plan.
 - **Output:** An execution index, task files, and optional phase manifests.
-- **Handoff:** Requests execution approval, then hands one phase at a time to `pocket-development`.
+- **Handoff:** Hands one phase at a time to `pocket-development` when the user's instruction authorizes execution; otherwise asks once for the missing authorization.
 - **Use when:** An execution plan needs task-level structure.
 - **Skip when:** The plan has already been structured.
 

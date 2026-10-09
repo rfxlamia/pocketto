@@ -91,7 +91,7 @@ A verdict that contains any Critical or Important finding SHALL enter a fix or r
 
 ## Review cycles and recovery
 
-Review-cycle fields record audit history and support resume; they are **not a stop condition**. Keep `max_cycles: 2` and `cycles_remaining` for compatibility with existing artifacts, but reaching zero SHALL NOT by itself make the task BLOCKED. Continue recording `current_cycle` for every audit; it may exceed `max_cycles`, and `cycles_remaining` may remain zero while recovery continues.
+`max_cycles: 2` is a hard cap of two correction rounds after the initial attempt. Each round must use a materially different recovery strategy and consumes one `cycles_remaining` when entered. A mechanical-gate failure before the first audit also consumes a round. `current_cycle` counts audits, so it may reach 3 (initial audit plus two re-audits), but never exceed `max_cycles + 1`. A cap is a mandatory user checkpoint, not a verdict that the task is BLOCKED.
 
 **Consumes one round** (decrement `loop_info.cycles_remaining` once when the round is entered):
 
@@ -102,22 +102,21 @@ The finding and the fix/refactor it triggers are one consuming event, not two. A
 
 **Does not consume a fix round:**
 
-- mechanical-gate failure (implementer re-dispatched; auditor not spawned)
 - a Minor-only or fully clean PASS
 - **auditor infrastructure failure** (subagent dies, times out, or returns unparseable output)
 
-Auditor infrastructure failure does not consume a fix round. Keep the task open while attempting recovery; do not convert an unavailable subagent into a task verdict.
+Auditor infrastructure failure does not consume a correction round. Bound recovery to the original auditor attempt, one fresh auditor retry, and one `advisor` attempt. If all three fail, stop and request the specific human action needed to restore an independent review route; do not convert an unavailable subagent into a task verdict.
 
 **Auditor recovery:**
 
 1. Retry with a fresh read-only auditor subagent and the same pinned diff and criteria.
 2. If the failure repeats, dispatch a fresh subagent named `advisor` with the `advisor` persona. It performs the same independent, read-only audit and writes the same verdict artifact; the main agent never substitutes its own code judgment.
-3. If the advisor cannot complete the review, diagnose the tool or input failure, repair what is recoverable, and try an available independent review route. Preserve the task state and review history.
-4. Use `auditor-unavailable` only when no independent review route is available without a human action, such as enabling a required capability. Record that exact dependency and how the user can unblock it.
+3. If the advisor cannot complete the review, diagnose recoverable tool or input failures, then stop and report the exact human action needed. Preserve the task state and review history.
+4. Use `auditor-unavailable` only when no independent review route is available until a human restores or authorizes a required capability. Record that exact dependency and how the user can unblock it.
 
 On a clean first PASS, the artifact SHALL record `loop_info.current_cycle: 1`, `max_cycles: 2`, and `cycles_remaining: 2`.
 
-After a fix/refactor round, record the updated cycle and findings in the same verdict artifact. When the historical counter reaches zero and Critical or Important findings remain, choose a materially different recovery step: inspect the evidence again, split distinct findings into bounded work, clarify the packet with repository or documentation evidence, dispatch a fresh implementer, or ask an independent `advisor` to challenge the proposed fix. Do not repeat the same dispatch unchanged. Continue until the audit passes or the next safe action requires a human decision, access, information, or authorization. Only that human dependency can justify `REVIEW_BLOCKED` with `audit-failed`; include it in `fix_instructions` with a concrete unblock action.
+After each correction round, update the same verdict artifact and decrement the remaining budget. If Critical or Important findings remain when `cycles_remaining` reaches zero, stop automatic correction and report `RECOVERY_CHECKPOINT` with the unresolved findings, attempted strategies, evidence, and one concrete next strategy. Keep `overall: "REVIEW_FAIL"`; do not label the task BLOCKED solely because the cap was reached. Ask the user whether to authorize another bounded correction window. Resume only under that explicit authorization, with a fresh two-round budget and a different strategy. `REVIEW_BLOCKED` with `audit-failed` remains reserved for a specific human decision, information, access, or authorization needed to choose a safe correction; record that dependency and unblock action in `fix_instructions`.
 
 ## BLOCKED categories
 
@@ -125,7 +124,7 @@ Two categories exist. Both SHALL be persisted in the verdict artifact (field `bl
 
 | `blocked_category` | When |
 |--------------------|------|
-| `audit-failed` | Outstanding Critical or Important findings require a human decision, information, access, or authorization; an exhausted counter alone is insufficient. |
+| `audit-failed` | Outstanding Critical or Important findings require a specific human decision, information, access, or authorization; reaching the correction cap alone is not this verdict. |
 | `auditor-unavailable` | No independent audit route is available until a human restores or authorizes a required capability; failed attempts alone are insufficient. |
 
 The artifact SHALL also keep the findings (`stage_1.issues`, `stage_2.issues`) and `fix_instructions` so a later session can see why the task blocked.
@@ -187,14 +186,15 @@ The file SHALL conform to `skills/pocket-development/references/review-report-te
 - `reviewed_sha`
 - `fix_instructions` (empty string on PASS)
 - `loop_info` — the durable round counter: `current_cycle`, `max_cycles: 2` (except the empty-diff skip stub, which keeps `max_cycles: 1` as written above), `cycles_remaining`
-- `merge_recovery_consumed` (optional, boolean) — compatibility/history marker indicating that merge recovery has started; it does not limit further materially different recovery attempts
-- `merge_recovery_stage` (optional) — `implementer` | `gate` | `auditor` | `merge_retry` | `parallel-conflict`; persist the current step on `<plan_dir>/reviews/<task_id>-review.json` and mirror it on peer group tasks involved in the conflict. Resume an interrupted step; after a failed merge retry, `parallel-conflict` records that attempt and a different strategy may start by setting `implementer`. Distinct from phase-level `recovery_stage` on `phase-pass-*.json`
+- `merge_recovery_consumed` (optional, boolean) — compatibility/history marker indicating that merge recovery has started
+- `merge_recovery_round` (optional, integer) — current bounded merge-conflict recovery round, maximum `2` before `RECOVERY_CHECKPOINT`; applies separately from the task's in-loop audit budget
+- `merge_recovery_stage` (optional) — `implementer` | `gate` | `auditor` | `merge_retry` | `parallel-conflict`; persist the current step on `<plan_dir>/reviews/<task_id>-review.json` and mirror it on peer group tasks involved in the conflict. Resume an interrupted step; after a failed merge retry, `parallel-conflict` records that attempt. See `parallel-group.md` for the two-round cap and user checkpoint. Distinct from phase-level `recovery_stage` on `phase-pass-*.json`
 - `stage_2.issues[].severity`
 - `stage_2.strengths[]`
 
 When the task is BLOCKED, the artifact SHALL also persist `blocked_category` as `audit-failed` or `auditor-unavailable`.
 
-The main agent SHALL create `<plan_dir>/reviews/` before the first write. Re-audit overwrites the same path; `loop_info` in that file is what resume reads. When rewriting an artifact on re-audit, carry forward `merge_recovery_consumed: true` and any in-progress merge-recovery stage. A successful re-audit must not erase recovery history; clear the stage only after the corresponding merge succeeds, and do not treat a prior failed strategy as a ban on a materially different one.
+The main agent SHALL create `<plan_dir>/reviews/` before the first write. Re-audit overwrites the same path; `loop_info` in that file is what resume reads. When rewriting an artifact on re-audit, carry forward `merge_recovery_consumed: true`, `merge_recovery_round`, and any in-progress merge-recovery stage. A successful re-audit must not erase recovery history; clear the stage only after the corresponding merge succeeds. Do not repeat a failed strategy, and stop after two materially different merge recovery rounds until the user authorizes a new bounded window.
 
 ## Resume
 

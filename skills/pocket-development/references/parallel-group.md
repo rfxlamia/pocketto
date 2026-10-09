@@ -109,14 +109,18 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
 
     # On conflict:
     #   git merge --abort
-    #   → Diagnose the conflict and continue with materially different recovery
-    #     strategies until the merge succeeds or a human decision is required
-    #     (separate from per-task audit cycles and phase-level recovery cycles).
+    #   → Diagnose the conflict and use at most two materially different merge
+    #     recovery rounds. This budget is separate from per-task audit cycles
+    #     and phase-level recovery cycles. If both rounds fail, stop at
+    #     RECOVERY_CHECKPOINT and ask whether the user authorizes another
+    #     bounded window; do not mark the task BLOCKED solely because the cap
+    #     was reached.
     #     All artifact I/O uses
     #     <plan_dir>/reviews/<task_id>-review.json:
     #     1. Resume implementer, gate, auditor, or merge_retry from the
     #        persisted stage after interruption.
-    #     2. Persist merge_recovery_consumed: true and
+    #     2. Increment merge_recovery_round (1..2), persist
+    #        merge_recovery_consumed: true and
     #        merge_recovery_stage: "implementer" BEFORE the first recovery
     #        dispatch; mirror merge_recovery_stage on every group task verdict
     #        artifact involved in the conflict (group-visible resume state).
@@ -133,7 +137,8 @@ for task in group_in_plan_order:                    # T5 → T6 → T7
     #        - conflict → git merge --abort; persist
     #          merge_recovery_stage: "parallel-conflict" on the group artifacts;
     #          ask a fresh read-only advisor to inspect both task packets, diffs,
-    #          and conflict, then start a materially different recovery stage.
+    #          and conflict. If this is round 2, report RECOVERY_CHECKPOINT and
+    #          wait for explicit user authorization before a new bounded window.
     #   → If evidence cannot resolve a semantic/product choice, report
     #     BLOCKED with the conflicting tasks/files and the specific choice needed.
     #     Retain worktrees; do NOT log update until the conflict is resolved.
