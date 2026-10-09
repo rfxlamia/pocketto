@@ -43,9 +43,13 @@ function runRequest(args, options, expectJson) {
 }
 
 function listComments(endpoint, options) {
-  const comments = runJson(['api', endpoint, '--paginate'], options);
-  if (!Array.isArray(comments)) throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'PR comments response must be an array.', { status: 'retryable', retryable: true });
-  return comments;
+  const pages = runJson(['api', endpoint, '--paginate', '--slurp'], options);
+  if (!Array.isArray(pages)) throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'PR comments response must be an array of pages.', { status: 'retryable', retryable: true });
+  // `gh api --paginate --slurp` returns one array per page. Accept an already
+  // flat array too for injected runners and older compatible gh behavior.
+  if (pages.every(Array.isArray)) return pages.flat();
+  if (pages.every((comment) => comment && typeof comment === 'object' && !Array.isArray(comment))) return pages;
+  throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'PR comments response contains a malformed page.', { status: 'retryable', retryable: true });
 }
 
 function upsertSummary(endpoint, comments, marker, body, options) {

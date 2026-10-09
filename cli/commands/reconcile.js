@@ -23,6 +23,12 @@ function readJsonArray(inputPath, label) {
   if (!Array.isArray(parsed)) {
     throw new CliError('BAD_INPUT', `${label} input must be a JSON array: ${inputPath}`);
   }
+  for (const [index, record] of parsed.entries()) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)
+        || typeof record.fingerprint !== 'string' || record.fingerprint.trim().length === 0) {
+      throw new CliError('BAD_INPUT', `${label} finding at index ${index} must have a non-empty string fingerprint.`);
+    }
+  }
   return parsed;
 }
 

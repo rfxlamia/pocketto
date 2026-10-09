@@ -17,45 +17,55 @@ function defaultRunnerArgv(projectRoot) {
   return [process.execPath, path.resolve(__dirname, 'dispatch.js'), path.resolve(projectRoot)];
 }
 
-function parseArgvArgs(argv) {
-  const values = [];
+function parseCommandArgs(argv, allowRunnerArgv = false) {
+  const positionals = [];
+  const runnerArgs = [];
+  const json = argv.includes('--json');
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--argv') {
+    const arg = argv[i];
+    if (arg === '--json') {
+      // Already recorded before parsing so errors still honor a trailing --json.
+    } else if (arg === '--argv' && allowRunnerArgv) {
       const value = argv[i + 1];
       if (value === undefined || value === '' || value.startsWith('--')) {
-        return { error: '--argv requires a value.' };
+        return { error: '--argv requires a value.', json, positionals, runnerArgs };
       }
-      values.push(value);
+      runnerArgs.push(value);
       i += 1;
+    } else if (arg.startsWith('--')) {
+      const valueSeparator = arg.search(/[=:]/);
+      const optionName = valueSeparator === -1 ? arg : arg.slice(0, valueSeparator);
+      const valueNote = valueSeparator === -1 ? '' : ' (inline value redacted)';
+      return { error: `Unknown option: ${optionName}${valueNote}`, json, positionals, runnerArgs };
+    } else if (arg.length > 0) {
+      positionals.push(arg);
+    } else {
+      return { error: 'Project root cannot be empty.', json, positionals, runnerArgs };
     }
   }
-  return { values };
+  return { positionals, runnerArgs, json };
 }
 
 function main(argv) {
   const [command, ...rest] = argv;
-  const json = rest.includes('--json');
+  const json = argv.includes('--json');
 
   if (command === 'install') {
-    const positional = rest.find((a) => !a.startsWith('--'));
-    if (!positional) {
-      const message = `install requires a project root.\n${usage()}`;
-      if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-install', data: null, error: { code: 'ENTERPRISE_INSTALL_FAILED', message } }));
-      else console.error(message);
+    const parsed = parseCommandArgs(rest, true);
+    const json = parsed.json;
+    const positional = parsed.positionals[0];
+    if (parsed.error || parsed.positionals.length !== 1) {
+      const reason = parsed.error || (positional ? 'install accepts exactly one project root.' : 'install requires a project root.');
+      const errorMessage = `${reason}\n${usage()}`;
+      if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-install', data: null, error: { code: 'ENTERPRISE_INSTALL_FAILED', message: errorMessage } }));
+      else console.error(errorMessage);
       process.exitCode = 1;
       return;
     }
-    const parsed = parseArgvArgs(rest);
-    if (parsed.error) {
-      if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-install', data: null, error: { code: 'ENTERPRISE_INSTALL_FAILED', message: parsed.error } }));
-      else console.error(parsed.error);
-      process.exitCode = 1;
-      return;
-    }
-    const argv = parsed.values.length > 0
-      ? parsed.values
+    const runnerArgv = parsed.runnerArgs.length > 0
+      ? parsed.runnerArgs
       : defaultRunnerArgv(positional);
-    const res = registration.installRegistration(positional, { argv });
+    const res = registration.installRegistration(positional, { argv: runnerArgv });
     if (!res.ok) {
       if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-install', data: null, error: { code: res.code, message: res.message } }));
       else console.error(`${res.code}: ${res.message}`);
@@ -68,11 +78,14 @@ function main(argv) {
   }
 
   if (command === 'preflight') {
-    const positional = rest.find((a) => !a.startsWith('--'));
-    if (!positional) {
-      const message = `preflight requires a project root.\n${usage()}`;
-      if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-preflight', data: null, error: { code: 'ENTERPRISE_CORE_MISSING', message } }));
-      else console.error(message);
+    const parsed = parseCommandArgs(rest);
+    const json = parsed.json;
+    const positional = parsed.positionals[0];
+    if (parsed.error || parsed.positionals.length !== 1) {
+      const reason = parsed.error || (positional ? 'preflight accepts exactly one project root.' : 'preflight requires a project root.');
+      const errorMessage = `${reason}\n${usage()}`;
+      if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-preflight', data: null, error: { code: 'ENTERPRISE_CORE_MISSING', message: errorMessage } }));
+      else console.error(errorMessage);
       process.exitCode = 1;
       return;
     }

@@ -89,7 +89,7 @@ function isPristineV3Snapshot(log, specDir) {
 function pinV3RequiredError() {
   return new CliError(
     'PIN_V3_REQUIRED',
-    'This v3 plan has execution progress or a non-pristine header. Pin/use the v3 CLI and finish the plan under v3; migration is refused without changing v3 files.',
+    'This v3 plan has execution progress or a non-pristine header. Pin pocketto-pi@3.1.3 with `npx -y pocketto-pi@3.1.3` and finish the plan under v3; migration is refused without changing v3 files.',
   );
 }
 

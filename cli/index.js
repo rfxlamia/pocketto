@@ -241,7 +241,7 @@ Usage:
   pocketto-pi format tasklist <plan_dir>                  [--json]
   pocketto-pi scaffold github [<dir>]                     [--dry-run] [--json]
   pocketto-pi reconcile                                   [--prior <json>] [--new <json>] [--json]
-  pocketto-pi setup-extensions                            [--all] [--json]
+  pocketto-pi setup-extensions                            [--all | --recommended] [--json]
 
 Status values: WAITING | REVIEW | DONE | BLOCKED
 Learner levels: foundation | guided | independent   Teaching modes: guided | socratic
@@ -267,6 +267,7 @@ Flags:
                     (only for tasks that legitimately produced no new commit)
   --strict          (doctor) exit nonzero when a required extension is missing
   --all             (setup-extensions) also install the recommended extensions
+  --recommended     (setup-extensions) alias for --all
   --version, -v     Print version + contract
   --help, -h        Show this help`;
 
