@@ -70,7 +70,7 @@ Pocket's skills call Pi extensions for their core features — **advisor** (revi
 
 ```bash
 npx pocketto-pi setup-extensions        # required extensions
-npx pocketto-pi setup-extensions --all  # + recommended extensions
+npx pocketto-pi setup-extensions --recommended # + recommended extensions (`--all` is an alias)
 npx pocketto-pi doctor                  # check what's installed / missing
 ```
 
@@ -293,7 +293,7 @@ The cross-platform Node CLI requires Node.js ≥ 18. Core commands work locally.
 |---------|---------|--------------|
 | Core | `npx pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset]` | Decompose a plan into `execution-plan/`. |
 | Core | `npx pocketto-pi log init <plan_dir>` | Initialize `log.json`. |
-| Core | `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>]` | Update phase or task status locally. |
+| Core | `npx pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--correction <sha> --for-task TN]` | Update phase or task status locally, or record a correction commit. |
 | Core | `npx pocketto-pi log close <plan_dir>` | Finalize local plan state after all phases are complete. |
 | Core | `npx pocketto-pi lifecycle transition <spec_dir> <event-type> --artifact <root>:<kind>:<relative-path>:<sha256> --json --contract 3` | Commit a local lifecycle transition and durable neutral event. |
 | Core | `npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3` | Replay pending events in revision order; creates no events. |
@@ -306,8 +306,11 @@ The cross-platform Node CLI requires Node.js ≥ 18. Core commands work locally.
 | Core | `npx pocketto-pi edu set --level <skill>=<level> … [--teaching-mode] [--journal] [--education]` | Change the profile; reports each change as more/less guidance. |
 | Core | `npx pocketto-pi meta get\|set <dir> <field> [value]` | Read / write local `.pocket-meta.json`; this command makes no GitHub call. |
 | Enterprise | `npx pocketto-pi format <issue\|pr\|comment\|closeout> --input <json>` | Render Enterprise GitHub bodies to a temp file. |
+| Enterprise | `npx pocketto-pi format tasklist <plan_dir>` | Render the final issue tasklist from local `log.json`. |
 | Core | `npx pocketto-pi scaffold github [--dry-run]` | Write `.github/` issue + PR templates locally. |
 | Shared | `npx pocketto-pi reconcile --prior <json> --new <json>` | Set-diff findings; remote thread updates belong to the Enterprise adapter. |
+
+For progressed v3 plans refused by migration (`PIN_V3_REQUIRED`), pin the compatible v3 CLI with `npx -y pocketto-pi@3.1.3` and finish the plan under v3.
 
 Lifecycle CLI flags above use `CONTRACT=3`; distribution version `4.0.0`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1` are independently versioned. State flow remains `WAITING` → `REVIEW` → `DONE` | `BLOCKED`. Core lifecycle events contain artifact references and opaque proof references, never GitHub IDs or credentials.
 

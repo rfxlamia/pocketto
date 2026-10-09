@@ -101,7 +101,7 @@ Example:
 ```
 T5: Projects + Invites endpoints       [depends: T4]
 T6: Roadmap endpoints                  [depends: T4] [parallel: T5]
-T7: Owner dashboard endpoints          [depends: T4] [parallel: T5,T6]
+T7: Owner dashboard endpoints          [depends: T4] [parallel: T5]
 
 → Group {T5, T6, T7}, parent = T4's done_sha
 ```

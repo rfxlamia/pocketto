@@ -59,6 +59,16 @@ function buildEventId(planId, type, revision) {
 // what the event means.
 const VOLATILE_FIELDS = ['delivery', 'occurred_at'];
 
+function normalizeArtifactRef(ref) {
+  if (!isPlainObject(ref)) return normalizeText(ref);
+  const out = {};
+  for (const key of Object.keys(ref).sort()) {
+    if (VOLATILE_FIELDS.includes(key)) continue;
+    out[key] = key === 'path' ? ref[key] : normalizeText(ref[key]);
+  }
+  return out;
+}
+
 function normalizeText(value) {
   if (typeof value === 'string') {
     // CRLF and lone-CR are equivalent to LF for identity purposes.
@@ -71,7 +81,9 @@ function normalizeText(value) {
     const out = {};
     for (const key of Object.keys(value).sort()) {
       if (VOLATILE_FIELDS.includes(key)) continue;
-      out[key] = normalizeText(value[key]);
+      out[key] = key === 'artifact_refs' && Array.isArray(value[key])
+        ? value[key].map(normalizeArtifactRef)
+        : normalizeText(value[key]);
     }
     return out;
   }
@@ -157,14 +169,12 @@ function canonicalArtifactRef(ref) {
   return {
     root: ref.root,
     kind: ref.kind,
-    path: normalizeText(ref.path),
+    // Filesystem paths are identities, so preserve their exact code points.
+    // Text normalization remains in effect for hashes of other payload text.
+    path: ref.path,
     sha256: String(ref.sha256).toLowerCase(),
     revision: ref.revision,
   };
-}
-
-function validateArtifactRefShallow(ref) {
-  return validateArtifactRef(ref).ok;
 }
 
 function validateEvent(event) {
@@ -200,9 +210,8 @@ function validateEvent(event) {
     return fail('LIFECYCLE_BAD_ARTIFACT', 'artifact_refs must be a non-empty array');
   }
   for (const ref of event.artifact_refs) {
-    if (!validateArtifactRefShallow(ref)) {
-      return fail('LIFECYCLE_BAD_ARTIFACT', 'artifact ref must match { root, kind, path, sha256, revision }');
-    }
+    const result = validateArtifactRef(ref);
+    if (!result.ok) return result;
   }
   if (typeof event.payload_hash !== 'string' || !HEX64_PATTERN.test(event.payload_hash)) {
     return fail('LIFECYCLE_BAD_PAYLOAD_HASH', 'payload_hash must be a SHA-256 hex digest');

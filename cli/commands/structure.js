@@ -67,6 +67,9 @@ function parseTasks(text) {
     const { deps, parallelTarget } = parseAnnotation(annotation);
     const slug = slugify(name);
     const filename = `${tid}${slug ? '-' + slug : ''}.md`;
+    if (Object.hasOwn(tasks, tid)) {
+      throw new CliError('DUPLICATE_TASK_ID', `Duplicate task ID: ${tid}`);
+    }
     tasks[tid] = { id: tid, num, name, annotation, deps, parallelTarget, body, slug, filename };
   }
   return tasks;
@@ -94,11 +97,32 @@ function parseAnnotation(annotation) {
 // ─── DEPTH COMPUTATION ──────────────────────────────────────────────────────
 
 function computeDepths(tasks) {
+  const hasTask = (tid) => Object.hasOwn(tasks, tid);
+  for (const task of Object.values(tasks)) {
+    for (const dep of task.deps) {
+      if (!hasTask(dep)) throw new CliError('UNKNOWN_TASK_REF', `Unknown task reference: ${dep}`);
+    }
+    if (task.parallelTarget && !hasTask(task.parallelTarget)) {
+      throw new CliError('UNKNOWN_TASK_REF', `Unknown task reference: ${task.parallelTarget}`);
+    }
+  }
+  const validated = new Set();
+  const validating = new Set();
+  function validateDependencies(tid) {
+    if (validated.has(tid)) return;
+    if (validating.has(tid)) throw new CliError('CYCLE_DETECTED', `Circular dependency involving: ${tid}`);
+    validating.add(tid);
+    for (const dep of tasks[tid].deps) validateDependencies(dep);
+    validating.delete(tid);
+    validated.add(tid);
+  }
+  for (const tid of Object.keys(tasks)) validateDependencies(tid);
+
   const depths = {};
   const visiting = new Set();
   function depthOf(tid) {
-    if (tid in depths) return depths[tid];
-    if (!(tid in tasks)) throw new CliError('UNKNOWN_TASK_REF', `Unknown task reference: ${tid}`);
+    if (Object.hasOwn(depths, tid)) return depths[tid];
+    if (!hasTask(tid)) throw new CliError('UNKNOWN_TASK_REF', `Unknown task reference: ${tid}`);
     if (visiting.has(tid)) {
       throw new CliError('CYCLE_DETECTED', `Circular dependency involving: ${tid}`);
     }
@@ -113,6 +137,16 @@ function computeDepths(tasks) {
     return d;
   }
   for (const tid of Object.keys(tasks)) depthOf(tid);
+  for (const task of Object.values(tasks)) {
+    for (const dep of task.deps) {
+      if (depths[task.id] <= depths[dep]) {
+        throw new CliError(
+          'DEPENDENCY_ORDER',
+          `Task ${task.id} is scheduled at depth ${depths[task.id]} but depends on ${dep} at depth ${depths[dep]}.`
+        );
+      }
+    }
+  }
   return depths;
 }
 
@@ -476,6 +510,9 @@ ${task.body}
 
 function run(options = {}) {
   if (!options.planArg || options.dryRun) return runUnlocked(options);
+  if (!existsSync(path.resolve(options.planArg))) {
+    throw new CliError('FILE_NOT_FOUND', `${path.resolve(options.planArg)} not found`);
+  }
   const planDir = path.dirname(path.resolve(options.planArg));
   const logPath = path.join(planDir, 'log.json');
   return withProjectionMutation(logPath, () => runUnlocked(options));

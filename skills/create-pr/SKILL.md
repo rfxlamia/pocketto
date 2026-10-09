@@ -41,7 +41,7 @@ Examples:
 3. **Traveling state before PR creation** — commit `log.json`, plan docs, and spec docs before `gh pr create`.
 4. **Always `--body-file`** — never pass a multiline PR body inline.
 5. **Recorder only** — never merge the PR or close the linked issue; `closes #N` is a GitHub link that takes effect only if a human later merges the final PR.
-5. **Recorder only** — do not post verdict summaries, inline findings, or tasklist comments from this skill.
+6. **Recorder only** — do not post verdict summaries, inline findings, or tasklist comments from this skill.
 </HARD-GATE>
 
 ## Preflight

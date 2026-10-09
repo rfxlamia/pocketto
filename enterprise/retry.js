@@ -7,30 +7,126 @@
 // observed local result to a bounded outcome.
 
 const REDACTED = '[redacted]';
+const SECRET_FLAG_NAME = /(?:token|secret|password|auth|credential)/i;
+
+function isFlagNameCharacter(code) {
+  return (code >= 48 && code <= 57)
+    || (code >= 65 && code <= 90)
+    || (code >= 97 && code <= 122)
+    || code === 45
+    || code === 95;
+}
+
+function isFlagWhitespace(code) {
+  return /\s/.test(String.fromCharCode(code));
+}
+
+function secretFlagValueEnd(input, nameEnd) {
+  let separatorEnd = nameEnd;
+  while (isFlagWhitespace(input.charCodeAt(separatorEnd))) separatorEnd += 1;
+
+  if (input[separatorEnd] === '=' || input[separatorEnd] === ':') {
+    while (input[separatorEnd] === '=' || input[separatorEnd] === ':') separatorEnd += 1;
+    while (isFlagWhitespace(input.charCodeAt(separatorEnd))) separatorEnd += 1;
+  } else if (separatorEnd === nameEnd) {
+    return null;
+  }
+
+  const first = input[separatorEnd];
+  if (first === '"' || first === "'") {
+    const quote = first;
+    let cursor = separatorEnd + 1;
+    while (cursor < input.length) {
+      if (input[cursor] === '\\') {
+        cursor += 2;
+      } else if (input[cursor] === quote) {
+        return { separatorEnd, valueEnd: cursor + 1 };
+      } else {
+        cursor += 1;
+      }
+    }
+    return { separatorEnd, valueEnd: input.length };
+  }
+
+  let valueEnd = separatorEnd;
+  while (valueEnd < input.length) {
+    const character = input[valueEnd];
+    if (isFlagWhitespace(input.charCodeAt(valueEnd)) || character === ',' || character === ';' || character === '}' || character === '"' || character === "'") break;
+    valueEnd += 1;
+  }
+  return valueEnd > separatorEnd ? { separatorEnd, valueEnd } : null;
+}
+
+function redactSecretFlags(input) {
+  const chunks = [];
+  let copyFrom = 0;
+  let cursor = 0;
+
+  while (cursor + 1 < input.length) {
+    if (input.charCodeAt(cursor) !== 45 || input.charCodeAt(cursor + 1) !== 45) {
+      cursor += 1;
+      continue;
+    }
+    if (cursor > 0 && isFlagNameCharacter(input.charCodeAt(cursor - 1))) {
+      cursor += 2;
+      continue;
+    }
+
+    let nameEnd = cursor + 2;
+    while (nameEnd < input.length && isFlagNameCharacter(input.charCodeAt(nameEnd))) nameEnd += 1;
+    if (nameEnd === cursor + 2) {
+      cursor += 2;
+      continue;
+    }
+
+    const flagName = input.slice(cursor, nameEnd);
+    if (!SECRET_FLAG_NAME.test(flagName)) {
+      cursor = nameEnd;
+      continue;
+    }
+
+    const parsedValue = secretFlagValueEnd(input, nameEnd);
+    if (!parsedValue) {
+      cursor = nameEnd;
+      continue;
+    }
+
+    chunks.push(
+      input.slice(copyFrom, cursor),
+      `--${REDACTED}`,
+      input.slice(nameEnd, parsedValue.separatorEnd),
+      REDACTED
+    );
+    copyFrom = parsedValue.valueEnd;
+    cursor = parsedValue.valueEnd;
+  }
+
+  if (copyFrom === 0) return input;
+  chunks.push(input.slice(copyFrom));
+  return chunks.join('');
+}
 
 function redactSecrets(value) {
   if (typeof value !== 'string') return value;
   let out = value;
   // Strip secret-bearing CLI flags with their values first (raw argument
   // must not survive in any diagnostic).
+  out = redactSecretFlags(out);
+  // Authorization headers carry a scheme followed by its credential, so
+  // redact the whole value for standard and custom schemes alike.
   out = out.replace(
-    /--[A-Za-z0-9_-]*(token|secret|password|auth|credential)[A-Za-z0-9_-]*([=\s:]+)([^\s,;}"']+)/gi,
-    `--${REDACTED}$2${REDACTED}`
-  );
-  // Key=value / key: value assignments carrying secret material.
-  out = out.replace(
-    /\b(GITHUB_TOKEN|GH_TOKEN|AUTHORIZATION)\b\s*[:=]\s*([^\s,;}"']+)/gi,
-    `${REDACTED}=$2`.replace(/\$2$/, REDACTED)
+    /(^|[^A-Za-z0-9_])((?:\\{0,2}["']?AUTHORIZATION\\{0,2}["']?\s*[:=]\s*))(?:\\{0,2}"(?:\\.|[^"\\])*\\{0,2}"|\\{0,2}'(?:\\.|[^'\\])*\\{0,2}'|\\{0,2}[-!#$%&'*+.^_`|~0-9A-Za-z]+\s+(?:\\{0,2}"(?:\\.|[^"\\])*\\{0,2}"|\\{0,2}'(?:\\.|[^'\\])*\\{0,2}'|[^\s,;}]+)|\\{0,2}[^\s,;}]+)/gi,
+    `$1$2${REDACTED}`
   );
   // Bearer tokens.
   out = out.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${REDACTED}`);
-  // gh-style issued tokens.
-  out = out.replace(/\bgh[pousr]_[A-Za-z0-9_]+/g, REDACTED);
-  // Generic secret-ish assignments: credential/secret/password/token keys.
+  // Named and generic token assignments, including quoted values.
   out = out.replace(
-    /\b(credential|secret|password)\b\s*[:=]\s*([^\s,;}"']+)/gi,
-    `${REDACTED} ${REDACTED}`
+    /\\{0,2}["']?(?:GITHUB_TOKEN|GH_TOKEN|AUTHORIZATION|ACCESS_TOKEN|REFRESH_TOKEN|TOKEN|CREDENTIAL|SECRET|PASSWORD)\\{0,2}["']?\s*([=:])\s*(?:\\{0,2}"(?:\\.|[^"\\])*\\{0,2}"|\\{0,2}'(?:\\.|[^'\\])*\\{0,2}'|[^\s,;}]+)/gi,
+    `${REDACTED}=${REDACTED}`
   );
+  // gh-style issued tokens.
+  out = out.replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_.-]+/gi, REDACTED);
   // Final sweep: the words themselves must not appear in diagnostics.
   out = out.replace(/\bcredentials?\b/gi, REDACTED);
   out = out.replace(/\btokens?\b/gi, REDACTED);

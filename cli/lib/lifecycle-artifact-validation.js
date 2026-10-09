@@ -25,11 +25,17 @@ function rootDirFor(root, specDir, planDir) {
   return root === 'spec' ? specDir : planDir;
 }
 
+function escapesRoot(relativePath) {
+  return relativePath === '..'
+    || relativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativePath);
+}
+
 function resolveArtifactPath(ref, rootDir, statFn, realpathFn) {
   const candidate = path.resolve(rootDir, ref.path);
   const rootSyntactic = path.resolve(rootDir);
   const rel = path.relative(rootSyntactic, candidate);
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+  if (rel === '' || escapesRoot(rel)) {
     return fail('LIFECYCLE_BAD_ARTIFACT_PATH', `artifact escapes its root: ${ref.path}`);
   }
 
@@ -66,7 +72,7 @@ function resolveArtifactPath(ref, rootDir, statFn, realpathFn) {
     return fail('LIFECYCLE_ARTIFACT_IO', `artifact unreadable: ${ref.path}`);
   }
   const realRel = path.relative(rootResolved, real);
-  if (realRel === '' || realRel.startsWith('..') || path.isAbsolute(realRel)) {
+  if (realRel === '' || escapesRoot(realRel)) {
     return fail('LIFECYCLE_ARTIFACT_ESCAPE', `artifact escapes its root: ${ref.path}`);
   }
   return { ok: true, candidate };

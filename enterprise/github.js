@@ -11,6 +11,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const { classifyGhResult, boundOutcome, redactSecrets } = require('./retry');
@@ -70,11 +71,21 @@ function runGh(args, opts = {}) {
         classification,
       };
     }
-    return { ok: true, data, raw: result, classification: { status: 'succeeded', error: null } };
+    return {
+      ok: true,
+      data,
+      raw: { exit: result.exit, stdout: redactSecrets(result.stdout), stderr: redactSecrets(result.stderr), timedOut: result.timedOut },
+      classification: { status: 'succeeded', error: null },
+    };
   }
 
   if (result.exit === 0) {
-    return { ok: true, data: result.stdout, raw: result, classification: { status: 'succeeded', error: null } };
+    return {
+      ok: true,
+      data: result.stdout,
+      raw: { exit: result.exit, stdout: redactSecrets(result.stdout), stderr: redactSecrets(result.stderr), timedOut: result.timedOut },
+      classification: { status: 'succeeded', error: null },
+    };
   }
 
   const classification = boundOutcome(classifyGhResult(result, { expectJson }), attemptsMade);
@@ -90,10 +101,39 @@ function runGh(args, opts = {}) {
 // file (avoids cross-shell quoting hazards per the create-pr transport
 // convention). Returns the temp path for the caller to pass to `gh`.
 function writeBodyFile(body, opts = {}) {
+  const ownsDir = !opts.dir;
   const dir = opts.dir || fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-body-'));
-  const file = path.join(dir, `body-${Date.now()}-${process.pid}.md`);
-  fs.writeFileSync(file, typeof body === 'string' ? body : String(body ?? ''), 'utf8');
-  return file;
+  let complete = false;
+  try {
+    const contents = typeof body === 'string' ? body : String(body ?? '');
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const suffix = crypto.randomBytes(8).toString('hex');
+      const file = path.join(dir, `body-${Date.now()}-${process.pid}-${suffix}.md`);
+      let fd;
+      try {
+        fd = fs.openSync(file, 'wx', 0o600);
+        fs.writeFileSync(fd, contents, 'utf8');
+        complete = true;
+        return file;
+      } catch (err) {
+        if (fd !== undefined) {
+          try { fs.closeSync(fd); } catch { /* best-effort close */ }
+          fd = undefined;
+          try { fs.rmSync(file, { force: true }); } catch { /* best-effort cleanup */ }
+        }
+        if (err.code !== 'EEXIST' || attempt === 9) throw err;
+      } finally {
+        if (fd !== undefined) {
+          try { fs.closeSync(fd); } catch { /* already closed */ }
+        }
+      }
+    }
+    throw new Error('Could not allocate a unique request body file.');
+  } finally {
+    if (!complete && ownsDir) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
+    }
+  }
 }
 
 // `gh api` has no `--body-file`. `-F body=@file` is its file transport:
