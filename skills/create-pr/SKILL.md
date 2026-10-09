@@ -181,6 +181,6 @@ If the PR was reused, report `PR_REUSED` instead of `PR_READY`.
 |---------|---------|
 | "I'll create a feature branch first" | **STOP.** This recorder never manages branches. |
 | "Skip the traveling-state commit" | **STOP.** Review needs the plan log and artifacts on the PR. |
-| "The Enterprise reporting file can post verdicts here" | **STOP.** Verdict reporting remains in `enterprise-reporting.md`. |
+| "This recorder should post phase verdicts" | **STOP.** The registered Enterprise lifecycle adapter owns phase reporting when a `phase-complete` event is drained. |
 | "I'll inline the PR body" | Use `format pr` and `--body-file`. |
 | "No issue yet — create the PR anyway" | **STOP.** Reconcile the approved spec issue first. |
