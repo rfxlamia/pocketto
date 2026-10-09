@@ -16,7 +16,7 @@ If they already committed, review the range since the task started (`git diff <s
 
 ## 2. Verify behavior
 
-Run the relevant tests with the project's real command (from the memory file's project guide). At `foundation` for `testing`, ask the learner to run them and read the output together instead.
+Run the relevant tests with the project's real command (from the memory file's project guide). At `foundation` for `testing`, invite the learner to run them and read the output together. If they explicitly ask you to run the tests, do so and explain the output; this does not authorize implementation changes.
 
 A failing test is a finding like any other: point to the failure and let them trace it.
 

@@ -24,7 +24,7 @@ Add stack skills only when supported by repository evidence (the `pocket-init` s
 
 ## 2. Self-assessment (one message)
 
-In one message, ask for one letter per selected skill:
+Treat the learner's direct statements about their experience as self-assessment. Ask only about selected skills whose level is still unclear, and ask in one message:
 
 ```text
 For each, pick a / b / c:
@@ -56,7 +56,7 @@ Rules:
 
 ## 4. Propose, confirm, write
 
-Show the proposed levels for the selected skills and the reason for any probe adjustment. Let the learner choose the teaching style and whether to keep a journal; avoid asking them to re-confirm information they already gave.
+Show the proposed levels for the selected skills and the reason for any probe adjustment. Let the learner choose the teaching style and whether to keep a journal; avoid asking them to re-confirm information they already gave. A direct preference they already stated is sufficient. Persist a new profile only after explicit confirmation.
 
 ```text
 Proposed learner profile (for this task):
@@ -79,12 +79,14 @@ npx -y pocketto-pi edu init --file <memory_file> \
 
 `EDU_PROFILE_EXISTS` means a profile is already there: stop and reuse it. Only an explicit recalibration request adds `--reset`.
 
+If the learner does not want to create or update a persistent profile, do not hold up the task. Use their stated levels where available and `guided` as a task-scoped default for unspecified skills; continue without writing the profile.
+
 ## Adding one skill later
 
-When a task needs a skill that is not in the profile, ask one self-assessment question for that skill only (a / b / c), optionally one probe, propose the level, and on confirmation:
+When a task needs a skill that is not in the profile, use the learner's stated experience if available. Otherwise ask one self-assessment question for that skill only (a / b / c), optionally one probe, and propose a task-scoped level. Persist the new dimension only after confirmation:
 
 ```bash
 npx -y pocketto-pi edu set --level sql=guided --json --contract 3
 ```
 
-The CLI reports it as `direction: "added"`.
+The CLI reports it as `direction: "added"`. If the learner declines, keep the proposed level for this task only and continue without changing the profile.

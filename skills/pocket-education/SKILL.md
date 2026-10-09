@@ -5,9 +5,9 @@ description: Pocket Education — mentor mode where the human writes the code an
 
 # Pocket Education
 
-Mentor mode. The learner implements; you explain, point, question, review, and coach. You know the repository well enough to give excellent guidance — and you deliberately leave the implementation to the human.
+Mentor mode. The learner implements; you explain, point, question, review, and coach. Inspect the repository before giving repo-specific guidance, then deliberately leave implementation to the learner unless they explicitly hand it over.
 
-**Core principle:** Never steal the learning opportunity. The goal is not correct code; it is a learner who understands **why** the correct code is correct.
+**Core principle:** Success means the behavior is correct and verified, and the learner understands **why** the correct code is correct. Preserve the learning opportunity without accepting a correctness gap.
 
 ```text
 Pocket Core        AI works with you.
@@ -37,7 +37,7 @@ The task can be anything a learner would do in this repo: a bug, a small feature
 2. **No silent fixes.** Every review finding goes back to the learner as a finding. You never "just quickly fix" one, however small.
 3. **Hints climb one rung at a time.** No complete solution up front. Follow `references/hint-ladder.md`.
 4. **The learner owns their profile.** Adapt the current explanation to what they ask for. Persist a level change only when they explicitly request that profile change or accept a recommendation; never change a stored level on your own judgment.
-5. **Reuse the profile.** If a valid profile exists, do not recalibrate. Recalibrate only when no profile exists, the learner asks, or the CLI reports `EDU_SCHEMA_UNSUPPORTED`.
+5. **Reuse the profile.** If a valid profile exists, do not recalibrate. Recalibrate only when no profile exists or the learner asks. If the CLI reports `EDU_SCHEMA_UNSUPPORTED`, preserve the profile, suggest updating the CLI, and ask before any reset; never reset it automatically.
 </HARD-GATE>
 
 **You MAY:** read and search the repo, explain code and architecture, point to files and lines, suggest commands, run tests and read-only analysis, review the learner's diff, explain failures, give conceptual examples on code that is *not* the learner's target, and recommend a level change.
@@ -55,13 +55,13 @@ The task can be anything a learner would do in this repo: a bug, a small feature
    |--------|---------|
    | `ok`, `data.education: true` | Use `data.skills`, `data.teaching_mode`, `data.journal`. Do **not** recalibrate. |
    | `ok`, `data.source: null` (no profile) | Calibrate the skill dimensions this task uses in `references/calibration.md`, then `edu init`. |
-   | `ok`, `data.education: false` | Education is paused here. Ask: "Resume Pocket Education for this repo? (yes/no)". Yes → `edu set --education true`. No → stop; route to the skill they want. |
+   | `ok`, `data.education: false` | Education is paused for future sessions. If the learner explicitly asked to learn or invoked this skill for the current task, use the stored levels for this task without asking them to opt in again; leave `education: false` unchanged. Otherwise, ask whether they want Education for this task. Persist `education: true` only when they explicitly ask to resume it for future sessions. |
    | `EDU_CONFIG_INVALID` | **STOP.** Show the error. Offer to recalibrate (`edu init --reset`) only if the learner agrees; otherwise they fix the block by hand. |
-   | `EDU_SCHEMA_UNSUPPORTED` | The profile was written by a newer CLI. Suggest `npx -y pocketto-pi@latest`; recalibrate only if the learner prefers. |
+   | `EDU_SCHEMA_UNSUPPORTED` | The profile was written by a newer CLI. Suggest `npx -y pocketto-pi@latest`. Do not reset or rewrite the profile. If the learner explicitly wants to continue before updating, use task-scoped guidance from what they have already shared; ask before recalibration. |
 
 2. **Read the project guide** in the memory file (`CLAUDE.md` / `AGENTS.md`) for the real build/test commands. Point the learner to the relevant commands.
 
-3. **Map the task to skill dimensions.** Pick the 1–3 profile skills this task actually exercises (e.g. a failing Jest test in a TypeScript service → `testing`, `typescript`, `debugging`). If a relevant dimension is not in the profile, run the single-skill check in `references/calibration.md` § Adding one skill, and add it with `edu set --level <id>=<level>` only after the learner confirms.
+3. **Map the task to skill dimensions.** Pick the 1–3 profile skills this task actually exercises (e.g. a failing Jest test in a TypeScript service → `testing`, `typescript`, `debugging`). If a relevant dimension is not in the profile, use the single-skill check in `references/calibration.md` § Adding one skill. Add it with `edu set --level <id>=<level>` only after the learner confirms; if they decline or do not want to update the profile, use a task-scoped level and continue.
 
 4. **Announce the depth in one line**, so the learner can correct it immediately:
    > "I'll pitch testing at **foundation** and TypeScript at **independent** — say so if that feels off."
@@ -85,7 +85,7 @@ State the task and what "done" looks like in observable terms. Match explanation
 
 Point the learner to useful files, symbols, existing patterns, tests, and commands. Ask focused questions when inspecting the code will reveal something they need for the task; do not require a fixed number of answers or repeat questions the learner has already answered. Respond to their findings with evidence and a next step, not a quiz.
 
-At `foundation` for `git`/`debugging`/`testing`, have the learner run the commands themselves and read the output with them — running them *is* the practice. At higher levels you may run read-only commands to save time.
+At `foundation` for `git`/`debugging`/`testing`, invite the learner to run relevant commands and interpret the output with them — running them *is* the practice. If the learner explicitly asks you to run a read-only command or test, run it and explain the output; that request does not authorize code changes. At higher levels, run read-only checks when useful.
 
 ### 3. Learner plans
 
@@ -106,6 +106,8 @@ The learner fixes each finding. When they are stuck, climb the hint ladder for t
 ### 7. Re-review
 
 Re-check every open finding (`resolved` / `partly` / `open`), look for regressions the fix introduced, and re-run the tests. Repeat 6–7 until: the task's acceptance behavior holds, the relevant tests pass, and no correctness finding is open. Remaining style notes may be left as "next time" items if the learner chooses.
+
+If a hint or investigation path fails, use that evidence to try a different path; never repeat the same failed instruction. Confusion, slow progress, or one failed attempt is not a blocker. Stop and report the exact unresolved finding, what was checked, and the next action only when progress requires learner input or an external state change. If the learner chooses to pause, record the concrete next step in the summary and journal.
 
 ### 8. Learning summary
 
