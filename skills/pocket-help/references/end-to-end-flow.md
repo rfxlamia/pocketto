@@ -9,7 +9,7 @@ pocket-pitching → pocket-grinding → pocket-planning → pocket-structuring �
    (explore)        (specify/BDD)      (plan/TDD)         (phase)          (execute + review)          (close)
 ```
 
-Standalone skills (`bug-hunting`, `hotfix`, `brand-design`, `structured-research`, `pocket-init`) sit outside this chain. Use them when the task does not need the full pipeline.
+Standalone skills (`bug-hunting`, `hotfix`, `brand-design`, `structured-research`, `pocket-help`, `pocket-init`, `pocket-education`) sit outside this chain. `pocket-enterprise` is an optional adapter, enabled only at the user's explicit request.
 
 ## Stage-by-Stage
 
@@ -43,16 +43,16 @@ Run the structure command to create an execution index, per-task files, and phas
 
 ### 5. pocket-development — execute + review
 
-Execute tasks one at a time with a Pocket Packet, the in-loop audit, and an append-only phase-level pass after all tasks are done.
+Execute tasks one at a time with a Pocket Packet, the in-loop audit, and an append-only phase-level pass after all tasks are done. Write a durable phase handoff before the phase enters `REVIEW`.
 - **Gate:** The prerequisite phase must be complete before a later phase starts.
-- **Produces:** Commits, per-task verdict artifacts, and a phase-level pass result.
-- **Next:** Leave a passing phase in `REVIEW` and name `pocket-closing` as the user-triggered next step. A phase completion emits the neutral `phase-complete` event.
+- **Produces:** Commits, per-task verdict artifacts, a phase-level pass result, and a durable narrative handoff for closeout.
+- **Next:** Leave a passing phase in `REVIEW`. Continue to closing if the user's request includes end-to-end closeout; otherwise name `pocket-closing` as the next step. A phase completion emits the neutral `phase-complete` event.
 
-### 6. pocket-closing — close (user-triggered)
+### 6. pocket-closing — close (when authorized)
 
-Reconcile task verdicts against the execution log, advance an eligible phase, run the plan close command, and write the closeout summary.
+Reconcile task verdicts against the execution log, advance an eligible phase, and append a readable section for that phase to `closeout.md`. When all phases are done, run the plan close command and append the final plan section.
 - **Gate:** Every reviewable task must have a current passing verdict.
-- **Produces:** An advanced phase or a closed plan, plus `closeout.md` when the plan is complete.
+- **Produces:** An advanced phase with its closeout section, or a closed plan with the complete phase-by-phase journal.
 - **Next:** A successful final close emits the neutral `plan-closed` event.
 
 ## Worked Example — "Add JWT refresh-token support"
@@ -62,7 +62,7 @@ Reconcile task verdicts against the execution log, advance an eligible phase, ru
 3. `pocket-planning` maps the codebase and decomposes the criteria into bounded tasks.
 4. `pocket-structuring` creates task files and phase manifests, then asks for execution approval.
 5. `pocket-development` executes and reviews each task, then runs the phase-level pass and emits `phase-complete` when the phase reaches `REVIEW`.
-6. The user runs `pocket-closing` to reconcile the verdicts and advance the phase. When all phases are complete, closing emits `plan-closed`.
+6. If the original request included end-to-end closeout, the agent runs `pocket-closing`; otherwise the user invokes it next. Closing reconciles verdicts and appends a phase section. After every phase is complete, it appends the final plan section and emits `plan-closed`.
 
 ## Entry Points — Don't Always Start at the Top
 
