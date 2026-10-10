@@ -245,4 +245,7 @@ module.exports = {
   selectInitStrategy,
   prepareStackedInit,
   initEnvelope,
+  // Shared with phase-handoff-preconditions.js (same dirty-set guard).
+  allowedPrefixes,
+  isUnder,
 };

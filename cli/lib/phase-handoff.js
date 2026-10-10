@@ -10,11 +10,10 @@
 //
 // Boundary: local only. No push, no `gh`, no enterprise/** imports.
 
+
 const path = require('node:path');
 const { readFileSync, existsSync, mkdirSync } = require('node:fs');
-const { spawnSync } = require('node:child_process');
 const { CliError } = require('./envelope');
-const { readLogChecked } = require('./logjson');
 const { writeFileAtomicSync } = require('./atomic-file');
 const { hashBytes, readLifecycleDoc } = require('./lifecycle-store');
 const {
@@ -25,154 +24,11 @@ const {
   planIdForLog,
 } = require('./lifecycle-transition');
 const { pendingDrainActions } = require('./next-actions');
-const { currentBranch, dirtyPaths, repoPathPrefix } = require('./git-worktree');
-const { resolveProjectRoot, REGISTRATION_PATH } = require('./lifecycle-adapter');
 const { planArtifactWarnings } = require('./artifact-ignore');
+const { checkPreconditions, extractSection, closeoutMarker } = require('./phase-handoff-preconditions');
 
 function snapshotRel(order) {
   return `reviews/closeout-phase-${order}.md`;
-}
-
-const HEADING = /^#{1,6}\s/;
-const MARKER_PREFIX = '<!-- pocket-closeout:';
-
-function closeoutMarker(order) {
-  return `${MARKER_PREFIX}phase-${order} -->`;
-}
-
-// Indexes of lines that are exactly <marker> (surrounding whitespace aside).
-// Never a substring or heading match: phase-1 must not match phase-10.
-function markerLines(lines, marker) {
-  const hits = [];
-  lines.forEach((line, i) => {
-    if (line.trim() === marker) hits.push(i);
-  });
-  return hits;
-}
-
-// closeout.md split into lines, or HANDOFF_CLOSEOUT_MISSING when the file is
-// absent or the phase's exact marker is not there exactly once.
-function readCloseoutLines(planDir, order) {
-  const file = path.join(planDir, 'closeout.md');
-  const lines = existsSync(file) ? readFileSync(file, 'utf8').split(/\r?\n/) : null;
-  const hits = lines ? markerLines(lines, closeoutMarker(order)) : [];
-  if (hits.length !== 1) {
-    const reason = hits.length === 0 ? 'has no' : `has ${hits.length} copies of the`;
-    throw new CliError(
-      'HANDOFF_CLOSEOUT_MISSING',
-      `${file} ${reason} ${closeoutMarker(order)} section. It needs exactly one; append or repair the phase's closeout section (pocket-closing), then rerun log handoff.`,
-    );
-  }
-  return { lines, start: hits[0] };
-}
-
-// The phase's closeout section: from its marker line up to the next
-// `<!-- pocket-closeout:` marker line or EOF. Each marker sits directly under
-// its own heading, so the heading line that belongs to the next marker is
-// left out, and trailing whitespace is normalized to one newline. The result
-// is therefore unchanged when later sections are appended.
-function extractSection({ lines, start }) {
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (lines[i].trim().startsWith(MARKER_PREFIX)) {
-      end = i;
-      break;
-    }
-  }
-  const section = lines.slice(start, end);
-  if (end < lines.length) {
-    while (section.length > 1 && section[section.length - 1].trim() === '') section.pop();
-    if (section.length > 1 && HEADING.test(section[section.length - 1])) section.pop();
-  }
-  return `${section.join('\n').replace(/\s+$/, '')}\n`;
-}
-
-// HEAD must be exactly this phase's recorded branch; detached HEAD is a
-// mismatch too.
-function assertOnPhaseBranch(planDir, phase) {
-  const head = currentBranch(planDir);
-  if (head === phase.branch) return;
-  throw new CliError(
-    'PHASE_BRANCH_MISMATCH',
-    `${phase.file} belongs on ${phase.branch}, but HEAD is ${head === null ? 'detached' : head}. ` +
-      `Run: git switch ${phase.branch}`,
-  );
-}
-
-// Worktree paths from `git worktree list --porcelain`. The first entry is the
-// main worktree. Null when git cannot list them (fail closed by the caller).
-function worktreeList(cwd) {
-  const r = spawnSync('git', ['worktree', 'list', '--porcelain'], {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  if (r.status !== 0 || r.error) return null;
-  return r.stdout
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith('worktree '))
-    .map((line) => line.slice('worktree '.length));
-}
-
-// Pocket parallel groups register task worktrees (conventionally under
-// .worktree/). Any registered worktree besides the main one means a group may
-// still hold unmerged work, so handoff refuses. Entries are counted, never
-// compared as path strings.
-function assertNoExtraWorktrees(planDir) {
-  const list = worktreeList(planDir);
-  if (list === null) {
-    throw new CliError('HANDOFF_WORKTREES_ACTIVE', 'Could not list git worktrees (git worktree list --porcelain failed), so handoff cannot confirm no parallel group is active.');
-  }
-  const extra = list.slice(1);
-  if (extra.length === 0) return;
-  const err = new CliError(
-    'HANDOFF_WORKTREES_ACTIVE',
-    `Other git worktrees are still registered: ${extra.join(', ')}. Merge or finish the parallel group, remove them with git worktree remove <path> (and git worktree prune), then rerun log handoff.`,
-  );
-  err.details = { worktrees: extra };
-  throw err;
-}
-
-// Repo-relative, forward-slash path of <p> under <root>, or null when outside.
-function relativeUnder(root, p) {
-  const rel = path.relative(root, path.resolve(root, p));
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-  return rel.split(path.sep).join('/');
-}
-
-// The allowed dirty set, as git-toplevel-relative prefixes: the plan dir, the
-// spec dir (lifecycle document), and the machine-local adapter registration
-// file (Pocket-owned, untracked by design; `log init` tolerates it too).
-// An unknown repository base allows nothing (fail closed).
-function allowedPrefixes(planDir) {
-  const projectRoot = resolveProjectRoot(planDir) || planDir;
-  const gitBase = repoPathPrefix(projectRoot);
-  if (gitBase === null) return [];
-  let specDir = null;
-  try {
-    specDir = lifecycleSpecDirForPlan(planDir);
-  } catch {
-    specDir = null;
-  }
-  const registration = path.join(projectRoot, REGISTRATION_PATH);
-  return [planDir, specDir, registration]
-    .filter(Boolean)
-    .map((p) => relativeUnder(projectRoot, p))
-    .filter(Boolean)
-    .map((rel) => `${gitBase}${rel}`);
-}
-
-function assertCleanOutsidePlan(planDir) {
-  const prefixes = allowedPrefixes(planDir);
-  const foreign = dirtyPaths(planDir).filter((p) => !prefixes.some((prefix) => p === prefix || p.startsWith(`${prefix}/`)));
-  if (foreign.length === 0) return;
-  const err = new CliError(
-    'DIRTY_OUTSIDE_PLAN',
-    `Uncommitted changes outside the plan and spec directories: ${foreign.join(', ')}. Commit, stash, or revert them, then rerun log handoff.`,
-  );
-  err.details = { paths: foreign };
-  throw err;
 }
 
 // Current lifecycle revision, or 0 when there is no document.
@@ -198,39 +54,6 @@ function nextPhaseIdentity(log, phase, planId) {
     base_branch: phase.branch,
     entry: next,
   };
-}
-
-// Step 1: preconditions, in spec order. Every refusal throws before anything
-// is written. Returns the plan context the later steps need.
-function checkPreconditions(planDir, phaseFileArg, findPhaseInLog) {
-  const logPath = path.join(planDir, 'log.json');
-  if (!existsSync(logPath)) {
-    throw new CliError('NO_LOG', `log.json not found at '${logPath}'. Run 'pocketto-pi log init' first.`);
-  }
-  const log = readLogChecked(logPath);
-  const mode = log.header && log.header.phase_branches ? log.header.phase_branches.mode : 'none';
-  if (mode !== 'stacked') {
-    throw new CliError(
-      'HANDOFF_NOT_STACKED',
-      `${logPath} records phase_branches '${mode || 'none'}'; log handoff applies only to stacked plans. Nothing was changed.`,
-    );
-  }
-  const phase = findPhaseInLog(log, phaseFileArg);
-  if (!phase) {
-    const available = log.phases.map((p) => p.file);
-    throw new CliError('PHASE_NOT_FOUND', `'${phaseFileArg}' not found in log. Available: ${JSON.stringify(available)}`);
-  }
-  if (phase.status !== 'DONE') {
-    throw new CliError(
-      'HANDOFF_PHASE_NOT_DONE',
-      `${phase.file} is ${phase.status}; handoff runs only after the phase is DONE. Close the phase first (pocket-closing), then rerun log handoff.`,
-    );
-  }
-  const closeout = readCloseoutLines(planDir, phase.order);
-  assertOnPhaseBranch(planDir, phase);
-  assertNoExtraWorktrees(planDir);
-  assertCleanOutsidePlan(planDir);
-  return { logPath, log, phase, closeout };
 }
 
 // Step 2: the snapshot is written once and never rewritten. A rerun verifies
@@ -267,17 +90,9 @@ function eventSummary(event) {
   };
 }
 
-function handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter = null, adapterRunner = null } = {}) {
-  if (positionals.length !== 2) {
-    throw new CliError('USAGE', 'Usage: pocketto-pi log handoff <plan_dir> <phase_file>');
-  }
-  const planDir = resolvePlanDir(positionals[0]);
-  const { logPath, log, phase, closeout } = checkPreconditions(planDir, positionals[1], findPhaseInLog);
-  const order = phase.order;
-  const snapshot = ensureSnapshot(planDir, order, closeout);
-
-  // Step 3: commit the event first, then project log.json (commit-before-
-  // project). An identical rerun replays in the store and appends nothing.
+// Step 3: commit the event first, then project log.json (commit-before-
+// project). An identical rerun replays in the store and appends nothing.
+function commitPhaseClosed({ planDir, logPath, log, phase, snapshot, projectionWriter, adapterRunner }) {
   const specDir = lifecycleSpecDirForPlan(planDir);
   const revisionBefore = lifecycleRevision(specDir);
   const next = nextPhaseIdentity(log, phase, planIdForLog(planDir));
@@ -292,17 +107,22 @@ function handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter
     commit: () => emitPhaseClosed({
       planDir,
       phaseFile: phase.file,
-      order,
+      order: phase.order,
       snapshot: { path: snapshot.path, sha256: snapshot.sha256 },
       nextIdentity: next,
     }),
     ...transitionDeps({ projectionWriter, adapterRunner }),
   });
+  return { specDir, next, outcome, eventStep: eventStep(outcome.event, revisionBefore) };
+}
 
-  // Steps 4-5 (commit, next branch) are not performed here.
+// Steps 4-5 (commit, next branch) are not performed here.
+function handoffResult({ planDir, phase, snapshot, transition }) {
+  const order = phase.order;
+  const { specDir, next, outcome } = transition;
   const steps = {
     snapshot: snapshot.step,
-    event: eventStep(outcome.event, revisionBefore),
+    event: transition.eventStep,
     commit: 'pending',
     branch: 'pending',
   };
@@ -330,6 +150,17 @@ function handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter
       next_actions: pendingDrainActions({ specDir, projectDir: planDir }),
     },
   };
+}
+
+function handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter = null, adapterRunner = null } = {}) {
+  if (positionals.length !== 2) {
+    throw new CliError('USAGE', 'Usage: pocketto-pi log handoff <plan_dir> <phase_file>');
+  }
+  const planDir = resolvePlanDir(positionals[0]);
+  const { logPath, log, phase, closeout } = checkPreconditions(planDir, positionals[1], findPhaseInLog);
+  const snapshot = ensureSnapshot(planDir, phase.order, closeout);
+  const transition = commitPhaseClosed({ planDir, logPath, log, phase, snapshot, projectionWriter, adapterRunner });
+  return handoffResult({ planDir, phase, snapshot, transition });
 }
 
 module.exports = { handoff };

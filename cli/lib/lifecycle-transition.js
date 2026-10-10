@@ -265,6 +265,20 @@ function assertStackedHeadOnPhaseBranch(planDir, phaseFile, stacked) {
   }
 }
 
+// Plan identity and spec dir of a plan that already carries a matching
+// lifecycle document, or null (no slug, no spec dir, no document, or another
+// plan_id). Shared guard for the emission hooks: plans without a matching
+// document keep their pre-lifecycle behavior (no event, no error, no file).
+function matchingLifecycleTarget(planDir) {
+  const planId = planIdForLog(planDir);
+  if (!planId) return null;
+  const specDir = lifecycleSpecDirForPlan(planDir);
+  if (!specDir) return null;
+  const existing = readLifecycleDoc(specDir);
+  if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  return { planId, specDir };
+}
+
 function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus, log }) {
   if (level !== 'phase') return null;
   if (newStatus !== 'REVIEW') return null;
@@ -274,12 +288,9 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
   // v3-only plans (no lifecycle identity or no lifecycle document) keep
   // existing `log update` behavior untouched: no event, no error, no new
   // file. Only plans already carrying a lifecycle document participate.
-  const planId = planIdForLog(planDir);
-  if (!planId) return null;
-  const specDir = lifecycleSpecDirForPlan(planDir);
-  if (!specDir) return null;
-  const existing = readLifecycleDoc(specDir);
-  if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  const target = matchingLifecycleTarget(planDir);
+  if (!target) return null;
+  const { planId, specDir } = target;
   const artifacts = [phaseEvidenceRef(planDir, phaseFile)];
   let branch;
   if (stacked) {
@@ -336,12 +347,9 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
   // v3-only plans (no lifecycle identity or no lifecycle document) keep
   // existing `log close` behavior untouched: no event, no error, no new
   // file. Only plans already carrying a lifecycle document participate.
-  const planId = planIdForLog(planDir);
-  if (!planId) return null;
-  const specDir = lifecycleSpecDirForPlan(planDir);
-  if (!specDir) return null;
-  const existing = readLifecycleDoc(specDir);
-  if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  const target = matchingLifecycleTarget(planDir);
+  if (!target) return null;
+  const { planId, specDir } = target;
   const artifacts = closureEvidenceRefs(planDir, phaseFiles);
   const res = commitTransition({
     specDir,
@@ -369,12 +377,9 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
 //
 // Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
 function emitPhaseClosed({ planDir, phaseFile, order, snapshot, nextIdentity = null }) {
-  const planId = planIdForLog(planDir);
-  if (!planId) return null;
-  const specDir = lifecycleSpecDirForPlan(planDir);
-  if (!specDir) return null;
-  const existing = readLifecycleDoc(specDir);
-  if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  const target = matchingLifecycleTarget(planDir);
+  if (!target) return null;
+  const { planId, specDir } = target;
   const artifacts = [
     phaseEvidenceRef(planDir, phaseFile),
     { root: 'plan', kind: 'closeout-snapshot', path: snapshot.path, sha256: snapshot.sha256, revision: 1 },
