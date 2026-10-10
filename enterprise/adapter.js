@@ -24,13 +24,14 @@ try {
 
 const ADAPTER_STATUSES = ['succeeded', 'retryable', 'terminal', 'reconciling'];
 
-// Explicit handler dispatch table: exactly the three neutral lifecycle
+// Explicit handler dispatch table: exactly the four neutral lifecycle
 // event types, each naming the Enterprise handler that owns it. The names
 // are local handler keys — remote policy stays in the Phase 2 handlers.
 const HANDLERS = {
   'spec-approved': 'handleSpecApproved',
   'phase-complete': 'handlePhaseComplete',
   'plan-closed': 'handlePlanClosed',
+  'phase-closed': 'handlePhaseClosed',
 };
 
 function buildError(code, message, retryable) {

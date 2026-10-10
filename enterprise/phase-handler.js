@@ -34,11 +34,11 @@ function upsertPhaseSummary(repo, pr, phase, selectedPr, options) {
   return marker;
 }
 
-function reconcilePhase(event, context, phase, options) {
-  const repo = resolveRepository(options);
-  const meta = enterpriseMeta.readMetaFor(context.specDir, metaContextFor(context));
-  const issue = resolveOwnedIssue(event, context, repo, options);
-  const selectedPr = resolvePhasePr(context, phase, repo, options);
+// Shared PR reconciliation seam: upserts the phase summary, then reconciles the phase
+// findings onto one PR. `prior` holds the fingerprint records already saved for this
+// phase. `persist(marker, records)` records partial state when a thread resolution fails,
+// before the error propagates. Returns { marker, fingerprints }; the caller owns the proof.
+function reconcileOnPr(phase, { repo, selectedPr, prior, persist }, options) {
   const pr = selectedPr.pr;
   const marker = upsertPhaseSummary(repo, pr, phase, selectedPr, options);
   const threads = github.listReviewThreads(repo, pr.number, options);
@@ -46,12 +46,28 @@ function reconcilePhase(event, context, phase, options) {
     repo,
     pr,
     threads,
-    prior: readPriorFingerprints(meta, phase.key),
+    prior,
     findings: phase.findings,
     options,
-    onResolveFailure: (records) => persistPhaseProof(event, context, issue, phase, pr, marker, records),
+    onResolveFailure: (records) => persist(marker, records),
   });
-  return persistPhaseProof(event, context, issue, phase, pr, marker, fingerprints);
+  return { marker, fingerprints };
+}
+
+function reconcilePhase(event, context, phase, options) {
+  const repo = resolveRepository(options);
+  const meta = enterpriseMeta.readMetaFor(context.specDir, metaContextFor(context));
+  const issue = resolveOwnedIssue(event, context, repo, options);
+  const selectedPr = resolvePhasePr(context, phase, repo, options);
+  const pr = selectedPr.pr;
+  const persist = (marker, fingerprints) => persistPhaseProof(event, context, issue, phase, pr, marker, fingerprints);
+  const { marker, fingerprints } = reconcileOnPr(phase, {
+    repo,
+    selectedPr,
+    prior: readPriorFingerprints(meta, phase.key),
+    persist,
+  }, options);
+  return persist(marker, fingerprints);
 }
 
 function handlePhaseComplete(event, options = {}) {
@@ -227,4 +243,11 @@ function phaseEntry(meta, phaseKey) {
   return meta.phases[phaseKey];
 }
 
-module.exports = { handlePhaseComplete, DEFERRED_PROOF_REF, deferredProofHash };
+module.exports = {
+  handlePhaseComplete,
+  DEFERRED_PROOF_REF,
+  deferredProofHash,
+  reconcileOnPr,
+  metaContextFor,
+  phaseEntry,
+};

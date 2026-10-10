@@ -142,7 +142,8 @@
         "enterprise/closure-tasklist.js",
         "enterprise/stack-body.js",
         "enterprise/phase-stack.js",
-        "enterprise/phase-stack-checks.js"
+        "enterprise/phase-stack-checks.js",
+        "enterprise/phase-closed-handler.js"
       ],
       "requires": [
         "pi/core"
@@ -296,7 +297,8 @@
         "enterprise/closure-tasklist.js",
         "enterprise/stack-body.js",
         "enterprise/phase-stack.js",
-        "enterprise/phase-stack-checks.js"
+        "enterprise/phase-stack-checks.js",
+        "enterprise/phase-closed-handler.js"
       ],
       "requires": [
         "claude/core"

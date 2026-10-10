@@ -1007,3 +1007,9 @@ test('registered phase-complete rejects a spec directory symlink escaping the ex
   assert.deepEqual(fs.readFileSync(path.join(externalSpecDir, 'lifecycle.json')), lifecycleBefore);
   assert.deepEqual(snapshotTree(externalSpecDir), externalBefore, 'the external spec tree must not be written');
 });
+
+test('packaged dispatcher maps phase-closed to the Enterprise phase-closed handler', () => {
+  const dispatcher = require('../enterprise/dispatch');
+  assert.deepEqual(Object.keys(dispatcher.handlers).sort(), ['phase-closed', 'phase-complete', 'plan-closed', 'spec-approved']);
+  assert.equal(typeof dispatcher.handlers['phase-closed'], 'function');
+});

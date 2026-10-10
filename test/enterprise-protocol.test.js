@@ -533,9 +533,9 @@ test('CYCLE 4: event allowlist omission fails closed before any handler or GitHu
   assert.equal(ghCalls, 0, 'no GitHub call may run when the event is not allowlisted');
 });
 
-test('CYCLE 4: the handler dispatch table covers exactly the three lifecycle event types', () => {
-  assert.deepEqual(Object.keys(adapter.HANDLERS).sort(), ['phase-complete', 'plan-closed', 'spec-approved']);
-  for (const type of ['spec-approved', 'phase-complete', 'plan-closed']) {
+test('CYCLE 4: the handler dispatch table covers exactly the four lifecycle event types', () => {
+  assert.deepEqual(Object.keys(adapter.HANDLERS).sort(), ['phase-closed', 'phase-complete', 'plan-closed', 'spec-approved']);
+  for (const type of ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed']) {
     assert.equal(typeof adapter.HANDLERS[type], 'string', `${type} must map to an explicit named handler`);
     assert.ok(adapter.HANDLERS[type].length > 0, `${type} handler name must be non-empty`);
   }
