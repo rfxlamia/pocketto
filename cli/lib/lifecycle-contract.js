@@ -275,6 +275,16 @@ function isValidAdapterNotice(notice) {
     && notice.message.length <= ADAPTER_NOTICE_MAX_MESSAGE_LENGTH;
 }
 
+function validateAdapterNotices(response) {
+  if (!Array.isArray(response.notices) || response.notices.length > ADAPTER_NOTICE_MAX_COUNT) {
+    return adapterFail(ADAPTER_ERROR_CODES.BAD_NOTICE, `adapter notices must be an array of at most ${ADAPTER_NOTICE_MAX_COUNT} entries`);
+  }
+  if (!response.notices.every(isValidAdapterNotice)) {
+    return adapterFail(ADAPTER_ERROR_CODES.BAD_NOTICE, 'adapter notice must be { code, message } with a valid code and a bounded message');
+  }
+  return null;
+}
+
 function validateAdapterResponse(response, expectedEventId) {
   if (!isPlainObject(response)) {
     return adapterFail(ADAPTER_ERROR_CODES.NOT_OBJECT, 'adapter response must be an object');
@@ -318,12 +328,8 @@ function validateAdapterResponse(response, expectedEventId) {
     }
   }
   if ('notices' in response) {
-    if (!Array.isArray(response.notices) || response.notices.length > ADAPTER_NOTICE_MAX_COUNT) {
-      return adapterFail(ADAPTER_ERROR_CODES.BAD_NOTICE, `adapter notices must be an array of at most ${ADAPTER_NOTICE_MAX_COUNT} entries`);
-    }
-    if (!response.notices.every(isValidAdapterNotice)) {
-      return adapterFail(ADAPTER_ERROR_CODES.BAD_NOTICE, 'adapter notice must be { code, message } with a valid code and a bounded message');
-    }
+    const noticeFailure = validateAdapterNotices(response);
+    if (noticeFailure !== null) return noticeFailure;
   }
   return { ok: true, code: null, message: null };
 }
