@@ -78,20 +78,6 @@ function currentBranch(cwd) {
   }
 }
 
-// Branch checked out before the current one (the `@{-1}` reflog step), or
-// null when the previous checkout was not a branch. Read-only; never throws.
-function previousBranch(cwd) {
-  try {
-    const r = runGit(cwd, ['rev-parse', '--symbolic-full-name', '--quiet', '@{-1}']);
-    if (!succeeded(r)) return null;
-    const ref = r.stdout.trim();
-    const prefix = 'refs/heads/';
-    return ref.startsWith(prefix) && ref.length > prefix.length ? ref.slice(prefix.length) : null;
-  } catch {
-    return null;
-  }
-}
-
 // Commit SHA for <branch>. 'HEAD' resolves even when detached. Null if unknown.
 function branchTip(cwd, branch) {
   try {
@@ -174,6 +160,30 @@ function createAndSwitch(cwd, branch) {
   });
 }
 
+// Repo-local config value for <key>, or null when unset or unreadable. Read-only.
+function localConfigGet(cwd, key) {
+  try {
+    const r = runGit(cwd, ['config', '--local', '--get', key]);
+    return succeeded(r) ? r.stdout.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+// Sets repo-local <key> to <value>, replacing any earlier value.
+function localConfigSet(cwd, key, value) {
+  return guardMutation(() => outcome(runGit(cwd, ['config', '--local', key, value]), 'GIT_CONFIG_FAILED', `could not set ${key}`));
+}
+
+// Removes repo-local <key>. Exit 5 (key absent) already is the wanted state.
+function localConfigUnset(cwd, key) {
+  return guardMutation(() => {
+    const r = runGit(cwd, ['config', '--local', '--unset', key]);
+    if (r.status === 5) return success(r);
+    return outcome(r, 'GIT_CONFIG_FAILED', `could not unset ${key}`);
+  });
+}
+
 // Switches the working tree to an existing <branch>.
 function switchBranch(cwd, branch) {
   return guardMutation(() => {
@@ -242,12 +252,14 @@ function headTrailer(cwd, key) {
 module.exports = {
   currentBranch,
   branchTip,
-  previousBranch,
   dirtyPaths,
   stagedPaths,
   ignoredPaths,
   createAndSwitch,
   switchBranch,
+  localConfigGet,
+  localConfigSet,
+  localConfigUnset,
   addPaths,
   commitWithTrailer,
   headTrailer,

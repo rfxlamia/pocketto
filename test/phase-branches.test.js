@@ -397,8 +397,11 @@ test('stacked init adopts: fixture leaves the phase branch checked out with no l
 test('stacked init adopts: reruns on the current phase-1 branch without creating one and records identity', () => {
   const repo = makeRepo();
   const { planDir } = writePlan(repo, 'p');
-  git(repo, 'switch', '-q', '-c', 'pocket/p/phase-1');
+  // A real first init creates the branch and records its root base in git config.
+  const first = logInit(repo, planDir, ['--phase-branches', 'stacked']);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
   const sha = head(repo);
+  fs.rmSync(path.join(planDir, 'log.json'));
 
   const res = logInit(repo, planDir, ['--phase-branches', 'stacked']);
   assert.equal(res.status, 0, res.stdout + res.stderr);
@@ -409,7 +412,7 @@ test('stacked init adopts: reruns on the current phase-1 branch without creating
 
   const log = readLog(planDir);
   assert.equal(log.phases[0].branch, 'pocket/p/phase-1');
-  // The base is recovered from the previous checkout, which must still be at HEAD.
+  // The base comes from the config record written at create time, not from the checkout history.
   assert.deepEqual(log.header.phase_branches, { mode: 'stacked', root_base: { branch: 'feature/x', sha } });
   assert.equal(log.phases[0].base_branch, 'feature/x');
   assert.equal(res.env.data.branch.from, 'feature/x');
@@ -511,4 +514,76 @@ test('strategy locked reverse: --phase-branches none on a stacked log fails clos
   assert.notEqual(res.status, 0);
   assert.equal(res.env.error.code, 'PHASE_BRANCHES_LOCKED');
   assert.equal(readLogBytes(planDir), before);
+});
+
+// ─── Cycle 14: fix round for T6 (adapter dirty allowance, recorded root base) ─
+
+function configGet(repo, key) {
+  const r = spawnSync('git', ['config', '--local', '--get', key], { cwd: repo, encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
+test('stacked init records root base: create writes branch.<phase-1>.pocketRootBase with the current branch', () => {
+  const repo = makeRepo();
+  const { planDir } = writePlan(repo, 'p');
+  const res = logInit(repo, planDir, ['--phase-branches', 'stacked']);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(configGet(repo, 'branch.pocket/p/phase-1.pocketRootBase'), 'feature/x');
+});
+
+test('stacked init create failure: a refused create removes the recorded base and leaves HEAD and log.json alone', () => {
+  const repo = makeRepo();
+  const { planDir } = writePlan(repo, 'p');
+  // A ref named pocket/p blocks the pocket/p/phase-1 ref directory, so the create is refused.
+  git(repo, 'branch', 'pocket/p', 'HEAD');
+  const res = logInit(repo, planDir, ['--phase-branches', 'stacked']);
+  assert.notEqual(res.status, 0);
+  assert.equal(configGet(repo, 'branch.pocket/p/phase-1.pocketRootBase'), null);
+  assert.equal(currentBranch(repo), 'feature/x');
+  assert.equal(fs.existsSync(path.join(planDir, 'log.json')), false);
+});
+
+test('stacked init registration untracked: no-flag init accepts an untracked adapter registration and creates phase-1', () => {
+  const repo = makeRepo();
+  const { planDir } = writePlan(repo, 'p');
+  writeFile(path.join(repo, '.pocket', 'lifecycle-adapter.json'), `${JSON.stringify(registrationBody({ phase_branches: 'stacked' }), null, 2)}\n`);
+  const res = logInit(repo, planDir);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(currentBranch(repo), 'pocket/p/phase-1');
+  assert.equal(readLog(planDir).header.phase_branches.mode, 'stacked');
+  assert.equal(res.env.data.phase_branches.source, 'registration');
+});
+
+test('stacked init adopts from recorded base: a rerun after log removal records the original base, not the previous checkout', () => {
+  const repo = makeRepo();
+  const { planDir } = writePlan(repo, 'p');
+  const first = logInit(repo, planDir, ['--phase-branches', 'stacked']);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  const sha = head(repo);
+  fs.rmSync(path.join(planDir, 'log.json'));
+  git(repo, 'branch', 'main', 'HEAD');
+  git(repo, 'checkout', '-q', 'main');
+  git(repo, 'checkout', '-q', 'pocket/p/phase-1');
+
+  const res = logInit(repo, planDir, ['--phase-branches', 'stacked']);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(currentBranch(repo), 'pocket/p/phase-1');
+  assert.equal(res.env.data.branch.created, null);
+  const log = readLog(planDir);
+  assert.deepEqual(log.header.phase_branches.root_base, { branch: 'feature/x', sha });
+});
+
+test('stacked init adopt without base record: a manually created phase-1 branch fails closed with ROOT_BASE_UNKNOWN', () => {
+  const repo = makeRepo();
+  const { planDir } = writePlan(repo, 'p');
+  git(repo, 'switch', '-q', '-c', 'pocket/p/phase-1');
+  const sha = head(repo);
+
+  const res = logInit(repo, planDir, ['--phase-branches', 'stacked']);
+  assert.notEqual(res.status, 0);
+  assert.equal(res.env.error.code, 'PHASE_BRANCHES_ROOT_BASE_UNKNOWN');
+  assert.match(res.env.error.message, /pocketRootBase/);
+  assert.equal(currentBranch(repo), 'pocket/p/phase-1');
+  assert.equal(head(repo), sha);
+  assert.equal(fs.existsSync(path.join(planDir, 'log.json')), false);
 });

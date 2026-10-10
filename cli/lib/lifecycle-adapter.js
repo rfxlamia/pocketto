@@ -145,6 +145,7 @@ function registrationFallbackWarning(code) {
 module.exports = {
   MAX_ADAPTER_TIMEOUT_MS,
   PHASE_BRANCH_MODES,
+  REGISTRATION_PATH,
   invokeAdapter,
   readAdapterRegistration,
   readRegisteredPhaseBranches,

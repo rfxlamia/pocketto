@@ -2,17 +2,27 @@
 
 // Core phase-branch strategy for `log init`. Strategy is chosen once, on a
 // fresh init: explicit flag -> valid adapter registration -> `none`. A stacked
-// init creates pocket/<plan_id>/phase-1 at HEAD and records its identity; every
-// failure happens before any write. Core reads only neutral registration
-// fields and never consults Enterprise mode configuration.
+// init creates pocket/<plan_id>/phase-1 at HEAD, records the root base in
+// git config (branch.<phase-1>.pocketRootBase) before the create, and records
+// the identity in log.json. Adopt reads only that config record; it never
+// guesses the base. Core reads only neutral registration fields and never
+// consults Enterprise mode configuration.
 
 const path = require('node:path');
 const { CliError } = require('./envelope');
 const { readLog } = require('./logjson');
-const { currentBranch, previousBranch, branchTip, dirtyPaths, createAndSwitch } = require('./git-worktree');
+const {
+  currentBranch,
+  branchTip,
+  dirtyPaths,
+  createAndSwitch,
+  localConfigGet,
+  localConfigSet,
+  localConfigUnset,
+} = require('./git-worktree');
 const { planArtifactWarnings } = require('./artifact-ignore');
 const { lifecycleSpecDirForPlan, planIdForLog } = require('./lifecycle-transition');
-const { resolveProjectRoot, readRegisteredPhaseBranches, PHASE_BRANCH_MODES } = require('./lifecycle-adapter');
+const { resolveProjectRoot, readRegisteredPhaseBranches, PHASE_BRANCH_MODES, REGISTRATION_PATH } = require('./lifecycle-adapter');
 
 // Value of the explicit flag, or null when none was passed. Anything else is
 // a usage error, reported before the plan or git is touched.
@@ -61,8 +71,9 @@ function relativeUnder(root, p) {
   return rel.split(path.sep).join('/');
 }
 
-// Plan dir plus the spec dir, as repo-relative prefixes. An unresolvable spec
-// dir leaves only the plan dir allowed (reported as a concern, not a warning).
+// Plan dir, the spec dir, and the machine-local adapter registration file, as
+// repo-relative prefixes. The registration is one exact file, never a directory.
+// An unresolvable spec dir leaves only the others allowed (reported as a concern).
 function allowedPrefixes(planDir, projectRoot) {
   let specDir = null;
   try {
@@ -70,7 +81,8 @@ function allowedPrefixes(planDir, projectRoot) {
   } catch {
     specDir = null;
   }
-  const candidates = [planDir, specDir].filter(Boolean).map((dir) => relativeUnder(projectRoot, dir));
+  const registration = path.join(projectRoot, REGISTRATION_PATH);
+  const candidates = [planDir, specDir, registration].filter(Boolean).map((p) => relativeUnder(projectRoot, p));
   return candidates.filter(Boolean);
 }
 
@@ -103,6 +115,45 @@ function planIdOrFail(planDir) {
   return planId;
 }
 
+// Repo-local config key that records the root base of a stacked phase-1 branch.
+function rootBaseKey(branch) {
+  return `branch.${branch}.pocketRootBase`;
+}
+
+// Root base recorded at create time. Adopt uses it only when the named base
+// branch still exists; anything else throws before any write.
+function recordedRootBase(planDir, branch) {
+  const key = rootBaseKey(branch);
+  const base = localConfigGet(planDir, key);
+  if (base && branchTip(planDir, `refs/heads/${base}`)) return base;
+  const reason = base ? `the recorded base branch '${base}' no longer exists` : `${key} is not set`;
+  throw new CliError(
+    'PHASE_BRANCHES_ROOT_BASE_UNKNOWN',
+    `HEAD is already on ${branch}, but ${reason}, so the root base cannot be recovered. Manual action: run git config --local ${key} <base-branch> with the branch this stack was created from, then rerun log init --phase-branches stacked. HEAD and log.json were not changed.`,
+  );
+}
+
+// Records the root base first, then creates the branch, so an adopted branch
+// always has its record. A refused create removes the record again. Returns a
+// createAndSwitch-shaped result; a record that cannot be written is
+// PHASE_BRANCHES_ROOT_BASE_UNKNOWN, because no base can be recorded for adopt.
+function recordAndCreate(planDir, branch, rootBranch) {
+  const key = rootBaseKey(branch);
+  const recorded = localConfigSet(planDir, key, rootBranch);
+  if (!recorded.ok) {
+    return {
+      ok: false,
+      code: 'PHASE_BRANCHES_ROOT_BASE_UNKNOWN',
+      message: `Could not record root base '${rootBranch}' for ${branch} in git config (${key}), so the stack was not created. HEAD and log.json were not changed. Manual action: check that the repository config is writable, then rerun log init --phase-branches stacked.`,
+    };
+  }
+  const created = createAndSwitch(planDir, branch);
+  if (created.ok) return created;
+  const unset = localConfigUnset(planDir, key);
+  const note = unset.ok ? '' : ` The root base record ${key} could not be removed; remove it with git config --local --unset ${key} before retrying.`;
+  return { ...created, message: `${created.message}${note}` };
+}
+
 // Creates (or adopts) pocket/<plan_id>/phase-1 and returns the identity to
 // record. Throws before any write when the init cannot be done safely.
 function prepareStackedInit(planDir) {
@@ -121,25 +172,16 @@ function prepareStackedInit(planDir) {
   let rootBase;
   let branchInfo;
   if (rootBranch === branch) {
-    // A prior init switched here and stopped. The base is the previous checkout,
-    // accepted only when it still points at HEAD (the phase branch has no commits
-    // yet). Anything else cannot be recorded safely, so init fails closed.
-    const base = previousBranch(planDir);
-    const baseTip = base ? branchTip(planDir, base) : null;
-    if (!base || baseTip !== rootSha) {
-      throw new CliError(
-        'PHASE_BRANCHES_ROOT_BASE_UNKNOWN',
-        `HEAD is already on ${branch}, but its original base branch cannot be recovered (the previous checkout is not a branch at HEAD). Manual action: switch to the base branch you intended, recreate ${branch} from it, then rerun log init --phase-branches stacked.`,
-      );
-    }
-    rootBase = { branch: base, sha: baseTip };
-    branchInfo = { from: base, created: null, switched: false, status: 'adopted' };
+    // A prior init created this branch and recorded its base. Adopt reads only
+    // that record; a missing or dangling record fails closed without a guess.
+    rootBase = { branch: recordedRootBase(planDir, branch), sha: rootSha };
+    branchInfo = { from: rootBase.branch, created: null, switched: false, status: 'adopted' };
   } else {
     const existingTip = branchTip(planDir, branch);
     if (existingTip) {
       throw branchExistsError(branch, existingTip, rootSha);
     }
-    const created = createAndSwitch(planDir, branch);
+    const created = recordAndCreate(planDir, branch, rootBranch);
     if (!created.ok) {
       if (created.code === 'GIT_BRANCH_EXISTS') throw branchExistsError(branch, branchTip(planDir, branch), rootSha);
       throw new CliError(created.code, created.message);
