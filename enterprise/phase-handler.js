@@ -15,6 +15,8 @@ const { PhaseHandlerError, phaseFailure, safeMessage } = require('./phase-handle
 
 const RECONCILABLE_DELIVERY_STATUSES = new Set(['claimed', 'pending', 'retryable', 'reconciling']);
 const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
+const DEFERRED_PHASE_CLOSED = 'phase-closed';
+const DEFERRED_PROOF_REF = `deferred:${DEFERRED_PHASE_CLOSED}`;
 
 function upsertPhaseSummary(repo, pr, phase, selectedPr, options) {
   const marker = identity.markerFor(phase.number);
@@ -61,6 +63,10 @@ function handlePhaseComplete(event, options = {}) {
     }
 
     const context = loadContext(event, options);
+    if (context.stacked) {
+      if (event.delivery.status === 'succeeded') return replayDeferredPhase(event);
+      if (RECONCILABLE_DELIVERY_STATUSES.has(event.delivery.status)) return deferredPhaseResponse(event);
+    }
     const phase = readPhaseEvidence(event, context);
     if (event.delivery.status === 'succeeded') {
       preflightPhaseMetadata(context);
@@ -84,6 +90,29 @@ function handlePhaseComplete(event, options = {}) {
     }
     return phaseFailure(eventId, 'PHASE_HANDLER_FAILED', safeMessage(error), 'retryable', true);
   }
+}
+
+// Stacked plans defer phase reporting to phase-closed: no evidence, metadata, or GitHub work runs here.
+function deferredProofHash(event) {
+  const deferred = { event_id: event.event_id, plan_id: event.plan_id, deferred: DEFERRED_PHASE_CLOSED };
+  return crypto.createHash('sha256').update(JSON.stringify(deferred), 'utf8').digest('hex');
+}
+
+function deferredPhaseResponse(event) {
+  return {
+    event_id: event.event_id,
+    status: 'succeeded',
+    proof_ref: DEFERRED_PROOF_REF,
+    proof_hash: deferredProofHash(event),
+  };
+}
+
+function replayDeferredPhase(event) {
+  const delivery = event.delivery || {};
+  if (delivery.proof_ref !== DEFERRED_PROOF_REF || delivery.proof_hash !== deferredProofHash(event)) {
+    return phaseFailure(event.event_id, 'PHASE_PROOF_MISMATCH', 'Succeeded deferred phase event does not match its deferred proof; resolve manually before replay.', 'terminal', false);
+  }
+  return deferredPhaseResponse(event);
 }
 
 function preflightPhaseMetadata(context) {

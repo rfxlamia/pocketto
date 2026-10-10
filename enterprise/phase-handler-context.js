@@ -150,8 +150,14 @@ function readLifecycleDocument(root, specDir) {
   }
 }
 
+const LIFECYCLE_SCHEMAS = new Set([1, 2]);
+
+function isStackedPlan(plan) {
+  return Boolean(plan.phase_branches && plan.phase_branches.mode === 'stacked');
+}
+
 function validateLifecycleContext(event, options, root, registeredRoot, specDir, lifecycle) {
-  if (!lifecycle || lifecycle.schema !== 1 || !lifecycle.plan || lifecycle.plan.plan_id !== event.plan_id) {
+  if (!lifecycle || !LIFECYCLE_SCHEMAS.has(lifecycle.schema) || !lifecycle.plan || lifecycle.plan.plan_id !== event.plan_id) {
     throw new PhaseHandlerError('PHASE_PLAN_IDENTITY_MISMATCH', 'Lifecycle metadata does not identify this event plan.');
   }
   const recordedSpecDir = resolveLifecyclePath(root, registeredRoot, lifecycle.plan.spec_dir, 'spec_dir');
@@ -169,10 +175,25 @@ function validateLifecycleContext(event, options, root, registeredRoot, specDir,
       || overridePlanDir.physical !== recordedPlanDir.physical) {
     throw new PhaseHandlerError('PHASE_PLAN_DIR_MISMATCH', 'Lifecycle metadata does not resolve to this plan’s registered plan directory.');
   }
+  if (isStackedPlan(lifecycle.plan)) {
+    // Stacked plans resolve each phase through plan.phases; plan.branch is never consulted.
+    return { root, specDir, planDir: recordedPlanDir.physical, stacked: true, phases: lifecycle.plan.phases, lifecycle };
+  }
   if (typeof lifecycle.plan.branch !== 'string' || lifecycle.plan.branch.length === 0) {
     throw new PhaseHandlerError('PHASE_BRANCH_REQUIRED', 'Lifecycle metadata does not contain the captured plan branch.');
   }
-  return { root, specDir, planDir: recordedPlanDir.physical, branch: lifecycle.plan.branch, lifecycle };
+  return { root, specDir, planDir: recordedPlanDir.physical, branch: lifecycle.plan.branch, stacked: false, lifecycle };
+}
+
+// Stacked plans carry one branch per phase in plan.phases; plan.branch is overwritten per phase and never used.
+function phaseBranchFor(context, phaseKey) {
+  const phases = context.phases;
+  const entry = phases && Object.prototype.hasOwnProperty.call(phases, phaseKey) ? phases[phaseKey] : null;
+  const branch = entry && typeof entry === 'object' ? entry.branch : null;
+  if (typeof branch !== 'string' || branch.length === 0) {
+    throw new PhaseHandlerError('PHASE_BRANCH_REQUIRED', `Lifecycle metadata does not contain the captured branch for ${phaseKey}.`);
+  }
+  return branch;
 }
 
 function loadContext(event, options = {}) {
@@ -192,4 +213,4 @@ function loadContext(event, options = {}) {
 }
 
 
-module.exports = { loadContext, resolvePlanArtifactPath };
+module.exports = { loadContext, phaseBranchFor, resolvePlanArtifactPath };
