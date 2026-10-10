@@ -77,6 +77,7 @@
     "enterprise/closure-tasklist.js",
     "enterprise/stack-body.js",
     "enterprise/phase-stack.js",
+    "enterprise/phase-stack-checks.js",
     "skills/*/*.skill",
     "skills/*/.skillkit-mode",
     "skills/brand-design/SKILL.md",

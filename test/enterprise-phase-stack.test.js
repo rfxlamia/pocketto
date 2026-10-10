@@ -723,6 +723,30 @@ test('harden foreign list candidate: a listed PR on another base blocks without 
   assert.match(valueFor(listed[0], '--json'), /(^|,)state(,|$)/, 'the list requests state so OPEN can be verified');
 });
 
+test('harden open state filter: a listed CLOSED PR for this exact head and base is terminal PR_BLOCKED with no edit or create', (t) => {
+  const env = setupRepo(t);
+  const closed = {
+    number: 78,
+    url: `${REPO_URL}/pull/78`,
+    state: 'CLOSED',
+    headRefName: 'pocket/p/phase-1',
+    baseRefName: ROOT_BASE,
+    title: 'p phase 1',
+    body: 'Human text.\n',
+  };
+  const gh = fakeGh({ failures: { list: { exit: 0, stdout: JSON.stringify([closed]), stderr: '', timedOut: false } } });
+
+  assert.throws(() => publish(env, gh), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, 'foreign PR in list');
+    assert.equal(error.retryable, false);
+    assert.equal(error.status, 'terminal');
+    return true;
+  });
+  assert.equal(callsOf(gh, 'edit').length, 0, 'no pr edit on a CLOSED candidate');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create on a CLOSED candidate');
+});
+
 test('harden list not array: a non-array pr list is retryable GH_MALFORMED_OUTPUT with no create', (t) => {
   const env = setupRepo(t);
   const gh = fakeGh({ failures: { list: { exit: 0, stdout: '{}', stderr: '', timedOut: false } } });
