@@ -11,9 +11,9 @@ const { readFileSync, existsSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { CliError } = require('./envelope');
 const { readLogChecked } = require('./logjson');
-const { currentBranch, dirtyPaths, repoPathPrefix } = require('./git-worktree');
-const { resolveProjectRoot } = require('./lifecycle-adapter');
-const { allowedPrefixes, isUnder } = require('./phase-branches');
+const { currentBranch } = require('./git-worktree');
+// The dirty-set guard is shared with `log init`; only the rerun hint differs.
+const { assertCleanOutsidePlan } = require('./phase-branches');
 
 const HEADING = /^#{1,6}\s/;
 const MARKER_PREFIX = '<!-- pocket-closeout:';
@@ -116,24 +116,6 @@ function assertNoExtraWorktrees(planDir) {
   throw err;
 }
 
-// The allowed dirty set is shared with `log init` (phase-branches.js): the
-// plan dir, the spec dir, and the machine-local adapter registration file, as
-// git-toplevel-relative prefixes. An unknown repository base allows nothing
-// (fail closed). Only the rerun hint in the message differs.
-function assertCleanOutsidePlan(planDir) {
-  const projectRoot = resolveProjectRoot(planDir) || planDir;
-  const gitBase = repoPathPrefix(projectRoot);
-  const prefixes = gitBase === null ? [] : allowedPrefixes(planDir, projectRoot, gitBase);
-  const foreign = dirtyPaths(planDir).filter((p) => !prefixes.some((prefix) => isUnder(prefix, p)));
-  if (foreign.length === 0) return;
-  const err = new CliError(
-    'DIRTY_OUTSIDE_PLAN',
-    `Uncommitted changes outside the plan and spec directories: ${foreign.join(', ')}. Commit, stash, or revert them, then rerun log handoff.`,
-  );
-  err.details = { paths: foreign };
-  throw err;
-}
-
 // Step 1: preconditions, in spec order. Every refusal throws before anything
 // is written. Returns the plan context the later steps need.
 function checkPreconditions(planDir, phaseFileArg, findPhaseInLog) {
@@ -163,7 +145,7 @@ function checkPreconditions(planDir, phaseFileArg, findPhaseInLog) {
   const closeout = readCloseoutLines(planDir, phase.order);
   assertOnPhaseBranch(planDir, phase);
   assertNoExtraWorktrees(planDir);
-  assertCleanOutsidePlan(planDir);
+  assertCleanOutsidePlan(planDir, 'log handoff');
   return { logPath, log, phase, closeout };
 }
 

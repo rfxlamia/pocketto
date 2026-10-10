@@ -94,7 +94,9 @@ function isUnder(prefix, rel) {
   return rel === prefix || rel.startsWith(`${prefix}/`);
 }
 
-function assertCleanOutsidePlan(planDir) {
+// Shared dirty-set guard for `log init` and `log handoff`. <command> names the
+// rerun command shown in the hint (for example 'log init' or 'log handoff').
+function assertCleanOutsidePlan(planDir, command) {
   const projectRoot = resolveProjectRoot(planDir) || planDir;
   // dirtyPaths reports paths relative to the git toplevel, so the allowed set is
   // rebased onto the same base. An unknown base allows nothing (fail closed).
@@ -104,7 +106,7 @@ function assertCleanOutsidePlan(planDir) {
   if (foreign.length === 0) return;
   const err = new CliError(
     'DIRTY_OUTSIDE_PLAN',
-    `Uncommitted changes outside the plan and spec directories: ${foreign.join(', ')}. Commit, stash, or revert them, then rerun log init.`,
+    `Uncommitted changes outside the plan and spec directories: ${foreign.join(', ')}. Commit, stash, or revert them, then rerun ${command}.`,
   );
   err.details = { paths: foreign };
   throw err;
@@ -187,7 +189,7 @@ function prepareStackedInit(planDir) {
       'HEAD is detached (or this is not a git repository). Check out a branch, then rerun log init --phase-branches stacked, or use --phase-branches none.',
     );
   }
-  assertCleanOutsidePlan(planDir);
+  assertCleanOutsidePlan(planDir, 'log init');
 
   let rootBase;
   let branchInfo;
@@ -246,6 +248,7 @@ module.exports = {
   prepareStackedInit,
   initEnvelope,
   // Shared with phase-handoff-preconditions.js (same dirty-set guard).
+  assertCleanOutsidePlan,
   allowedPrefixes,
   isUnder,
 };
