@@ -242,4 +242,4 @@ function runDrain({ specDir } = {}) {
   };
 }
 
-module.exports = { runDrain };
+module.exports = { runDrain, ACTIVE_DELIVERY_STATUSES };

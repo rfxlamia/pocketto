@@ -9,7 +9,7 @@
 //   pocketto-pi log close  <plan_dir>                      [--json]
 //   pocketto-pi meta get   <dir> <field>                   [--json]
 //   pocketto-pi meta set   <dir> <field> <value>           [--json]
-//   pocketto-pi doctor                                     [--strict] [--json]
+//   pocketto-pi doctor [<plan_dir>]                        [--strict] [--json]
 //   pocketto-pi mode [<dir>]                               [--json]
 //   pocketto-pi mode init [<dir>]                          [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--require-approval <bool>] [--file <AGENTS.md|CLAUDE.md>] [--json]
 //   pocketto-pi edu [<dir>]                                [--json]
@@ -231,7 +231,7 @@ Usage:
   pocketto-pi lifecycle migrate <spec_dir> --from v3      [--json] [--contract 3]
   pocketto-pi meta get   <dir> <field>                    [--json]
   pocketto-pi meta set   <dir> <field> <value>            [--json]
-  pocketto-pi doctor                                      [--strict] [--json]
+  pocketto-pi doctor [<plan_dir>]                         [--strict] [--json]
   pocketto-pi mode [<dir>]                                [--json]
   pocketto-pi mode init [<dir>]                           [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--require-approval <bool>] [--file <AGENTS.md|CLAUDE.md>] [--json]
   pocketto-pi edu [<dir>]                                 [--json]
@@ -351,7 +351,7 @@ function main() {
       const metaResult = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
       emitSuccess(metaResult.command, metaResult, flags.json);
     } else if (command === 'doctor') {
-      const result = doctor.run({ strict: flags.strict });
+      const result = doctor.run({ strict: flags.strict, planDir: positionals[1] });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'mode') {
       const result = requireEnterpriseCommand('mode').run({

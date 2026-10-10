@@ -5,10 +5,27 @@
 // recommended extensions are installed vs missing. Pure: never spawns `pi`,
 // never writes. Default exit 0; `--strict` exits nonzero when a REQUIRED
 // extension is missing, so it can gate a script.
+//
+// With an optional <plan_dir>, adds `data.warnings[]` for Pocket artifacts that
+// git ignores. Warnings are display-only and never change the exit code.
 
+const path = require('node:path');
+const { statSync } = require('node:fs');
+const { CliError } = require('../lib/envelope');
 const { classify } = require('../lib/extensions');
+const { planArtifactWarnings } = require('../lib/artifact-ignore');
 
-function run({ env = process.env, strict = false } = {}) {
+function resolvePlanDirArg(arg) {
+  let st;
+  try {
+    st = statSync(arg);
+  } catch {
+    throw new CliError('NOT_FOUND', `'${arg}' is not a file or directory.`);
+  }
+  return path.resolve(st.isFile() ? path.dirname(arg) : arg);
+}
+
+function run({ env = process.env, strict = false, planDir = null } = {}) {
   const items = classify(env);
   const required = items.filter((i) => i.tier === 'required');
   const recommended = items.filter((i) => i.tier === 'recommended');
@@ -36,17 +53,27 @@ function run({ env = process.env, strict = false } = {}) {
 
   const healthy = missingRequired.length === 0;
 
+  const data = {
+    ok: healthy,
+    required: required.map((i) => ({ name: i.name, installed: i.installed })),
+    recommended: recommended.map((i) => ({ name: i.name, installed: i.installed })),
+    missingRequired: missingRequired.map((i) => i.name),
+    missingRecommended: missingRecommended.map((i) => i.name),
+  };
+
+  if (planDir !== null && planDir !== undefined) {
+    data.warnings = planArtifactWarnings(resolvePlanDirArg(planDir));
+    for (const w of data.warnings) {
+      human.push('', `Warning ${w.code}: ${w.paths.length} Pocket artifact(s) ignored by git.`, `  ${w.consequence}`);
+      for (const line of w.fix.split('\n')) human.push(`  ${line}`);
+    }
+  }
+
   return {
     command: 'doctor',
     exit: strict && !healthy ? 1 : 0,
     human,
-    data: {
-      ok: healthy,
-      required: required.map((i) => ({ name: i.name, installed: i.installed })),
-      recommended: recommended.map((i) => ({ name: i.name, installed: i.installed })),
-      missingRequired: missingRequired.map((i) => i.name),
-      missingRecommended: missingRecommended.map((i) => i.name),
-    },
+    data,
   };
 }
 

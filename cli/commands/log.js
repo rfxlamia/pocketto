@@ -9,8 +9,11 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { writeLog, todayISO, readLogChecked, withProjectionMutation } = require('../lib/logjson');
-const { runPhaseUpdateTransition, runPlanCloseTransition } = require('../lib/lifecycle-transition');
+const { runPhaseUpdateTransition, runPlanCloseTransition, lifecycleSpecDirForPlan } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
+const { currentBranch } = require('../lib/git-worktree');
+const { pendingDrainActions } = require('../lib/next-actions');
+const { planArtifactWarnings } = require('../lib/artifact-ignore');
 const { PIPELINE } = require('../lib/version');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
@@ -808,28 +811,37 @@ function close(positionals, { projectionWriter = null, adapterRunner = null } = 
     `  phases         : ${log.phases.length} — all DONE`,
   ];
 
+  // Additive, read-only envelope fields. `close` never creates or switches
+  // branches; `branch` only reports the current one for stacked plans.
+  const data = {
+    planDir,
+    logPath,
+    status: 'DONE',
+    dateStarted: log.header.date_started,
+    dateCompleted: log.header.date_completed,
+    phaseCount: log.phases.length,
+    event: outcome.event
+      ? {
+        event_id: outcome.event.event_id,
+        plan_id: outcome.event.plan_id,
+        type: outcome.event.type,
+        revision: outcome.event.revision,
+        status: outcome.event.delivery.status,
+      }
+      : null,
+    dispatch: outcome.dispatch,
+    next_actions: pendingDrainActions({ specDir: lifecycleSpecDirForPlan(planDir), projectDir: planDir }),
+    warnings: planArtifactWarnings(planDir),
+  };
+  if (log.header.phase_branches && log.header.phase_branches.mode === 'stacked') {
+    data.branch = { from: currentBranch(planDir), created: null, switched: false, status: 'none' };
+  }
+
   return {
     command: 'log close',
     exit: 0,
     human,
-    data: {
-      planDir,
-      logPath,
-      status: 'DONE',
-      dateStarted: log.header.date_started,
-      dateCompleted: log.header.date_completed,
-      phaseCount: log.phases.length,
-      event: outcome.event
-        ? {
-          event_id: outcome.event.event_id,
-          plan_id: outcome.event.plan_id,
-          type: outcome.event.type,
-          revision: outcome.event.revision,
-          status: outcome.event.delivery.status,
-        }
-        : null,
-      dispatch: outcome.dispatch,
-    },
+    data,
   };
 }
 

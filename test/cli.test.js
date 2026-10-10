@@ -3547,3 +3547,134 @@ test("Education and Enterprise blocks coexist without touching each other", { sk
 	assert.equal(json(["mode", dir, "--json"]).data.create_pr, false);
 	assert.deepEqual(json(["edu", dir, "--json"]).data.skills, { testing: "guided", git: "guided" });
 });
+
+// ─── ignored-artifact warnings and next_actions (plan-notices) ───────────────
+
+test("doctor ignore warnings: a plan dir under an ignore rule adds data.warnings and keeps every existing field", () => {
+	const root = tmp();
+	git(root, ["init", "-q"]);
+	writeFileSync(path.join(root, ".gitignore"), "docs/pocket/\n");
+	const planDir = path.join(root, "docs", "pocket", "plans", "demo-plan");
+	mkdirSync(planDir, { recursive: true });
+	const home = tmp();
+	const env = { HOME: home, USERPROFILE: home };
+
+	const base = json(["doctor", "--json"], { env });
+	const withPlan = json(["doctor", planDir, "--json"], { env });
+
+	assert.equal(withPlan.ok, true);
+	assert.equal(withPlan.command, "doctor");
+	assert.equal(withPlan.data.warnings[0].code, "POCKET_ARTIFACTS_IGNORED");
+	assert.ok(withPlan.data.warnings[0].paths.includes(path.join(planDir, "log.json")));
+	const { warnings, ...rest } = withPlan.data;
+	assert.deepEqual(rest, base.data);
+
+	// A warning never changes the exit code: --strict fails the same way with or without it.
+	const strictBase = run(["doctor", "--strict", "--json"], { env, expectFail: true });
+	const strictWithPlan = run(["doctor", "--strict", planDir, "--json"], { env, expectFail: true });
+	assert.equal(strictWithPlan.code, strictBase.code);
+});
+
+test("doctor ignore warnings: doctor without a plan dir keeps today's keys and adds no warnings", () => {
+	const home = tmp();
+	const res = json(["doctor", "--json"], { env: { HOME: home, USERPROFILE: home } });
+	assert.deepEqual(Object.keys(res.data), ["ok", "required", "recommended", "missingRequired", "missingRecommended"]);
+	assert.equal("warnings" in res.data, false);
+});
+
+test("doctor ignore warnings: a missing plan dir fails with NOT_FOUND", () => {
+	const home = tmp();
+	const res = run(["doctor", path.join(tmp(), "absent"), "--json"], {
+		env: { HOME: home, USERPROFILE: home },
+		expectFail: true,
+	});
+	assert.equal(JSON.parse(res.stdout.trim()).error.code, "NOT_FOUND");
+});
+
+// ─── log close next_actions (plan-notices) ──────────────────────────────────
+
+function closeReadyPlan(dir) {
+	run(["structure", path.join(dir, "execution-plan.md")]);
+	run(["log", "init", dir]);
+	for (const f of ["execution-plan-phase-1.md", "execution-plan-phase-2.md"]) {
+		run(["log", "update", dir, f, "REVIEW"]);
+		run(["log", "update", dir, f, "DONE"]);
+	}
+}
+
+const CLOSE_DATA_KEYS = [
+	"dateCompleted",
+	"dateStarted",
+	"dispatch",
+	"event",
+	"logPath",
+	"phaseCount",
+	"planDir",
+	"status",
+];
+
+test("log close next_actions: a stacked plan with a pending event and a registration gets the drain template and branch none", () => {
+	const { seedLifecycleEvent } = require("../test-support/lifecycle-dispatch/common");
+	const { createHash } = require("node:crypto");
+	const root = tmp();
+	git(root, ["init", "-q"]);
+	git(root, ["symbolic-ref", "HEAD", "refs/heads/feat/demo"]);
+	writeFileSync(path.join(root, ".gitignore"), "docs/pocket/\n");
+
+	const specsDir = path.join(root, "docs", "pocket", "specs");
+	mkdirSync(specsDir, { recursive: true });
+	const specContent = "approved spec\n";
+	writeFileSync(path.join(specsDir, "auth.md"), specContent);
+
+	const planDir = path.join(root, "docs", "pocket", "plans", "demo-plan");
+	mkdirSync(planDir, { recursive: true });
+	writePlan(planDir, NINE_TASK_PLAN);
+	closeReadyPlan(planDir);
+	const log = JSON.parse(readFileSync(path.join(planDir, "log.json"), "utf8"));
+	log.header.phase_branches = { mode: "stacked" };
+	writeFileSync(path.join(planDir, "log.json"), `${JSON.stringify(log, null, 2)}\n`);
+
+	seedLifecycleEvent({
+		specDir: specsDir,
+		planId: "demo-plan",
+		type: "spec-approved",
+		artifacts: [{ root: "spec", kind: "spec-doc", path: "auth.md", sha256: createHash("sha256").update(specContent).digest("hex"), revision: 1 }],
+	});
+	mkdirSync(path.join(root, ".pocket"), { recursive: true });
+	writeFileSync(
+		path.join(root, ".pocket", "lifecycle-adapter.json"),
+		`${JSON.stringify({ schema: 1, adapter_contract: 2, argv: ["adapter"], events: ["spec-approved"], timeout_ms: 30000 }, null, 2)}\n`,
+	);
+
+	const env = json(["log", "close", planDir, "--json"]);
+
+	assert.equal(env.ok, true);
+	assert.equal(env.data.status, "DONE");
+	assert.equal(env.data.next_actions.length, 1);
+	assert.equal(env.data.next_actions[0].required, true);
+	assert.equal(
+		env.data.next_actions[0].command,
+		`npx -y pocketto-pi lifecycle drain '${specsDir}' --json --contract 3`,
+	);
+	assert.deepEqual(env.data.branch, { from: "feat/demo", created: null, switched: false, status: "none" });
+	assert.equal(env.data.warnings[0].code, "POCKET_ARTIFACTS_IGNORED");
+	// log close never creates or switches branches.
+	assert.equal(git(root, ["symbolic-ref", "--short", "HEAD"]).trim(), "feat/demo");
+	assert.equal(git(root, ["for-each-ref", "--format=%(refname)", "refs/heads"]).trim(), "");
+});
+
+test("log close next_actions: a none plan without a registration keeps every pre-existing field and gains empty next_actions", () => {
+	const dir = tmp();
+	writePlan(dir, NINE_TASK_PLAN);
+	closeReadyPlan(dir);
+
+	const env = json(["log", "close", dir, "--json"]);
+
+	assert.deepEqual(Object.keys(env.data).sort(), [...CLOSE_DATA_KEYS, "next_actions", "warnings"].sort());
+	assert.deepEqual(env.data.next_actions, []);
+	assert.deepEqual(env.data.warnings, []);
+	assert.equal("branch" in env.data, false);
+	assert.equal(env.data.status, "DONE");
+	assert.equal(env.data.event, null);
+	assert.deepEqual(env.data.dispatch, { attempted: false, deferred: true, reason: "no-transition" });
+});
