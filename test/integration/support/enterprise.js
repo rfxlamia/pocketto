@@ -7,7 +7,7 @@ const { runProcess } = require('./process');
 const { writeFile } = require('./files');
 
 function installEnterpriseAdapter(fixture) {
-  const result = runProcess(process.execPath, [ENTERPRISE_CLI, 'install', fixture.root, '--json'], {
+  const result = runProcess(process.execPath, [ENTERPRISE_CLI, 'install', fixture.root, '--phase-branches', 'none', '--json'], {
     cwd: REPO_ROOT,
     env: fixture.env,
   });
