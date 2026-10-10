@@ -132,7 +132,8 @@
         "enterprise/closure-handler.js",
         "enterprise/closure-plan.js",
         "enterprise/closure-prerequisites.js",
-        "enterprise/closure-tasklist.js"
+        "enterprise/closure-tasklist.js",
+        "enterprise/stack-body.js"
       ],
       "requires": [
         "pi/core"
@@ -276,7 +277,8 @@
         "enterprise/closure-handler.js",
         "enterprise/closure-plan.js",
         "enterprise/closure-prerequisites.js",
-        "enterprise/closure-tasklist.js"
+        "enterprise/closure-tasklist.js",
+        "enterprise/stack-body.js"
       ],
       "requires": [
         "claude/core"
