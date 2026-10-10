@@ -58,8 +58,17 @@ function issueBody(input) {
 
 const FILE_LIMIT = 20;
 
+function linkKeyword(finalPhase) {
+  return finalPhase ? 'closes' : 'refs';
+}
+
+// The issue reference line a PR body ends with: `closes #N` on the final phase, `refs #N` otherwise.
+function linkLine({ issue, finalPhase }) {
+  return `${linkKeyword(finalPhase)} #${issue}`;
+}
+
 function prBody({ issue, finalPhase, fileCount, what, why, howToTest }) {
-  const linkKeyword = finalPhase ? 'closes' : 'refs';
+  const keyword = linkKeyword(finalPhase);
   const lines = [
     '## What',
     what || '',
@@ -70,7 +79,7 @@ function prBody({ issue, finalPhase, fileCount, what, why, howToTest }) {
     '## How to Test',
     howToTest || '',
     '',
-    `${linkKeyword} #${issue}`,
+    linkLine({ issue, finalPhase }),
   ];
 
   if (fileCount > FILE_LIMIT) {
@@ -81,7 +90,7 @@ function prBody({ issue, finalPhase, fileCount, what, why, howToTest }) {
   }
 
   lines.push('');
-  return { body: lines.join('\n'), linkKeyword, fileWarning: fileCount > FILE_LIMIT };
+  return { body: lines.join('\n'), linkKeyword: keyword, fileWarning: fileCount > FILE_LIMIT };
 }
 
 const DOD_MANUAL = [
@@ -182,4 +191,4 @@ function closeoutBody({ slug, issue, phases }) {
   return lines.join('\n');
 }
 
-module.exports = { issueBody, prBody, summaryBody, closeoutBody, tasklistBody, TASKLIST_MARKER, FILE_LIMIT };
+module.exports = { issueBody, prBody, linkLine, summaryBody, closeoutBody, tasklistBody, TASKLIST_MARKER, FILE_LIMIT };
