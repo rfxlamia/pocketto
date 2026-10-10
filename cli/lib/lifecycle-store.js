@@ -15,9 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { writeFileAtomicSync } = require('./atomic-file');
 const { hasSpecDirectory, withLifecycleMutation } = require('./lifecycle-lock');
-const {
-  allowedRootsFor, hashBytes, requiredPlanDir, rootDirFor, validateArtifactOnDisk,
-} = require('./lifecycle-artifact-validation');
+const { hashBytes, validateTransitionArtifacts } = require('./lifecycle-artifact-validation');
 const { validateDeliveryPatch } = require('./lifecycle-delivery-validation');
 const { validatePlanPatch, applyPlanPatch } = require('./lifecycle-plan-patch');
 const {
@@ -29,9 +27,7 @@ const { createDeliveryWriter } = require('./lifecycle-delivery-store');
 const {
   EVENT_TYPES,
   buildEventId,
-  canonicalArtifactRef,
   hashCanonicalPayload,
-  validateArtifactRef,
   validateEvent,
 } = require('./lifecycle-contract');
 
@@ -138,36 +134,6 @@ function checkTransitionInput({ specDir, type, artifacts, phaseKey, planPatch })
   }
   if (planPatch !== undefined && planPatch !== null) return validatePlanPatch(planPatch);
   return { ok: true, code: null, message: null };
-}
-
-// Normalizes artifact refs, then checks plan_dir, root allowance, and on-disk
-// identity. Returns { ok: true, normalized } or the first failure.
-function validateTransitionArtifacts({ artifacts, type, specDir, planDir }, deps) {
-  const normalized = [];
-  for (const ref of artifacts) {
-    const res = validateArtifactRef(ref);
-    if (!res.ok) return fail(res.code, res.message);
-    normalized.push(canonicalArtifactRef(ref));
-  }
-  if (requiredPlanDir(type) && (planDir === null || planDir === undefined)) {
-    return fail('LIFECYCLE_PLAN_DIR_REQUIRED', `${type} requires a non-null plan_dir`);
-  }
-  const allowed = allowedRootsFor(type);
-  const ioDeps = {
-    stat: deps.stat, readFile: deps.readFile, realpath: deps.realpath, hashFile: deps.hashFile,
-  };
-  for (const ref of normalized) {
-    if (!allowed.includes(ref.root)) {
-      return fail('LIFECYCLE_BAD_ARTIFACT_ROOT', `${type} may not reference root: ${ref.root}`);
-    }
-    const rootDir = rootDirFor(ref.root, specDir, planDir);
-    if (typeof rootDir !== 'string' || rootDir.length === 0) {
-      return fail('LIFECYCLE_BAD_ARTIFACT_ROOT', `missing root directory for: ${ref.root}`);
-    }
-    const disk = validateArtifactOnDisk(ref, rootDir, ioDeps);
-    if (!disk.ok) return disk;
-  }
-  return { ok: true, normalized };
 }
 
 // Applies a fully validated transition to the in-memory document. Only reached

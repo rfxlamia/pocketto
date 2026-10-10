@@ -759,25 +759,70 @@ test('planPatch rejects malformed input with LIFECYCLE_BAD_PLAN_PATCH and no mut
   }
 });
 
-test('planPatch merges into existing phase entry without dropping branch', () => {
+test('planPatch merges phases and phase_branches across patches without dropping earlier keys', () => {
   const fixture = seedApprovedWithPlanDirs();
+  const phase2Sha = writeArtifact(fixture.planDir, 'phase-2.md', 'phase 2\n');
   const first = commitTransition({
     ...phaseCompleteInput(fixture),
-    planPatch: { phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'feature/x' } } },
+    planPatch: {
+      phase_branches: { mode: 'stacked' },
+      phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'main' } },
+    },
   });
-  assert.equal(first.ok, true, `first patch should commit: ${JSON.stringify(first)}`);
+  assert.equal(first.ok, true, `phase-1 patch should commit: ${JSON.stringify(first)}`);
 
+  // The later patch names only phase-2 and adds a new phase_branches key.
   const second = commitTransition({
-    ...phaseClosedInput(fixture, 'phase-1'),
-    planPatch: { phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'main' } } },
+    specDir: fixture.specDir,
+    planDir: fixture.planDir,
+    planId: 'demo-plan',
+    type: 'phase-complete',
+    artifacts: [
+      { root: 'plan', kind: 'phase-evidence', path: 'phase-2.md', sha256: phase2Sha, revision: 1 },
+    ],
+    deps: { now: () => FIXED_CLOCK },
+    planPatch: {
+      phase_branches: { root_base: 'main' },
+      phases: { 'phase-2': { branch: 'pocket/p/phase-2', base_branch: 'pocket/p/phase-1' } },
+    },
   });
-  assert.equal(second.ok, true, `second patch should commit: ${JSON.stringify(second)}`);
+  assert.equal(second.ok, true, `phase-2 patch should commit: ${JSON.stringify(second)}`);
 
   const doc = JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'));
   assert.deepEqual(doc.plan.phases, {
     'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'main' },
-  }, 'the patched phase must keep branch and take the new base_branch');
+    'phase-2': { branch: 'pocket/p/phase-2', base_branch: 'pocket/p/phase-1' },
+  }, 'phase-1 must survive the phase-2 patch unchanged');
+  assert.deepEqual(doc.plan.phase_branches, { mode: 'stacked', root_base: 'main' },
+    'the existing phase_branches key must survive a patch that adds a new key');
   assert.equal(doc.schema, 2);
+});
+
+test('planPatch merges into existing phase entry without dropping branch', () => {
+  const fixture = seedApprovedWithPlanDirs();
+  const first = commitTransition({
+    ...phaseCompleteInput(fixture),
+    planPatch: { phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'main' } } },
+  });
+  assert.equal(first.ok, true, `first patch should commit: ${JSON.stringify(first)}`);
+
+  // Plant an unnamed field on the entry. A later patch that re-supplies the
+  // entry's named fields must keep it: the entry merges, it is not replaced.
+  const file = lifecyclePathFor(fixture.specDir);
+  const planted = JSON.parse(readFileSync(file, 'utf8'));
+  planted.plan.phases['phase-1'].review_note = 'keep-me';
+  writeFileSync(file, `${JSON.stringify(planted, null, 2)}\n`);
+
+  const second = commitTransition({
+    ...phaseClosedInput(fixture, 'phase-1'),
+    planPatch: { phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'release' } } },
+  });
+  assert.equal(second.ok, true, `second patch should commit: ${JSON.stringify(second)}`);
+
+  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(doc.plan.phases, {
+    'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'release', review_note: 'keep-me' },
+  }, 'the entry must take the new base_branch and keep both branch and the unnamed field');
 });
 
 test('planPatch never downgrades schema', () => {
