@@ -6,7 +6,7 @@
 //      <plan_dir>/reviews/closeout-phase-<order>.md.
 //   3. Event + projection: a `phase-closed` lifecycle event referencing the
 //      snapshot and the next phase's branch identity, then log.json.
-// Steps 4-5 (commit, next branch) are reported as 'pending'.
+// Steps 4-5 (commit, next branch) live in phase-handoff-git.js.
 //
 // Boundary: local only. No push, no `gh`, no enterprise/** imports.
 
@@ -24,8 +24,9 @@ const {
   planIdForLog,
 } = require('./lifecycle-transition');
 const { pendingDrainActions } = require('./next-actions');
-const { planArtifactWarnings } = require('./artifact-ignore');
 const { checkPreconditions, extractSection, closeoutMarker } = require('./phase-handoff-preconditions');
+const { commitPlanArtifacts, createNextBranch, phaseArtifactWarnings } = require('./phase-handoff-git');
+const { stagedPaths } = require('./git-worktree');
 
 function snapshotRel(order) {
   return `reviews/closeout-phase-${order}.md`;
@@ -116,15 +117,14 @@ function commitPhaseClosed({ planDir, logPath, log, phase, snapshot, projectionW
   return { specDir, next, outcome, eventStep: eventStep(outcome.event, revisionBefore) };
 }
 
-// Steps 4-5 (commit, next branch) are not performed here.
-function handoffResult({ planDir, phase, snapshot, transition }) {
+function handoffResult({ planDir, phase, snapshot, transition, commit, branch }) {
   const order = phase.order;
   const { specDir, next, outcome } = transition;
   const steps = {
     snapshot: snapshot.step,
     event: transition.eventStep,
-    commit: 'pending',
-    branch: 'pending',
+    commit: commit.status,
+    branch: branch.status,
   };
   const human = [
     `Handed off ${phase.file} (phase-${order})`,
@@ -145,11 +145,44 @@ function handoffResult({ planDir, phase, snapshot, transition }) {
       steps,
       event: eventSummary(outcome.event),
       dispatch: outcome.dispatch,
+      branch,
+      commit: { sha: commit.sha, paths: commit.paths, skipped: commit.skipped },
       next_phase: next ? { phase_key: next.phaseKey, branch: next.branch, base_branch: next.base_branch } : null,
-      warnings: planArtifactWarnings(planDir),
+      warnings: phaseArtifactWarnings({ planDir, specDir, phaseOrder: order }),
       next_actions: pendingDrainActions({ specDir, projectDir: planDir }),
     },
   };
+}
+
+// Step 1 reports staged and unstaged foreign paths alike (DIRTY_OUTSIDE_PLAN).
+// Staged foreign work is the user's index, which the commit would sweep in, so
+// it gets its own code. Same refusal, nothing written.
+function checkPreconditionsStagedAware(planDir, phaseFileArg, findPhaseInLog) {
+  try {
+    return checkPreconditions(planDir, phaseFileArg, findPhaseInLog);
+  } catch (err) {
+    if (err.code !== 'DIRTY_OUTSIDE_PLAN' || !err.details || !Array.isArray(err.details.paths)) throw err;
+    const staged = new Set(stagedPaths(planDir));
+    const stagedForeign = err.details.paths.filter((p) => staged.has(p));
+    if (stagedForeign.length === 0) throw err;
+    const refusal = new CliError(
+      'STAGED_OUTSIDE_PLAN',
+      `Staged changes outside the plan and spec directories: ${stagedForeign.join(', ')}. Unstage them with git restore --staged <path>, or commit them yourself, then rerun log handoff. Nothing was changed.`,
+    );
+    refusal.details = { paths: stagedForeign };
+    throw refusal;
+  }
+}
+
+// The next phase branch is named from the plan id. A non-slug plan dir would
+// yield pocket/null/phase-N, so it is refused before anything is written.
+function assertPlanIdIsSlug(planDir) {
+  if (planIdForLog(planDir)) return;
+  throw new CliError(
+    'PHASE_BRANCHES_PLAN_ID_INVALID',
+    `Plan directory name '${path.basename(path.resolve(planDir))}' is not a kebab-case slug (lowercase letters, digits, single hyphens), so the next phase branch cannot be named. ` +
+      `Rename the plan directory back to its slug, then rerun log handoff. Nothing was changed.`,
+  );
 }
 
 function handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter = null, adapterRunner = null } = {}) {
@@ -157,10 +190,13 @@ function handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter
     throw new CliError('USAGE', 'Usage: pocketto-pi log handoff <plan_dir> <phase_file>');
   }
   const planDir = resolvePlanDir(positionals[0]);
-  const { logPath, log, phase, closeout } = checkPreconditions(planDir, positionals[1], findPhaseInLog);
+  assertPlanIdIsSlug(planDir);
+  const { logPath, log, phase, closeout } = checkPreconditionsStagedAware(planDir, positionals[1], findPhaseInLog);
   const snapshot = ensureSnapshot(planDir, phase.order, closeout);
   const transition = commitPhaseClosed({ planDir, logPath, log, phase, snapshot, projectionWriter, adapterRunner });
-  return handoffResult({ planDir, phase, snapshot, transition });
+  const commit = commitPlanArtifacts({ planDir, phase, specDir: transition.specDir, planId: planIdForLog(planDir) });
+  const branch = createNextBranch({ planDir, phase, next: transition.next });
+  return handoffResult({ planDir, phase, snapshot, transition, commit, branch });
 }
 
 module.exports = { handoff };
