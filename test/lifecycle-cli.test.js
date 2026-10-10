@@ -1006,3 +1006,91 @@ test('lifecycle spec resolution stays inside the project and does not fall back 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ADAPTER_CONTRACT 2 drain fixtures: a real CLI drain against a fake adapter
+// executable. The adapter echoes a canned response (from ADAPTER_RESPONSE) with
+// the dispatched event ID; it never reads notice text as instructions.
+const { createLifecycleProject, seedLifecycleEvent, registerAdapter, writeExecutable } = require('../test-support/lifecycle-dispatch/common');
+
+const FAKE_ADAPTER_SOURCE = `#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const eventPath = process.argv.slice(2).find((arg) => arg.endsWith('.json') && fs.existsSync(arg));
+if (!eventPath) process.exit(2);
+const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+const response = JSON.parse(process.env.ADAPTER_RESPONSE);
+process.stdout.write(JSON.stringify({ event_id: event.event_id, ...response }) + '\\n');
+`;
+
+function createDrainFixture({ adapterContract = 2, response }) {
+  const root = mkdtempSync(path.join(tmpdir(), 'lifecycle-cli-drain-'));
+  const fixture = createLifecycleProject(root, { planId: 'demo-plan', projectName: 'project' });
+  const specContent = 'approved spec for drain\n';
+  writeFileSync(path.join(fixture.specDir, 'spec.md'), specContent);
+  const seeded = seedLifecycleEvent({
+    specDir: fixture.specDir,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec.md', sha256: sha256Hex(specContent), revision: 1 }],
+  });
+  const adapterPath = writeExecutable(path.join(root, 'fake-adapter'), FAKE_ADAPTER_SOURCE);
+  registerAdapter(fixture.pocketDir, adapterPath, { adapterContract, events: ['spec-approved'], timeoutMs: 30_000 });
+  fixture.eventId = seeded.event.event_id;
+  fixture.lifecyclePath = require('../cli/lib/lifecycle-store').lifecyclePathFor(fixture.specDir);
+  fixture.response = response;
+  return fixture;
+}
+
+function drainOnce(fixture) {
+  const result = run(
+    ['lifecycle', 'drain', fixture.specDir, '--json', '--contract', '3'],
+    {
+      env: {
+        ...process.env,
+        ADAPTER_RESPONSE: JSON.stringify(fixture.response),
+        POCKETTO_LIFECYCLE_NOW: '2026-09-19T12:00:00.000Z',
+      },
+    },
+  );
+  return JSON.parse(result.stdout.trim());
+}
+
+test('ADAPTER_CONTRACT 2: drain echoes notices per delivery', () => {
+  const notice = { code: 'PR_CREATED', message: 'phase-1 PR targets main' };
+  const fixture = createDrainFixture({
+    response: { status: 'succeeded', notices: [notice] },
+  });
+  const envelope = drainOnce(fixture);
+  assert.equal(envelope.ok, true, JSON.stringify(envelope));
+  const delivery = envelope.data.deliveries[0];
+  assert.notEqual(delivery.error && delivery.error.code, 'ADAPTER_CONTRACT_MISMATCH', 'contract 2 registration must be accepted');
+  assert.deepEqual(delivery.notices, [notice]);
+});
+
+test('ADAPTER_CONTRACT 2: contract mismatch non-burning across repeated drains', () => {
+  const fixture = createDrainFixture({ adapterContract: 1, response: { status: 'succeeded' } });
+  for (let drain = 0; drain < 2; drain += 1) {
+    const envelope = drainOnce(fixture);
+    assert.equal(envelope.ok, true, JSON.stringify(envelope));
+    assert.equal(envelope.data.deliveries[0]?.error?.code, 'ADAPTER_CONTRACT_MISMATCH', `drain ${drain + 1} must report the mismatch: ${JSON.stringify(envelope.data)}`);
+  }
+  const doc = JSON.parse(readFileSync(fixture.lifecyclePath, 'utf8'));
+  const event = doc.events.find((candidate) => candidate.event_id === fixture.eventId);
+  assert.equal(event.delivery.status, 'pending', 'pre-upgrade registration must hold the event pending');
+  assert.equal(event.delivery.attempts, 0, 'a contract mismatch must not consume a delivery attempt');
+});
+
+test('ADAPTER_CONTRACT 2: notice text inert through drain (no execution, no templating)', () => {
+  const payload = '$(touch PWNED) ${HOME} && rm -rf x';
+  const fixture = createDrainFixture({
+    response: { status: 'succeeded', notices: [{ code: 'PR_BLOCKED', message: payload }] },
+  });
+  const envelope = drainOnce(fixture);
+  assert.equal(envelope.ok, true, JSON.stringify(envelope));
+  const delivery = envelope.data.deliveries[0];
+  assert.equal(delivery.notices[0].message, payload, 'notice text must be echoed byte-for-byte');
+  assert.equal(existsSync(path.join(fixture.projectDir, 'PWNED')), false, 'notice text must not execute in the project');
+  assert.equal(existsSync(path.join(process.cwd(), 'PWNED')), false, 'notice text must not execute in the cwd');
+  assert.equal('next_actions' in envelope.data, false, 'notice text must never become a next_actions entry');
+  assert.equal(JSON.stringify(envelope).includes('next_actions":[{'), false, 'no next_actions payload may carry notice text');
+});

@@ -10,7 +10,7 @@ test('v4 protocol constants are independently versioned', () => {
   assert.equal(version.CONTRACT, 3, 'CONTRACT must be 3');
   assert.equal(version.PIPELINE, 5, 'PIPELINE must be 5');
   assert.equal(version.LIFECYCLE_SCHEMA, 2, 'LIFECYCLE_SCHEMA must be 2');
-  assert.equal(version.ADAPTER_CONTRACT, 1, 'ADAPTER_CONTRACT must be 1');
+  assert.equal(version.ADAPTER_CONTRACT, 2, 'ADAPTER_CONTRACT must be 2');
   assert.equal(version.SURFACE_MANIFEST, 1, 'SURFACE_MANIFEST must be 1');
 });
 
@@ -304,6 +304,40 @@ test('rejects remote-identifier response with stable code', () => {
 
 test('rejects unknown response field with stable code', () => {
   const res = validateAdapterResponse(makeResponse({ frobnicate: true }), KNOWN_EVENT_ID);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, ADAPTER_ERROR_CODES.UNKNOWN_FIELD);
+});
+
+// ADAPTER_CONTRACT 2: display-only notices[] of { code, message }, bounded and validated by Core.
+test('adapter contract 2 notices: a valid notice is accepted', () => {
+  const res = validateAdapterResponse(
+    makeResponse({ notices: [{ code: 'PR_CREATED', message: 'phase-1 PR targets main' }] }),
+    KNOWN_EVENT_ID,
+  );
+  assert.equal(res.ok, true, JSON.stringify(res));
+});
+
+test('adapter contract 2 notices: malformed notices fail with ADAPTER_BAD_NOTICE', () => {
+  const longMessage = 'x'.repeat(501);
+  const tenValid = Array.from({ length: 10 }, (_, i) => ({ code: `NOTICE_${i}`, message: 'ok' }));
+  const badNotices = [
+    ['eleven notices', [...tenValid, { code: 'NOTICE_10', message: 'ok' }]],
+    ['lowercase code', [{ code: 'pr_created', message: 'ok' }]],
+    ['extra key command', [{ code: 'PR_CREATED', message: 'ok', command: 'rm -rf x' }]],
+    ['501-char message', [{ code: 'PR_CREATED', message: longMessage }]],
+    ['empty message', [{ code: 'PR_CREATED', message: '' }]],
+    ['non-array notices', { code: 'PR_CREATED', message: 'ok' }],
+    ['notice that is not an object', ['PR_CREATED']],
+  ];
+  for (const [label, notices] of badNotices) {
+    const res = validateAdapterResponse(makeResponse({ notices }), KNOWN_EVENT_ID);
+    assert.equal(res.ok, false, `${label} must be rejected`);
+    assert.equal(res.code, ADAPTER_ERROR_CODES.BAD_NOTICE, `${label} must use ADAPTER_BAD_NOTICE`);
+  }
+});
+
+test('adapter contract 2 notices: a top-level pr_url field stays ADAPTER_UNKNOWN_FIELD', () => {
+  const res = validateAdapterResponse(makeResponse({ pr_url: 'https://github.com/o/r/pull/1' }), KNOWN_EVENT_ID);
   assert.equal(res.ok, false);
   assert.equal(res.code, ADAPTER_ERROR_CODES.UNKNOWN_FIELD);
 });

@@ -89,7 +89,7 @@ function createExternalPlanFixture(root, phaseContent, seededEvent) {
 function registerEnterpriseDispatcher(project) {
   const registration = {
     schema: 1,
-    adapter_contract: 1,
+    adapter_contract: 2,
     argv: [process.execPath, ENTERPRISE_DISPATCH, project.projectDir],
     events: ['phase-complete'],
     timeout_ms: 30_000,

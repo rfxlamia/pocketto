@@ -64,7 +64,7 @@ function createProtocolPlan(root, adapterPath, slug) {
   fixture.lifecyclePath = require('../../cli/lib/lifecycle-store').lifecyclePathFor(fixture.specDir);
   fixture.eventId = seeded.event.event_id;
   writeFileSync(fixture.callsPath, '');
-  fixture.register = ({ adapterContract = 1, timeoutMs = 1000 } = {}) => registerAdapter(
+  fixture.register = ({ adapterContract = 2, timeoutMs = 1000 } = {}) => registerAdapter(
     fixture.pocketDir,
     adapterPath,
     { adapterContract, events: ['spec-approved'], timeoutMs },
@@ -172,7 +172,7 @@ test('Core classifies adapter protocol failures with bounded retry scheduling an
     const run = (fixture, options = {}) => runDrain(fixture, { ...options, binDir, ghCallsPath });
     const scenarios = [
       { label: 'missing-registration', mode: 'success', registration: null },
-      { label: 'wrong-adapter-contract', mode: 'success', registration: { adapterContract: 2 } },
+      { label: 'wrong-adapter-contract', mode: 'success', registration: { adapterContract: 3 } },
       { label: 'timeout', mode: 'timeout', registration: { timeoutMs: 150 } },
       { label: 'non-zero-exit', mode: 'non-zero', registration: {} },
       { label: 'malformed-response', mode: 'malformed', registration: {} },
@@ -181,11 +181,12 @@ test('Core classifies adapter protocol failures with bounded retry scheduling an
       const fixture = createProtocolPlan(root, adapterPath, `plan-${scenario.label}`);
       if (scenario.registration) fixture.register(scenario.registration);
       run(fixture, { mode: scenario.mode });
-      if (scenario.label === 'missing-registration') {
+      if (scenario.label === 'missing-registration' || scenario.label === 'wrong-adapter-contract') {
+        // Fail-closed preflight codes are non-burning: the event stays pending with no attempt.
         const delivery = readDelivery(fixture);
-        assert.equal(delivery.status, 'pending', 'missing registration must not burn the pending event');
-        assert.equal(delivery.attempts, 0, 'missing registration must not record a delivery attempt');
-        assert.equal(delivery.error, undefined, 'missing registration must not persist a protocol error');
+        assert.equal(delivery.status, 'pending', `${scenario.label} must not burn the pending event`);
+        assert.equal(delivery.attempts, 0, `${scenario.label} must not record a delivery attempt`);
+        assert.equal(delivery.error, undefined, `${scenario.label} must not persist a protocol error`);
       } else {
         assertRetryableFailure(fixture, scenario.label);
       }

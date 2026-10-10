@@ -63,7 +63,7 @@ test('CYCLE 1: install atomically writes registration with schema 1, adapter con
   assert.deepEqual(record.argv, [dummy], 'an explicit custom --argv override must be registered verbatim');
   assert.deepEqual(Object.keys(record).sort(), ['adapter_contract', 'argv', 'events', 'schema', 'timeout_ms']);
   assert.equal(record.schema, 1, 'registration schema must be 1');
-  assert.equal(record.adapter_contract, 1, 'adapter contract must be 1');
+  assert.equal(record.adapter_contract, 2, 'adapter contract must be 2');
   assert.ok(Array.isArray(record.argv) && record.argv.length > 0, 'argv must be a non-empty executable argv');
   assert.ok(record.argv.every((a) => typeof a === 'string' && a.length > 0), 'argv entries must be strings');
   assert.deepEqual(record.events, ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed']);
@@ -114,9 +114,9 @@ test('CYCLE 1: preflight fails closed on missing registration with zero GitHub c
 test('CYCLE 1: preflight fails closed on malformed or partial registration', () => {
   for (const [name, body] of [
     ['truncated JSON', '{"schema": 1, "adapter_contract":'],
-    ['wrong schema', JSON.stringify({ schema: 99, adapter_contract: 1, argv: ['x'], events: ['spec-approved'], timeout_ms: 30000 })],
-    ['contract mismatch', JSON.stringify({ schema: 1, adapter_contract: 2, argv: ['x'], events: ['spec-approved'], timeout_ms: 30000 })],
-    ['missing argv', JSON.stringify({ schema: 1, adapter_contract: 1, events: ['spec-approved'], timeout_ms: 30000 })],
+    ['wrong schema', JSON.stringify({ schema: 99, adapter_contract: 2, argv: ['x'], events: ['spec-approved'], timeout_ms: 30000 })],
+    ['contract mismatch', JSON.stringify({ schema: 1, adapter_contract: 3, argv: ['x'], events: ['spec-approved'], timeout_ms: 30000 })],
+    ['missing argv', JSON.stringify({ schema: 1, adapter_contract: 2, events: ['spec-approved'], timeout_ms: 30000 })],
   ]) {
     const root = makeTempRoot();
     const dir = path.join(root, '.pocket');
@@ -146,7 +146,7 @@ test('CYCLE 1: preflight fails closed on missing or incompatible Core', () => {
 
   for (const [name, coreInfo] of [
     ['missing Core', { present: false, contract: null, lifecycleSchema: null, adapterContract: null }],
-    ['incompatible Core contract', { present: true, packageMajor: 4, releaseMajor: 4, contract: 2, lifecycleSchema: 1, adapterContract: 1 }],
+    ['incompatible Core contract', { present: true, packageMajor: 4, releaseMajor: 4, contract: 2, lifecycleSchema: 1, adapterContract: 2 }],
   ]) {
     let ghCalls = 0;
     const res = registration.preflight(root, {
@@ -475,11 +475,11 @@ function installC4Root(events, argv) {
   return root;
 }
 
-test('CYCLE 4: Core contract 3 plus adapter registration contract 2 fails closed before any handler or GitHub call', () => {
+test('CYCLE 4: Core contract 3 plus adapter registration contract 3 fails closed before any handler or GitHub call', () => {
   const root = installC4Root(['spec-approved'], [process.execPath, 'adapter-stub.js']);
   const dir = path.join(root, '.pocket');
   const raw = JSON.parse(fs.readFileSync(path.join(dir, 'lifecycle-adapter.json'), 'utf8'));
-  raw.adapter_contract = 2;
+  raw.adapter_contract = 3;
   fs.writeFileSync(path.join(dir, 'lifecycle-adapter.json'), JSON.stringify(raw, null, 2) + '\n');
 
   let handlerCalls = 0;
@@ -648,4 +648,35 @@ test('SUP-3: malformed allowlisted lifecycle events fail before handler or trans
   assert.deepEqual(seen, ['demo-plan:spec-approved:r1']);
   assert.equal(handlerCalls, 1);
   assert.equal(transportCalls, 1);
+});
+
+// ADAPTER_CONTRACT 2: Enterprise serializer passes display-only notices through redaction.
+test('ADAPTER_CONTRACT 2 serializer redacts notices and registers contract 2', () => {
+  const secret = 'ghp_superSecretValue123';
+  const res = adapter.serializeResponse({
+    event_id: C2_EVENT_ID,
+    status: 'succeeded',
+    notices: [{ code: 'PR_CREATED', message: `phase-1 PR created with token ${secret}` }],
+  });
+  assert.ok(Array.isArray(res.notices), 'valid notice must survive serialization');
+  assert.equal(res.notices.length, 1);
+  assert.equal(res.notices[0].code, 'PR_CREATED');
+  assert.ok(!res.notices[0].message.includes(secret), 'notice message must be redacted');
+  assert.equal(validateAdapterResponse(res, C2_EVENT_ID).ok, true, 'serialized response must validate under Core');
+
+  const { buildRegistration } = require('../enterprise/registration-record');
+  assert.equal(buildRegistration({ argv: ['x'] }).adapter_contract, 2, 'new registrations must declare adapter contract 2');
+});
+
+test('ADAPTER_CONTRACT 2 serializer drops invalid notices and keeps valid ones', () => {
+  const res = adapter.serializeResponse({
+    event_id: C2_EVENT_ID,
+    status: 'succeeded',
+    notices: [
+      { code: 'PR_REUSED', message: 'phase-1 PR reused against main' },
+      { code: 'pr_created', message: 'lowercase code is invalid' },
+    ],
+  });
+  assert.deepEqual(res.notices, [{ code: 'PR_REUSED', message: 'phase-1 PR reused against main' }]);
+  assert.equal(validateAdapterResponse(res, C2_EVENT_ID).ok, true, 'serialized response must validate under Core');
 });

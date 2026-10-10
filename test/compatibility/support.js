@@ -91,7 +91,7 @@ process.stdout.write(JSON.stringify({ event_id: event.event_id, status: 'succeed
   }
   fs.writeFileSync(path.join(pocketDir, 'lifecycle-adapter.json'), `${JSON.stringify({
     schema: 1,
-    adapter_contract: 1,
+    adapter_contract: 2,
     argv: [process.execPath, adapter],
     events: ['spec-approved', 'phase-complete', 'plan-closed'],
     timeout_ms: 30000,

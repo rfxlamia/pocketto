@@ -162,7 +162,7 @@ function assertPackedPackageMetadata(extracted) {
       CONTRACT: 3,
       PIPELINE: 5,
       LIFECYCLE_SCHEMA: 2,
-      ADAPTER_CONTRACT: 1,
+      ADAPTER_CONTRACT: 2,
       SURFACE_MANIFEST: 1,
     },
     'packed package and independent protocol versions must agree',

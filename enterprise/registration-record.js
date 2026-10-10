@@ -18,7 +18,7 @@ try {
 }
 
 const REGISTRATION_SCHEMA = 1;
-const ADAPTER_CONTRACT = 1;
+const ADAPTER_CONTRACT = 2;
 const REGISTRATION_DIR = '.pocket';
 const REGISTRATION_FILE = 'lifecycle-adapter.json';
 const DEFAULT_TIMEOUT_MS = 30000;

@@ -16,6 +16,7 @@ const NON_BURNING_ADAPTER_CODES = new Set([
   'ADAPTER_MAJOR_UNVERIFIED',
   'ADAPTER_MAJOR_UNSUPPORTED',
   'ADAPTER_MAJOR_MISMATCH',
+  'ADAPTER_CONTRACT_MISMATCH',
 ]);
 
 function highestContiguousSucceededRevision(doc) {
@@ -134,7 +135,14 @@ function attemptDelivery(specDir, event, adapter, projectRoot) {
     ? failureDeliveryPatch(failure, attempts, nowMs)
     : responseDeliveryPatch(response, attempts, nowMs);
   const persisted = updateEventDelivery(specDir, event.event_id, outcome);
-  return persisted;
+  return { persisted, notices: echoableNotices(response) };
+}
+
+// Display-only: notices were validated by parseAdapterResponse. They are copied
+// into the drain envelope and never stored, templated, or executed.
+function echoableNotices(response) {
+  if (!response || !Array.isArray(response.notices) || response.notices.length === 0) return null;
+  return response.notices.map((notice) => ({ code: notice.code, message: notice.message }));
 }
 
 function persistedDeliveryResult(persisted) {
@@ -173,12 +181,13 @@ function processClaimedEvent(specDir, eventId, claim, adapter, projectRoot, deli
       return 'stop';
     }
 
-    const persisted = attemptDelivery(specDir, inspection.event, adapter, projectRoot);
+    const { persisted, notices } = attemptDelivery(specDir, inspection.event, adapter, projectRoot);
     if (!persisted.ok) {
       releaseClaim = false;
       throw new CliError(persisted.code, persisted.message);
     }
     const { result, delivery } = persistedDeliveryResult(persisted);
+    if (notices) result.notices = notices;
     deliveries.push(result);
     if (delivery.status !== 'succeeded') return 'stop';
     return 'continue';

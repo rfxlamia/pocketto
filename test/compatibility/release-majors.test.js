@@ -19,13 +19,13 @@ test('preflight fails closed on missing, malformed, unsupported, or inconsistent
     contract: 3,
     pipeline: 5,
     lifecycleSchema: 1,
-    adapterContract: 1,
+    adapterContract: 2,
     surfaceManifest: 1,
   };
   const validEnterprise = {
     packageMajor: 4,
     releaseMajor: 4,
-    adapterContract: 1,
+    adapterContract: 2,
     surfaceManifest: 1,
   };
   const scenarios = [

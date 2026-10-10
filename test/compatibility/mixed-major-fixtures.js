@@ -24,7 +24,7 @@ function readCoreInfo(manifestPath) {
     contract: major === 3 ? 2 : 3,
     pipeline: major === 3 ? 4 : 5,
     lifecycleSchema: major === 3 ? null : 2,
-    adapterContract: 1,
+    adapterContract: major === 3 ? 1 : 2,
     surfaceManifest: manifest.schema,
   };
 }
@@ -34,7 +34,7 @@ function readEnterpriseInfo(manifestPath) {
   return {
     packageMajor: manifest.release.major,
     releaseMajor: manifest.release.major,
-    adapterContract: 1,
+    adapterContract: manifest.release.major === 3 ? 1 : 2,
     surfaceManifest: manifest.schema,
   };
 }

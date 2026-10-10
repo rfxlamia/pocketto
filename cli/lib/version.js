@@ -47,6 +47,6 @@ module.exports = {
   // Highest lifecycle.json schema Core can read. Readers accept 1..LIFECYCLE_SCHEMA;
   // only stacked-plan planPatch writes emit 2, unpatched documents stay 1.
   LIFECYCLE_SCHEMA: 2,
-  ADAPTER_CONTRACT: 1,
+  ADAPTER_CONTRACT: 2,
   SURFACE_MANIFEST: 1,
 };

@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { validateAdapterResponse } = require('./lifecycle-contract');
 const { protocolFailure } = require('./lifecycle-retry');
+const { ADAPTER_CONTRACT } = require('./version');
 
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
 // Enterprise install accepts the same ceiling (registration-record.js).
@@ -40,7 +41,7 @@ function readAdapterRegistration(projectDir) {
   if (!registration || typeof registration !== 'object' || Array.isArray(registration)) {
     return { registration: null, error: protocolFailure('ADAPTER_REGISTRATION_INVALID', 'lifecycle adapter registration is invalid') };
   }
-  if (registration.adapter_contract !== 1) {
+  if (registration.adapter_contract !== ADAPTER_CONTRACT) {
     return { registration: null, error: protocolFailure('ADAPTER_CONTRACT_MISMATCH', 'registered lifecycle adapter contract is incompatible') };
   }
   if (
