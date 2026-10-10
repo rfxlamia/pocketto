@@ -8,7 +8,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -60,6 +60,8 @@ function setupRepo(t) {
   git(work, 'push', '-q', '-u', 'origin', ROOT_BASE);
   git(work, 'switch', '-q', '-c', 'pocket/p/phase-1');
   commitFile(work, 'phase1.txt', 'phase one\n', 'phase one work');
+  // The durable root-base record that `log init --phase-branches stacked` writes (see cli/lib/phase-branches.js).
+  git(work, 'config', 'branch.pocket/p/phase-1.pocketRootBase', ROOT_BASE);
   const specDir = path.join(work, 'docs', 'pocket', 'spec', PLAN_ID);
   fs.mkdirSync(specDir, { recursive: true });
   enterpriseMeta.setIssueIdentity(specDir, {
@@ -194,7 +196,7 @@ function publish(env, gh, overrides = {}) {
     phase: overrides.phase || phase1(),
     closeoutSnapshot: CLOSEOUT,
     registration: 'registration' in overrides ? overrides.registration : { push_consent: CONSENT },
-    options: { ghRunner: gh.run },
+    options: { ghRunner: gh.run, gitRunner: overrides.gitRunner },
   });
 }
 
@@ -204,6 +206,27 @@ function readMeta(specDir) {
 
 function callsOf(gh, verb) {
   return gh.state.calls.filter((args) => args[0] === 'pr' && args[1] === verb);
+}
+
+// Git seam recorder: records every argv. A subcommand named in `failOn` returns its
+// canned result instead of running; every other call runs real git against the temp repo.
+function recordingGit(failOn = {}) {
+  const calls = [];
+  function run(args, opts = {}) {
+    calls.push(args.slice());
+    if (failOn[args[0]]) return failOn[args[0]];
+    const res = spawnSync('git', args, { cwd: opts.cwd, encoding: 'utf8', timeout: opts.timeoutMs || 30000 });
+    return {
+      exit: typeof res.status === 'number' ? res.status : 1,
+      stdout: typeof res.stdout === 'string' ? res.stdout : '',
+      stderr: typeof res.stderr === 'string' ? res.stderr : '',
+    };
+  }
+  return { run, calls };
+}
+
+function pushCalls(git) {
+  return git.calls.filter((args) => args[0] === 'push');
 }
 
 test('publish root: pushes phase 1 without force and creates a PR based on root_base', (t) => {
@@ -601,4 +624,281 @@ test('publish existing pr rejected: pr create refused because a PR for the head 
     return true;
   });
   assert.equal(fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8'), metaBefore, 'metadata unchanged');
+});
+
+test('harden issue required: no recorded plan issue blocks with ISSUE_REQUIRED before any push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const git = recordingGit();
+  fs.rmSync(path.join(env.specDir, '.pocket-meta.json'));
+
+  assert.throws(() => publish(env, gh, { gitRunner: git.run }), (error) => {
+    assert.equal(error.code, 'ISSUE_REQUIRED');
+    assert.equal(error.retryable, true);
+    return true;
+  });
+  assert.equal(pushCalls(git).length, 0, 'no git push before the issue check');
+  assert.equal(remoteRef(env, 'pocket/p/phase-1'), null, 'nothing pushed to origin');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create call');
+});
+
+test('harden base mismatch child: phase 2 whose base is not the parent phase branch is blocked before any push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  publish(env, gh);
+  git(env.work, 'switch', '-q', '-c', 'pocket/p/phase-2');
+  commitFile(env.work, 'phase2.txt', 'phase two\n', 'phase two work');
+  const git2 = recordingGit();
+  const createsBefore = callsOf(gh, 'create').length;
+  const wrongBase = Object.assign(phase2(), { baseBranch: ROOT_BASE });
+
+  assert.throws(() => publish(env, gh, { phase: wrongBase, gitRunner: git2.run }), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, 'base mismatch');
+    assert.equal(error.retryable, false);
+    return true;
+  });
+  assert.equal(pushCalls(git2).length, 0, 'no push for a mismatched base');
+  assert.equal(remoteRef(env, 'pocket/p/phase-2'), null, 'child branch not pushed');
+  assert.equal(callsOf(gh, 'create').length, createsBefore, 'no pr create for a mismatched base');
+});
+
+test('harden root record mismatch: phase 1 whose base differs from the recorded root base is blocked before any push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  git(env.work, 'config', 'branch.pocket/p/phase-1.pocketRootBase', 'main');
+  const git2 = recordingGit();
+
+  assert.throws(() => publish(env, gh, { gitRunner: git2.run }), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, 'base mismatch');
+    assert.equal(error.retryable, false);
+    return true;
+  });
+  assert.equal(pushCalls(git2).length, 0, 'no push for a mismatched root base');
+  assert.equal(remoteRef(env, 'pocket/p/phase-1'), null, 'phase branch not pushed');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create for a mismatched root base');
+});
+
+test('harden root record unrecorded: phase 1 without a recorded root base is blocked before any push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  git(env.work, 'config', '--unset', 'branch.pocket/p/phase-1.pocketRootBase');
+  const git2 = recordingGit();
+
+  assert.throws(() => publish(env, gh, { gitRunner: git2.run }), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, 'root base unrecorded');
+    assert.equal(error.retryable, false);
+    return true;
+  });
+  assert.equal(pushCalls(git2).length, 0, 'no push without a recorded root base');
+  assert.equal(remoteRef(env, 'pocket/p/phase-1'), null, 'phase branch not pushed');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create without a recorded root base');
+});
+
+test('harden foreign list candidate: a listed PR on another base blocks without any edit', (t) => {
+  const env = setupRepo(t);
+  const foreign = {
+    number: 77,
+    url: `${REPO_URL}/pull/77`,
+    state: 'OPEN',
+    headRefName: 'pocket/p/phase-1',
+    baseRefName: 'main',
+    title: 'p phase 1',
+    body: 'Human text.\n',
+  };
+  const gh = fakeGh({ failures: { list: { exit: 0, stdout: JSON.stringify([foreign]), stderr: '', timedOut: false } } });
+
+  assert.throws(() => publish(env, gh), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, 'foreign PR in list');
+    assert.equal(error.retryable, false);
+    return true;
+  });
+  assert.equal(callsOf(gh, 'edit').length, 0, 'no pr edit on a foreign candidate');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create on a foreign candidate');
+  const listed = callsOf(gh, 'list');
+  assert.equal(listed.length, 1);
+  assert.match(valueFor(listed[0], '--json'), /(^|,)state(,|$)/, 'the list requests state so OPEN can be verified');
+});
+
+test('harden list not array: a non-array pr list is retryable GH_MALFORMED_OUTPUT with no create', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh({ failures: { list: { exit: 0, stdout: '{}', stderr: '', timedOut: false } } });
+
+  assert.throws(() => publish(env, gh), (error) => {
+    assert.equal(error.code, 'GH_MALFORMED_OUTPUT');
+    assert.equal(error.retryable, true);
+    return true;
+  });
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create when the list is malformed');
+});
+
+test('harden push argv: push is exactly -u origin branch and no argv on any path carries force', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const git = recordingGit();
+
+  publish(env, gh, { gitRunner: git.run });
+
+  assert.deepEqual(pushCalls(git), [['push', '-u', 'origin', 'pocket/p/phase-1']]);
+  assert.ok(git.calls.length > 0 && gh.state.calls.length > 0);
+  for (const argv of git.calls) {
+    assert.ok(!argv.some((arg) => arg.includes('force')), `force in git argv: ${argv.join(' ')}`);
+  }
+  // gh argv carries the random --body-file path, so only flag tokens are compared there.
+  for (const argv of gh.state.calls) {
+    assert.ok(!argv.some((arg) => /^--force|^-f$/.test(arg)), `force flag in gh argv: ${argv.join(' ')}`);
+  }
+});
+
+test('harden push failed: a rejected git push is retryable PUSH_FAILED and creates no PR', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const git = recordingGit({ push: { exit: 1, stdout: '', stderr: 'rejected by remote' } });
+
+  assert.throws(() => publish(env, gh, { gitRunner: git.run }), (error) => {
+    assert.equal(error.code, 'PUSH_FAILED');
+    assert.equal(error.retryable, true);
+    assert.ok(!error.message.includes('rejected by remote'), 'git stderr never reaches the message');
+    return true;
+  });
+  assert.equal(pushCalls(git).length, 1, 'the push was attempted once');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create after a failed push');
+});
+
+test('harden remote unavailable: an unreadable origin is retryable REMOTE_UNAVAILABLE with no push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const git = recordingGit({ 'ls-remote': { exit: 128, stdout: '', stderr: 'fatal: unable to access origin' } });
+
+  assert.throws(() => publish(env, gh, { gitRunner: git.run }), (error) => {
+    assert.equal(error.code, 'REMOTE_UNAVAILABLE');
+    assert.equal(error.retryable, true);
+    return true;
+  });
+  assert.equal(pushCalls(git).length, 0, 'no push when origin cannot be read');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create when origin cannot be read');
+});
+
+test('harden git unavailable: an undecidable ancestry check is retryable GIT_UNAVAILABLE and does not push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  git(env.work, 'push', '-q', 'origin', 'pocket/p/phase-1');
+  const remoteTip = remoteRef(env, 'pocket/p/phase-1');
+  commitFile(env.work, 'phase1-more.txt', 'more phase one\n', 'more phase one work');
+  const git2 = recordingGit({ 'merge-base': { exit: 128, stdout: '', stderr: 'fatal: broken ancestry' } });
+
+  assert.throws(() => publish(env, gh, { gitRunner: git2.run }), (error) => {
+    assert.equal(error.code, 'GIT_UNAVAILABLE');
+    assert.equal(error.retryable, true);
+    return true;
+  });
+  assert.equal(remoteRef(env, 'pocket/p/phase-1'), remoteTip, 'origin tip unchanged');
+  assert.equal(pushCalls(git2).length, 0, 'no push while ancestry is undecidable');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create while ancestry is undecidable');
+});
+
+test('harden branch missing: an absent local phase branch is PHASE_BRANCH_MISSING with no push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const git2 = recordingGit();
+  const missing = Object.assign(phase1(), { branch: 'pocket/p/phase-9' });
+
+  assert.throws(() => publish(env, gh, { phase: missing, gitRunner: git2.run }), (error) => {
+    assert.equal(error.code, 'PHASE_BRANCH_MISSING');
+    return true;
+  });
+  assert.equal(pushCalls(git2).length, 0, 'no push for a missing local branch');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create for a missing local branch');
+});
+
+test('harden parent unrecorded: a child whose parent PR is not recorded is blocked before any push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  git(env.work, 'push', '-q', 'origin', 'pocket/p/phase-1');
+  git(env.work, 'switch', '-q', '-c', 'pocket/p/phase-2');
+  commitFile(env.work, 'phase2.txt', 'phase two\n', 'phase two work');
+  const git2 = recordingGit();
+
+  assert.throws(() => publish(env, gh, { phase: phase2(), gitRunner: git2.run }), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, 'parent PR not recorded');
+    assert.equal(error.retryable, true);
+    return true;
+  });
+  assert.equal(pushCalls(git2).length, 0, 'no push without a recorded parent PR');
+  assert.equal(remoteRef(env, 'pocket/p/phase-2'), null, 'child branch not pushed');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create without a recorded parent PR');
+});
+
+test('harden foreign view: a recorded PR from another repository is never reused and the list decides', (t) => {
+  const env = setupRepo(t);
+  const foreignUrl = 'https://github.com/other-owner/other-repo/pull/500';
+  const foreignView = {
+    number: 500,
+    url: foreignUrl,
+    state: 'OPEN',
+    headRefName: 'pocket/p/phase-1',
+    baseRefName: ROOT_BASE,
+    title: 'p phase 1',
+    body: 'Foreign text.\n',
+  };
+  const gh = fakeGh({
+    firstPrNumber: 200,
+    failures: { view: { 500: { exit: 0, stdout: JSON.stringify(foreignView), stderr: '', timedOut: false } } },
+  });
+  enterpriseMeta.setPrIdentity(env.specDir, 'phase-1', { number: 500, url: foreignUrl });
+
+  const result = publish(env, gh);
+
+  assert.equal(result.created, true, 'the list found nothing, so a PR is created');
+  assert.equal(result.pr.number, 200);
+  assert.equal(callsOf(gh, 'edit').length, 0, 'the foreign PR is never edited');
+  assert.equal(readMeta(env.specDir).phases['phase-1'].github_pr.number, 200, 'metadata points at the created PR');
+});
+
+test('harden list limit: pr list passes an explicit --limit above the gh default of 30', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+
+  publish(env, gh);
+
+  const limit = Number(valueFor(callsOf(gh, 'list')[0], '--limit'));
+  assert.ok(limit > 30, `explicit --limit above the gh default, got ${limit}`);
+});
+
+test('harden root record unreadable: a failing config read is retryable GIT_UNAVAILABLE with no push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const git = recordingGit({ config: { exit: 128, stdout: '', stderr: 'fatal: bad config' } });
+
+  assert.throws(() => publish(env, gh, { gitRunner: git.run }), (error) => {
+    assert.equal(error.code, 'GIT_UNAVAILABLE');
+    assert.equal(error.retryable, true);
+    return true;
+  });
+  assert.equal(pushCalls(git).length, 0, 'no push when the root base cannot be read');
+  assert.equal(remoteRef(env, 'pocket/p/phase-1'), null, 'nothing pushed to origin');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create call');
+});
+
+test('harden closeout invalid: a PR body that cannot be built throws before any push', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const git = recordingGit();
+
+  assert.throws(() => publishPhase({
+    projectRoot: env.work,
+    specDir: env.specDir,
+    planId: PLAN_ID,
+    phase: phase1(),
+    closeoutSnapshot: undefined,
+    registration: { push_consent: CONSENT },
+    options: { ghRunner: gh.run, gitRunner: git.run },
+  }));
+  assert.equal(pushCalls(git).length, 0, 'no push when the PR body cannot be built');
+  assert.equal(remoteRef(env, 'pocket/p/phase-1'), null, 'nothing pushed to origin');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create call');
 });

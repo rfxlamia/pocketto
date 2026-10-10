@@ -22,8 +22,9 @@ function runNoContent(args, options) {
   return runRequest(args, options, false);
 }
 
-function runRequest(args, options, expectJson) {
-  const result = github.runGh(args, {
+// One gh invocation, no retry: the caller gets the raw result, including stderr.
+function runGhOnce(args, options, expectJson) {
+  return github.runGh(args, {
     runner: options.ghRunner,
     timeoutMs: options.timeoutMs,
     // This invocation is one try. Core's delivery journal owns the
@@ -31,14 +32,21 @@ function runRequest(args, options, expectJson) {
     attemptsMade: 1,
     expectJson,
   });
-  if (!result.ok) {
-    const classification = result.classification || {};
-    const error = classification.error || {};
-    throw new PhaseHandlerError(error.code || 'GH_PHASE_FAILED', error.message || 'GitHub request failed.', {
-      status: classification.status === 'terminal' ? 'terminal' : 'retryable',
-      retryable: classification.status !== 'terminal',
-    });
-  }
+}
+
+// The single mapping from a failed gh result to the PhaseHandlerError the handler seam reports.
+function ghFailureError(result) {
+  const classification = result.classification || {};
+  const error = classification.error || {};
+  return new PhaseHandlerError(error.code || 'GH_PHASE_FAILED', error.message || 'GitHub request failed.', {
+    status: classification.status === 'terminal' ? 'terminal' : 'retryable',
+    retryable: classification.status !== 'terminal',
+  });
+}
+
+function runRequest(args, options, expectJson) {
+  const result = runGhOnce(args, options, expectJson);
+  if (!result.ok) throw ghFailureError(result);
   return result.data;
 }
 
@@ -102,4 +110,4 @@ function listReviewThreads(repo, prNumber, options) {
 }
 
 
-module.exports = { runJson, runNoContent, listComments, upsertSummary, listReviewThreads };
+module.exports = { runJson, runNoContent, listComments, upsertSummary, listReviewThreads, runGhOnce, ghFailureError };

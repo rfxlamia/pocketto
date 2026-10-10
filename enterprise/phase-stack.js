@@ -13,14 +13,17 @@ const { spawnSync } = require('node:child_process');
 
 const github = require('./github');
 const enterpriseMeta = require('./meta');
-const { runJson } = require('./phase-handler-github');
+const { runJson, runGhOnce, ghFailureError } = require('./phase-handler-github');
 const { resolveRepository, sameRepository } = require('./phase-handler-targets');
 const { PhaseHandlerError } = require('./phase-handler-errors');
 const { stackBlock, phasePrBody, upsertStackBlock } = require('./stack-body');
 const { PUSH_CONSENT_PHASE_BRANCHES } = require('./registration-phase');
 
 const DEFAULT_GIT_TIMEOUT_MS = 30000;
-const PR_LIST_FIELDS = 'number,url,headRefName,baseRefName,body';
+// `state` is required so each listed candidate can be verified as OPEN. The limit is
+// explicit because gh's default of 30 would hide duplicates beyond it.
+const PR_LIST_FIELDS = 'number,url,state,headRefName,baseRefName,body';
+const PR_LIST_LIMIT = 100;
 const PR_VIEW_FIELDS = 'number,url,state,headRefName,baseRefName,body';
 
 function defaultGitRunner(args, opts = {}) {
@@ -110,21 +113,10 @@ function phaseGhOptions(options) {
 function ghWithBody(options, args, body, classifyFailure) {
   const bodyFile = github.writeBodyFile(body);
   try {
-    // github.runGh reads `runner` (the same seam, one invocation, no retry).
-    const result = github.runGh([...args, '--body-file', bodyFile], {
-      runner: options.ghRunner,
-      timeoutMs: options.timeoutMs,
-      attemptsMade: 1,
-      expectJson: false,
-    });
+    const result = runGhOnce([...args, '--body-file', bodyFile], options, false);
     if (!result.ok) {
       const mapped = classifyFailure ? classifyFailure(result) : null;
-      if (mapped) throw mapped;
-      const error = (result.classification && result.classification.error) || {};
-      throw new PhaseHandlerError(error.code || 'GH_PHASE_FAILED', error.message || 'GitHub request failed.', {
-        status: result.classification && result.classification.status === 'terminal' ? 'terminal' : 'retryable',
-        retryable: !(result.classification && result.classification.status === 'terminal'),
-      });
+      throw mapped || ghFailureError(result);
     }
     return result.raw.stdout;
   } finally {
@@ -179,19 +171,10 @@ function parentPrNumber(specDir, parentKey) {
 const PR_NOT_FOUND = /could not resolve to a pullrequest|not found/i;
 
 function viewRecordedPr(options, repo, number) {
-  const result = github.runGh(['pr', 'view', String(number), '--repo', repo.nameWithOwner, '--json', PR_VIEW_FIELDS], {
-    runner: options.ghRunner,
-    timeoutMs: options.timeoutMs,
-    attemptsMade: 1,
-    expectJson: true,
-  });
+  const result = runGhOnce(['pr', 'view', String(number), '--repo', repo.nameWithOwner, '--json', PR_VIEW_FIELDS], options, true);
   if (result.ok) return result.data;
-  const error = result.classification.error;
-  if (error.code === 'GH_UNKNOWN' && PR_NOT_FOUND.test(result.raw.stderr)) return null;
-  throw new PhaseHandlerError(error.code, error.message, {
-    status: result.classification.status === 'terminal' ? 'terminal' : 'retryable',
-    retryable: result.classification.status !== 'terminal',
-  });
+  if (result.classification.error.code === 'GH_UNKNOWN' && PR_NOT_FOUND.test(result.raw.stderr)) return null;
+  throw ghFailureError(result);
 }
 
 // Returns the recorded PR when it is still open for this exact head and base.
@@ -221,21 +204,69 @@ function assertBasePublished(options, cwd, phase) {
     `PR_BLOCKED: root base ${phase.baseBranch} is not on origin. Push it, then rerun.`, true);
 }
 
-function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, registration, options = {} }) {
-  const repo = resolveRepository(phaseGhOptions(options));
-  const headSha = localHeadOf(options, projectRoot, phase.branch);
-  assertBasePublished(options, projectRoot, phase);
-  const parentPr = phase.parentKey ? parentPrNumber(specDir, phase.parentKey) : null;
-  const remoteSha = remoteHeadOf(options, projectRoot, phase.branch);
-  assertPushConsent({ projectRoot, specDir, phase, registration, localSha: headSha, remoteSha });
-  assertFastForward(options, projectRoot, phase.branch, remoteSha, headSha);
-  if (remoteSha !== headSha) pushBranch(options, projectRoot, phase.branch);
+// Repo-local key written at stacked init (cli/lib/phase-branches.js, rootBaseKey; not exported).
+// It is the durable record of the root base, so the publisher reads it instead of guessing.
+function rootBaseKey(branch) {
+  return `branch.${branch}.pocketRootBase`;
+}
 
-  const block = stackBlock({ planId, phaseKey: phase.key, phaseOrder: phase.order, phaseCount: phase.count, baseBranch: phase.baseBranch, parentPr });
+function recordedRootBase(options, cwd, branch) {
+  const res = gitCall(options, cwd, ['config', '--get', rootBaseKey(branch)]);
+  if (res.exit === 1) return null;
+  if (res.exit !== 0) {
+    throw new PhaseHandlerError('GIT_UNAVAILABLE', 'git could not read the recorded root base.', { status: 'retryable', retryable: true });
+  }
+  return res.stdout.trim() || null;
+}
+
+// Phase 1 must target the recorded root base; phase N must target its parent phase
+// branch and parent key. Checked before any push, so a mismatched base never reaches origin.
+function assertBaseExpected(options, cwd, planId, phase) {
+  if (phase.order === 1) {
+    const root = recordedRootBase(options, cwd, phase.branch);
+    if (root === null) {
+      throw prBlocked('root base unrecorded',
+        `PR_BLOCKED: ${phase.branch} has no recorded root base. Restore the stacked init record, then rerun.`, false);
+    }
+    if (phase.baseBranch !== root) {
+      throw prBlocked('base mismatch',
+        `PR_BLOCKED: ${phase.key} targets ${phase.baseBranch}, but the recorded root base is ${root}. Fix the base, then rerun.`, false);
+    }
+    return;
+  }
+  const parentKey = `phase-${phase.order - 1}`;
+  const parentBranch = `pocket/${planId}/${parentKey}`;
+  if (phase.parentKey !== parentKey || phase.baseBranch !== parentBranch) {
+    throw prBlocked('base mismatch',
+      `PR_BLOCKED: ${phase.key} must target ${parentBranch} (${parentKey}), not ${phase.baseBranch}. Fix the base, then rerun.`, false);
+  }
+}
+
+// A listed PR is ours only when it is open for this exact head and base. gh filters by
+// --head/--base already; re-checking the returned fields guards against any other candidate.
+function isOwnCandidate(candidate, phase) {
+  return Boolean(candidate) && candidate.headRefName === phase.branch && candidate.baseRefName === phase.baseBranch
+    && String(candidate.state).toUpperCase() === 'OPEN';
+}
+
+function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, registration, options = {} }) {
+  // Every local precondition runs before the first remote mutation (the push).
   const issue = enterpriseMeta.getIssueIdentity(specDir).number;
   if (!Number.isInteger(issue) || issue <= 0) {
     throw new PhaseHandlerError('ISSUE_REQUIRED', 'Phase PR publishing requires a recorded plan issue.', { status: 'retryable', retryable: true });
   }
+  const headSha = localHeadOf(options, projectRoot, phase.branch);
+  assertBaseExpected(options, projectRoot, planId, phase);
+  const repo = resolveRepository(phaseGhOptions(options));
+  assertBasePublished(options, projectRoot, phase);
+  const parentPr = phase.parentKey ? parentPrNumber(specDir, phase.parentKey) : null;
+  // The PR body is built before the push, so a body that cannot be built never reaches origin.
+  const block = stackBlock({ planId, phaseKey: phase.key, phaseOrder: phase.order, phaseCount: phase.count, baseBranch: phase.baseBranch, parentPr });
+  const body = phasePrBody({ closeoutSnapshot, block, issueLink: { issue, finalPhase: phase.order === phase.count } });
+  const remoteSha = remoteHeadOf(options, projectRoot, phase.branch);
+  assertPushConsent({ projectRoot, specDir, phase, registration, localSha: headSha, remoteSha });
+  assertFastForward(options, projectRoot, phase.branch, remoteSha, headSha);
+  if (remoteSha !== headSha) pushBranch(options, projectRoot, phase.branch);
 
   // Metadata first: a recorded PR number is viewed before the filtered list is consulted.
   const recorded = metadataPr(options, specDir, repo, phase);
@@ -244,7 +275,14 @@ function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, r
   }
 
   const listed = runJson(['pr', 'list', '--repo', repo.nameWithOwner, '--head', phase.branch, '--base', phase.baseBranch,
-    '--state', 'open', '--json', PR_LIST_FIELDS], phaseGhOptions(options));
+    '--state', 'open', '--limit', String(PR_LIST_LIMIT), '--json', PR_LIST_FIELDS], phaseGhOptions(options));
+  if (!Array.isArray(listed)) {
+    throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'gh pr list did not return an array.', { status: 'retryable', retryable: true });
+  }
+  if (!listed.every((candidate) => isOwnCandidate(candidate, phase))) {
+    throw prBlocked('foreign PR in list',
+      'PR_BLOCKED: pr list returned a PR that is not open for this exact phase head and base. Resolve it by hand, then rerun.', false);
+  }
   if (listed.length > 1) {
     throw prBlocked('ambiguous PR identity',
       'PR_BLOCKED: more than one open PR matches this phase head and base. Close the duplicates by hand, then rerun.', false);
@@ -253,7 +291,6 @@ function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, r
     return reusePr({ options, specDir, repo, phase, block, parentPr, headSha, candidate: listed[0] });
   }
 
-  const body = phasePrBody({ closeoutSnapshot, block, issueLink: { issue, finalPhase: phase.order === phase.count } });
   const created = prNumberFromUrl(ghWithBody(options, [
     'pr', 'create', '--repo', repo.nameWithOwner, '--head', phase.branch, '--base', phase.baseBranch,
     '--title', `${planId} phase ${phase.order}`,
