@@ -18,7 +18,8 @@ const { CliError } = require('./envelope');
 const { EVENT_TYPES } = require('./lifecycle-contract');
 const { commitTransition, readLifecycleDoc, hashBytes: sha256Bytes } = require('./lifecycle-store');
 const { resolveProjectRoot } = require('./lifecycle-adapter');
-const { writeProjection: defaultWriteProjection } = require('./logjson');
+const { writeProjection: defaultWriteProjection, readLog } = require('./logjson');
+const { currentBranch: worktreeCurrentBranch } = require('./git-worktree');
 
 // Parses one `--artifact <root>:<kind>:<relative-path>:<sha256>` flag value.
 // The relative path may itself contain ':' — it is everything between kind
@@ -206,10 +207,38 @@ function lifecycleSpecDirForPlan(planDir) {
   return null;
 }
 
+// Per-phase branch identity for a stacked plan, read from the log.json header
+// and the matching phase entry. Returns null for every other plan (none
+// strategy or no header mode), so none plans take the legacy path unchanged.
+function stackedPhaseIdentity(log, phaseFile) {
+  const phaseBranches = log && log.header ? log.header.phase_branches : undefined;
+  if (!phaseBranches || phaseBranches.mode !== 'stacked') return null;
+  const phase = (log.phases || []).find((candidate) => candidate && candidate.file === phaseFile);
+  if (!phase || typeof phase.branch !== 'string' || phase.branch.length === 0) {
+    throw new CliError('LIFECYCLE_BRANCH_REQUIRED', `stacked plan records no branch for ${phaseFile} in log.json`);
+  }
+  return {
+    branch: phase.branch,
+    planPatch: {
+      phase_branches: { mode: 'stacked', root_base: phaseBranches.root_base },
+      phases: { [`phase-${phase.order}`]: { branch: phase.branch, base_branch: phase.base_branch } },
+    },
+  };
+}
+
+// log.json for a direct caller that did not pass the in-memory log. Absent
+// file means no identity (none path).
+function readOptionalLog(planDir) {
+  const logPath = path.join(planDir, 'log.json');
+  return existsSync(logPath) ? readLog(logPath) : null;
+}
+
 // Emission hook for `log update`: commits exactly one `phase-complete` event
 // when a phase-level (not task-level) update moves a phase INTO REVIEW, and
-// nothing otherwise. Called by `cli/commands/log.js` BEFORE the log.json
-// projection write — Core commits the authoritative event FIRST, then the
+// nothing otherwise. Stacked plans also record per-phase identity through a
+// planPatch, and HEAD must be on that phase's branch before anything commits.
+// Called by `cli/commands/log.js` BEFORE the log.json projection write — Core
+// commits the authoritative event FIRST, then the
 // caller projects log.json; a projection failure surfaces as
 // PROJECTION_REPAIR_REQUIRED with the commit durable, the event pending,
 // and dispatch deferred (never dispatched on a failed projection).
@@ -220,7 +249,7 @@ function lifecycleSpecDirForPlan(planDir) {
 // authoritative document.
 //
 // Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
-function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus }) {
+function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus, log }) {
   if (level !== 'phase') return null;
   if (newStatus !== 'REVIEW') return null;
   if (oldStatus === 'REVIEW') return null;
@@ -234,11 +263,27 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
   const existing = readLifecycleDoc(specDir);
   if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
   const artifacts = [phaseEvidenceRef(planDir, phaseFile)];
-  const branch = currentBranch(planDir);
-  if (!branch) {
-    throw new CliError('LIFECYCLE_BRANCH_REQUIRED', 'cannot commit phase-complete without a current branch');
+  const stacked = stackedPhaseIdentity(log === undefined ? readOptionalLog(planDir) : log, phaseFile);
+  let branch;
+  if (stacked) {
+    // Fail closed before any commit: HEAD must be exactly this phase's branch
+    // (a detached HEAD reads as null and is a mismatch too).
+    const headBranch = worktreeCurrentBranch(planDir);
+    if (headBranch !== stacked.branch) {
+      throw new CliError(
+        'PHASE_BRANCH_MISMATCH',
+        `${phaseFile} belongs on ${stacked.branch}, but HEAD is ${headBranch === null ? 'detached' : headBranch}. ` +
+          `Run: git switch ${stacked.branch}`,
+      );
+    }
+    branch = stacked.branch;
+  } else {
+    branch = currentBranch(planDir);
+    if (!branch) {
+      throw new CliError('LIFECYCLE_BRANCH_REQUIRED', 'cannot commit phase-complete without a current branch');
+    }
   }
-  const res = commitTransition({
+  const transition = {
     specDir,
     planDir,
     planId,
@@ -246,7 +291,9 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
     artifacts,
     branch,
     deps: { now: lifecycleNow },
-  });
+  };
+  if (stacked) transition.planPatch = stacked.planPatch;
+  const res = commitTransition(transition);
   if (!res.ok) {
     throw new CliError(res.code, res.message);
   }
@@ -389,7 +436,7 @@ function runPhaseUpdateTransition({ planDir, logPath, log, phaseFile, level, old
     logPath,
     log,
     prepare: mutate,
-    commit: () => emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus }),
+    commit: () => emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus, log }),
     ...transitionDeps(deps),
   });
 }

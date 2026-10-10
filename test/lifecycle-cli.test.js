@@ -1094,3 +1094,212 @@ test('ADAPTER_CONTRACT 2: notice text inert through drain (no execution, no temp
   assert.equal('next_actions' in envelope.data, false, 'notice text must never become a next_actions entry');
   assert.equal(JSON.stringify(envelope).includes('next_actions":[{'), false, 'no next_actions payload may carry notice text');
 });
+
+// T5: per-phase branch identity made durable through the lifecycle document.
+const STACKED_ROOT_BASE = 'feature/x';
+
+function readLifecycleJson(planDir) {
+  return JSON.parse(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'));
+}
+
+function readLogJson(planDir) {
+  return JSON.parse(readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+}
+
+function writeLogJson(planDir, log) {
+  writeFileSync(path.join(planDir, 'log.json'), `${JSON.stringify(log, null, 2)}\n`);
+}
+
+// Returns the JSON error envelope of a command that must fail. Fails the test
+// with an explicit message when the command unexpectedly succeeds.
+function failureEnvelope(args) {
+  let stdout;
+  try {
+    stdout = execFileSync('node', [CLI, ...args], { encoding: 'utf8' });
+  } catch (err) {
+    return JSON.parse(String(err.stdout).trim());
+  }
+  assert.fail(`expected failure but succeeded: ${args.join(' ')}\n${stdout}`);
+}
+
+// Plan `p` on branch `pocket/p/phase-1`, with a spec-approved lifecycle doc
+// (plan_dir set) and a freshly initialized log.json that carries no branch
+// identity yet.
+function branchIdentityFixture(prefix, { phaseCount = 1 } = {}) {
+  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  const planDir = path.join(root, 'p');
+  const execDir = path.join(planDir, 'execution-plan');
+  mkdirSync(execDir, { recursive: true });
+  writeFileSync(path.join(planDir, 'execution-plan.md'), '# Execution Plan\n\n### Task 1: First\n\nBody.\n');
+  writeFileSync(path.join(execDir, 'index.md'), '# Plan Index\n\n**Source Plan:** ../execution-plan.md\n');
+  for (let n = 1; n <= phaseCount; n += 1) {
+    writeFileSync(path.join(execDir, `phase-${n}.md`), `# Phase ${n}\n\n### Task 1: First\n\nWork done.\n`);
+  }
+  const specContent = 'approved spec content\n';
+  writeFileSync(path.join(planDir, 'spec-doc.md'), specContent);
+  gitIn(planDir, ['init', '-q']);
+  gitIn(planDir, ['config', 'user.email', 'test@example.com']);
+  gitIn(planDir, ['config', 'user.name', 'Test']);
+  gitIn(planDir, ['config', 'commit.gpgsign', 'false']);
+  gitIn(planDir, ['add', '-A']);
+  gitIn(planDir, ['commit', '-q', '-m', 'plan snapshot']);
+  gitIn(planDir, ['checkout', '-q', '-b', 'pocket/p/phase-1']);
+
+  run(['log', 'init', planDir, '--json', '--contract', '3']);
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const seeded = commitTransition({
+    specDir: planDir,
+    planDir,
+    planId: 'p',
+    type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha256Hex(specContent), revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seeded.ok, true, `spec approval should seed the lifecycle doc: ${JSON.stringify(seeded)}`);
+  return { root, planDir };
+}
+
+// Stamps the stacked identity onto log.json the way T6 `log init` will: header
+// phase_branches plus per-phase branch/base_branch (phase N's base is phase N-1).
+function stampStackedIdentity(planDir) {
+  const log = readLogJson(planDir);
+  log.header.phase_branches = { mode: 'stacked', root_base: STACKED_ROOT_BASE };
+  for (const phase of log.phases) {
+    phase.branch = `pocket/p/phase-${phase.order}`;
+    phase.base_branch = phase.order === 1 ? STACKED_ROOT_BASE : `pocket/p/phase-${phase.order - 1}`;
+  }
+  writeLogJson(planDir, log);
+}
+
+test('stacked phase-complete records phase identity in schema 2', { skip: !hasGit() }, () => {
+  const { planDir } = branchIdentityFixture('lifecycle-stacked-identity-');
+  stampStackedIdentity(planDir);
+
+  const review = json(['log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW', '--json', '--contract', '3']);
+  assert.equal(review.ok, true);
+  assert.equal(readLogJson(planDir).phases[0].status, 'REVIEW');
+
+  const doc = readLifecycleJson(planDir);
+  assert.equal(doc.schema, 2);
+  assert.deepEqual(doc.plan.phases['phase-1'], { branch: 'pocket/p/phase-1', base_branch: STACKED_ROOT_BASE });
+  assert.equal(doc.plan.phase_branches.mode, 'stacked');
+  assert.equal(doc.plan.phase_branches.root_base, STACKED_ROOT_BASE);
+  assert.equal(doc.plan.branch, 'pocket/p/phase-1', 'plan.branch must still be written for compatibility');
+});
+
+test('stacked phase-complete rejects a wrong or detached branch before any commit', { skip: !hasGit() }, () => {
+  const { planDir } = branchIdentityFixture('lifecycle-stacked-mismatch-');
+  stampStackedIdentity(planDir);
+  const lifecyclePath = path.join(planDir, 'lifecycle.json');
+  const logPath = path.join(planDir, 'log.json');
+  const lifecycleBefore = readFileSync(lifecyclePath, 'utf8');
+  const logBefore = readFileSync(logPath, 'utf8');
+  const reviewPhase1 = ['log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW', '--json', '--contract', '3'];
+
+  gitIn(planDir, ['checkout', '-q', '-b', 'feature/other']);
+  const wrongBranch = failureEnvelope(reviewPhase1);
+  assert.equal(wrongBranch.ok, false);
+  assert.equal(wrongBranch.error.code, 'PHASE_BRANCH_MISMATCH');
+  assert.equal(readFileSync(lifecyclePath, 'utf8'), lifecycleBefore, 'lifecycle.json must be byte-identical after a wrong branch');
+  assert.equal(readFileSync(logPath, 'utf8'), logBefore, 'log.json must be byte-identical after a wrong branch');
+
+  gitIn(planDir, ['checkout', '-q', '--detach']);
+  const detached = failureEnvelope(reviewPhase1);
+  assert.equal(detached.ok, false);
+  assert.equal(detached.error.code, 'PHASE_BRANCH_MISMATCH');
+  assert.equal(readFileSync(lifecyclePath, 'utf8'), lifecycleBefore, 'lifecycle.json must be byte-identical on detached HEAD');
+  assert.equal(readFileSync(logPath, 'utf8'), logBefore, 'log.json must be byte-identical on detached HEAD');
+});
+
+test('repair branch identity restores lifecycle identity into log.json', { skip: !hasGit() }, () => {
+  const { planDir } = branchIdentityFixture('lifecycle-repair-restore-');
+  // Schema-2 lifecycle doc carrying the identity; log.json has none of it.
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const phaseContent = readFileSync(path.join(planDir, 'execution-plan', 'phase-1.md'));
+  const seeded = commitTransition({
+    specDir: planDir,
+    planDir,
+    planId: 'p',
+    type: 'phase-complete',
+    artifacts: [{ root: 'plan', kind: 'phase-evidence', path: 'execution-plan/phase-1.md', sha256: sha256Hex(phaseContent), revision: 1 }],
+    planPatch: {
+      phase_branches: { mode: 'stacked', root_base: STACKED_ROOT_BASE },
+      phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: STACKED_ROOT_BASE } },
+    },
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(seeded.ok, true, `identity seed should commit: ${JSON.stringify(seeded)}`);
+  assert.equal(readLifecycleJson(planDir).schema, 2);
+  assert.equal(readLogJson(planDir).header.phase_branches, undefined, 'fixture log.json must lack header identity');
+
+  const repaired = json(['lifecycle', 'repair', planDir, '--json', '--contract', '3']);
+  assert.equal(repaired.ok, true);
+  const log = readLogJson(planDir);
+  assert.deepEqual(log.header.phase_branches, { mode: 'stacked', root_base: STACKED_ROOT_BASE });
+  assert.equal(log.phases[0].branch, 'pocket/p/phase-1');
+  assert.equal(log.phases[0].base_branch, STACKED_ROOT_BASE);
+});
+
+test('repair branch identity keeps log.json identity when the lifecycle doc lacks it', { skip: !hasGit() }, () => {
+  const { planDir } = branchIdentityFixture('lifecycle-repair-preserve-');
+  stampStackedIdentity(planDir);
+  assert.equal(readLifecycleJson(planDir).plan.phases, undefined, 'fixture lifecycle doc must lack plan.phases');
+
+  const repaired = json(['lifecycle', 'repair', planDir, '--json', '--contract', '3']);
+  assert.equal(repaired.ok, true);
+  const log = readLogJson(planDir);
+  assert.deepEqual(log.header.phase_branches, { mode: 'stacked', root_base: STACKED_ROOT_BASE });
+  assert.equal(log.phases[0].branch, 'pocket/p/phase-1');
+  assert.equal(log.phases[0].base_branch, STACKED_ROOT_BASE);
+});
+
+test('repair branch identity leaves a none plan byte-identical', { skip: !hasGit() }, () => {
+  const { planDir } = branchIdentityFixture('lifecycle-repair-none-');
+  const review = json(['log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW', '--json', '--contract', '3']);
+  assert.equal(review.ok, true);
+  const logBefore = readFileSync(path.join(planDir, 'log.json'), 'utf8');
+  const lifecycleBefore = readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8');
+
+  const repaired = json(['lifecycle', 'repair', planDir, '--json', '--contract', '3']);
+  assert.equal(repaired.ok, true);
+  assert.equal(readFileSync(path.join(planDir, 'log.json'), 'utf8'), logBefore, 'none-plan log.json must not change on repair');
+  assert.equal(readFileSync(path.join(planDir, 'lifecycle.json'), 'utf8'), lifecycleBefore, 'none-plan lifecycle.json must not change on repair');
+  const log = readLogJson(planDir);
+  assert.equal('phase_branches' in log.header, false);
+  assert.equal('branch' in log.phases[0], false);
+  assert.equal(readLifecycleJson(planDir).plan.phases, undefined);
+});
+
+test('repair ignores phase-closed status in projected phase statuses', { skip: !hasGit() }, () => {
+  const { planDir } = branchIdentityFixture('lifecycle-repair-phase-closed-', { phaseCount: 2 });
+  stampStackedIdentity(planDir);
+  assert.equal(json(['log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW', '--json', '--contract', '3']).ok, true);
+  assert.equal(json(['log', 'update', planDir, 'execution-plan/phase-1.md', 'DONE', '--json', '--contract', '3']).ok, true);
+
+  // Seeded through the store API. The artifact deliberately points at the
+  // phase-2 file: if phase-closed were ever projected, phase-2 would flip
+  // WAITING -> REVIEW and this guard would fail.
+  const { commitTransition } = require('../cli/lib/lifecycle-store');
+  const phaseTwoContent = readFileSync(path.join(planDir, 'execution-plan', 'phase-2.md'));
+  const closed = commitTransition({
+    specDir: planDir,
+    planDir,
+    planId: 'p',
+    type: 'phase-closed',
+    phaseKey: 'phase-1',
+    artifacts: [{ root: 'plan', kind: 'phase-evidence', path: 'execution-plan/phase-2.md', sha256: sha256Hex(phaseTwoContent), revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(closed.ok, true, `phase-closed should commit: ${JSON.stringify(closed)}`);
+  assert.equal(readLifecycleJson(planDir).events.at(-1).type, 'phase-closed');
+
+  const log0 = readLogJson(planDir);
+  assert.equal(log0.phases[0].status, 'DONE');
+  assert.equal(log0.phases[1].status, 'WAITING');
+
+  const repaired = json(['lifecycle', 'repair', planDir, '--json', '--contract', '3']);
+  assert.equal(repaired.ok, true);
+  const log = readLogJson(planDir);
+  assert.equal(log.phases[0].status, 'DONE', 'phase-closed must not change phase-1 projected status');
+  assert.equal(log.phases[1].status, 'WAITING', 'phase-closed must not change phase-2 projected status');
+});
