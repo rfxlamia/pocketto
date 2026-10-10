@@ -61,7 +61,8 @@ test('CYCLE 1: install atomically writes registration with schema 1, adapter con
   assert.equal(fs.existsSync(regPath), true, 'registration file must exist');
   const record = JSON.parse(fs.readFileSync(regPath, 'utf8'));
   assert.deepEqual(record.argv, [dummy], 'an explicit custom --argv override must be registered verbatim');
-  assert.deepEqual(Object.keys(record).sort(), ['adapter_contract', 'argv', 'events', 'schema', 'timeout_ms']);
+  assert.deepEqual(Object.keys(record).sort(), ['adapter_contract', 'argv', 'events', 'phase_branches', 'schema', 'timeout_ms']);
+  assert.equal(record.phase_branches, 'stacked', 'default install must record phase_branches stacked');
   assert.equal(record.schema, 1, 'registration schema must be 1');
   assert.equal(record.adapter_contract, 2, 'adapter contract must be 2');
   assert.ok(Array.isArray(record.argv) && record.argv.length > 0, 'argv must be a non-empty executable argv');
@@ -679,4 +680,115 @@ test('ADAPTER_CONTRACT 2 serializer drops invalid notices and keeps valid ones',
   });
   assert.deepEqual(res.notices, [{ code: 'PR_REUSED', message: 'phase-1 PR reused against main' }]);
   assert.equal(validateAdapterResponse(res, C2_EVENT_ID).ok, true, 'serialized response must validate under Core');
+});
+
+// T9: registration phase fields, install flags, and push consent.
+
+function readRegistrationRecord(root) {
+  return JSON.parse(fs.readFileSync(path.join(root, '.pocket', 'lifecycle-adapter.json'), 'utf8'));
+}
+
+function writeModeConfig(root, branchStrategy) {
+  fs.writeFileSync(path.join(root, 'AGENTS.md'), [
+    '## Pocket Enterprise',
+    '',
+    '```',
+    'enterprise: true',
+    `branch_strategy: ${branchStrategy}`,
+    'create_pr: true',
+    '```',
+    '',
+  ].join('\n'));
+}
+
+test('registration default stacked: install without mode config records phase_branches stacked and no push_consent', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  const res = registration.installRegistration(root, { argv: [dummy] });
+  assert.equal(res.ok, true, `install should succeed: ${JSON.stringify(res)}`);
+  assert.equal(res.record.phase_branches, 'stacked');
+  assert.equal('push_consent' in res.record, false, 'push_consent must be absent unless consented');
+  assert.deepEqual(readRegistrationRecord(root), res.record, 'the written file must match the returned record');
+  assert.equal(registration.validateRegistration(res.record).ok, true, 'default record must validate');
+});
+
+test('registration main-local forces phase_branches none and warns when stacked was requested', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  writeModeConfig(root, 'main-local');
+
+  const defaulted = registration.installRegistration(root, { argv: [dummy] });
+  assert.equal(defaulted.ok, true, `install should succeed: ${JSON.stringify(defaulted)}`);
+  assert.equal(defaulted.record.phase_branches, 'none', 'main-local must resolve to none without an explicit flag');
+  assert.equal(defaulted.warning, undefined, 'no warning when none is the natural result');
+
+  const explicit = registration.installRegistration(root, { argv: [dummy], phaseBranches: 'stacked' });
+  assert.equal(explicit.ok, true, `install should succeed: ${JSON.stringify(explicit)}`);
+  assert.equal(explicit.record.phase_branches, 'none', 'main-local wins over an explicit stacked request');
+  assert.ok(explicit.warning, 'overriding an explicit stacked request must carry a warning');
+  assert.equal(explicit.warning.code, 'PHASE_BRANCHES_MAIN_LOCAL');
+  assert.match(explicit.warning.message, /main-local/, 'warning must explain why stacked was overridden');
+  assert.equal(readRegistrationRecord(root).phase_branches, 'none');
+});
+
+test('registration field validation: phase_branches and push_consent are closed and never permit force', () => {
+  const { validateRegistration, buildRegistration } = require('../enterprise/registration-record');
+  const base = buildRegistration({ argv: ['node', 'adapter.js'] });
+  assert.equal(validateRegistration(base).ok, true, 'base record without optional fields must stay valid');
+
+  const malformed = [
+    ['push_consent scope other than pocket-phase-branches', { push_consent: { scope: 'x', force: false } }],
+    ['push_consent force true', { push_consent: { scope: 'pocket-phase-branches', force: true } }],
+    ['push_consent force 0 (not boolean false)', { push_consent: { scope: 'pocket-phase-branches', force: 0 } }],
+    ['push_consent missing force', { push_consent: { scope: 'pocket-phase-branches' } }],
+    ['push_consent extra key', { push_consent: { scope: 'pocket-phase-branches', force: false, extra: true } }],
+    ['push_consent as a string', { push_consent: 'pocket-phase-branches' }],
+    ['phase_branches not in allowlist', { phase_branches: 'yes' }],
+    ['phase_branches mode branch', { phase_branches: 'branch' }],
+    ['unknown extra field', { force: true }],
+  ];
+  for (const [label, extra] of malformed) {
+    const result = validateRegistration({ ...base, ...extra });
+    assert.equal(result.ok, false, `${label} must be rejected`);
+    assert.equal(result.code, 'ENTERPRISE_REGISTRATION_MALFORMED', `${label} must fail malformed`);
+  }
+
+  for (const phaseBranches of ['stacked', 'none']) {
+    const result = validateRegistration({ ...base, phase_branches: phaseBranches });
+    assert.equal(result.ok, true, `phase_branches ${phaseBranches} must be valid`);
+  }
+  const consent = validateRegistration({
+    ...base,
+    phase_branches: 'stacked',
+    push_consent: { scope: 'pocket-phase-branches', force: false },
+  });
+  assert.equal(consent.ok, true, 'the fixed push_consent object must be valid');
+});
+
+test('install phase flags: --phase-branches none and --push-consent phase-branches are recorded in the registration', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  const res = runCli(['install', root, '--argv', dummy, '--phase-branches', 'none', '--push-consent', 'phase-branches', '--json']);
+  assert.equal(res.exit, 0, `install with phase flags should succeed: ${res.stdout}`);
+  assert.equal(res.json.ok, true);
+  const record = readRegistrationRecord(root);
+  assert.equal(record.phase_branches, 'none');
+  assert.deepEqual(record.push_consent, { scope: 'pocket-phase-branches', force: false });
+});
+
+test('install invalid phase flag: --phase-branches maybe and --push-consent other fail closed with no registration written', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  const badPhase = runCli(['install', root, '--argv', dummy, '--phase-branches', 'maybe', '--json']);
+  assert.equal(badPhase.exit, 1, `invalid --phase-branches must exit 1: ${badPhase.stdout}`);
+  assert.equal(badPhase.json.ok, false);
+  assert.equal(badPhase.json.error.code, 'ENTERPRISE_INSTALL_FAILED');
+  assert.match(badPhase.json.error.message, /--phase-branches must be one of: stacked, none/);
+  assert.equal(pocketDirListing(root), null, 'no .pocket directory may be written for an invalid phase value');
+
+  const badConsent = runCli(['install', root, '--argv', dummy, '--push-consent', 'yes', '--json']);
+  assert.equal(badConsent.exit, 1, `invalid --push-consent must exit 1: ${badConsent.stdout}`);
+  assert.equal(badConsent.json.ok, false);
+  assert.equal(badConsent.json.error.code, 'ENTERPRISE_INSTALL_FAILED');
+  assert.equal(pocketDirListing(root), null, 'no .pocket directory may be written for an invalid push consent');
 });

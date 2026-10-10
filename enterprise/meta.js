@@ -206,6 +206,54 @@ function setPrIdentity(specDir, phase, { number, url } = {}) {
   return getPrIdentity(specDir, phase);
 }
 
+// --- Per-SHA push approval (Enterprise-owned consent fallback) ---
+
+const PUSH_APPROVAL_SHA = /^[0-9a-f]{40}$/;
+const PUSH_APPROVAL_PHASE_KEY = /^phase-[1-9][0-9]*$/;
+
+function consentInvalid(message) {
+  const error = new Error(`ENTERPRISE_CONSENT: ${message}`);
+  error.code = 'ENTERPRISE_CONSENT_INVALID';
+  return error;
+}
+
+function validatePhaseKey(phase) {
+  if (typeof phase !== 'string' || !PUSH_APPROVAL_PHASE_KEY.test(phase)) {
+    throw consentInvalid('phase key must be phase-<positive integer>');
+  }
+}
+
+function validateApprovalSha(sha) {
+  if (typeof sha !== 'string' || !PUSH_APPROVAL_SHA.test(sha)) {
+    throw consentInvalid('sha must be 40 lowercase hex characters');
+  }
+}
+
+function getPushApproval(specDir, phase, context) {
+  validatePhaseKey(phase);
+  const meta = readMetaFor(specDir, context);
+  const approval = ((meta.phases || {})[phase] || {}).push_approval || {};
+  const out = {};
+  if (typeof approval.sha === 'string') out.sha = approval.sha;
+  if (typeof approval.approved_at === 'string') out.approved_at = approval.approved_at;
+  return out;
+}
+
+// Validates everything before the read-modify-write so invalid input never touches
+// .pocket-meta.json. Missing metadata fails closed instead of creating a new file.
+function setPushApproval(specDir, phase, { sha } = {}, context) {
+  validatePhaseKey(phase);
+  validateApprovalSha(sha);
+  preflightMetaFor(specDir, context);
+  const meta = readMetaFor(specDir, context);
+  coreMeta.setDotted(meta, `phases.${phase}.push_approval`, {
+    sha,
+    approved_at: new Date().toISOString(),
+  });
+  writeMetaFor(specDir, meta, context);
+  return getPushApproval(specDir, phase, context);
+}
+
 // --- Opaque Core-facing proof refs (no remote identity leaks) ---
 
 function issueProofRef() {
@@ -231,6 +279,8 @@ module.exports = {
   setIssueIdentity,
   getPrIdentity,
   setPrIdentity,
+  getPushApproval,
+  setPushApproval,
   issueProofRef,
   phasePrProofRef,
 };
