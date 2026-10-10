@@ -19,6 +19,12 @@ const {
   allowedRootsFor, hashBytes, requiredPlanDir, rootDirFor, validateArtifactOnDisk,
 } = require('./lifecycle-artifact-validation');
 const { validateDeliveryPatch } = require('./lifecycle-delivery-validation');
+const { validatePlanPatch, applyPlanPatch } = require('./lifecycle-plan-patch');
+const {
+  logicalPayload,
+  applyStateSnapshot,
+  checkStateAllowsTransition,
+} = require('./lifecycle-state-rules');
 const { createDeliveryWriter } = require('./lifecycle-delivery-store');
 const {
   EVENT_TYPES,
@@ -77,79 +83,8 @@ function initDoc({ planId, specDir, planDir }) {
   };
 }
 
-// Logical payload: everything that defines what the event means, minus
-// revision (assigned by the journal) and volatile delivery fields.
-// Identical logical transitions share one payload hash → replay-safe.
-// phase-closed carries its phaseKey in the payload (never as an event field),
-// so closing two phases with identical artifact refs cannot collide on replay.
-// Other types omit phase_key entirely, keeping their payload hashes unchanged.
-function logicalPayload({ planId, type, artifactRefs, proofRef, proofHash, phaseKey }) {
-  const payload = {
-    plan_id: planId,
-    type,
-    artifact_refs: artifactRefs,
-    proof_ref: proofRef === undefined ? null : proofRef,
-    proof_hash: proofHash === undefined ? null : proofHash,
-  };
-  if (type === 'phase-closed') payload.phase_key = phaseKey;
-  return payload;
-}
-
-function applyStateSnapshot(doc, type) {
-  const state = doc.plan.state;
-  if (type === 'spec-approved') {
-    state.approval = 'APPROVED';
-  } else if (type === 'phase-complete') {
-    const key = `phase-${Object.keys(state.phase_status).length + 1}`;
-    state.phase_status[key] = 'COMPLETE';
-  } else if (type === 'plan-closed') {
-    state.status = 'DONE';
-  }
-}
-
 function serializeDoc(doc) {
   return `${JSON.stringify(doc, null, 2)}\n`;
-}
-
-// Current-state gate: the plan's committed state must legally accept the
-// requested event type. `spec-approved` fires once (PENDING → APPROVED);
-// once the plan is closed (DONE) no further transition is legal. Rejection
-// happens before any journal mutation, so an invalid transition emits no
-// event and leaves the document byte-identical.
-//
-// phase-closed is legal once per phase, and only after that phase's
-// phase-complete. Events never store phaseKey (EVENT_FIELDS is closed), so a
-// prior close for this phaseKey is found by recomputing each stored
-// phase-closed payload hash with the candidate phaseKey.
-function phaseAlreadyClosed(doc, phaseKey) {
-  return doc.events.some((event) => event.type === 'phase-closed'
-    && hashCanonicalPayload(logicalPayload({
-      planId: event.plan_id,
-      type: 'phase-closed',
-      artifactRefs: event.artifact_refs,
-      proofRef: event.proof_ref,
-      proofHash: event.proof_hash,
-      phaseKey,
-    })) === event.payload_hash);
-}
-
-function checkStateAllowsTransition(doc, type, phaseKey) {
-  const state = (doc.plan && doc.plan.state) || {};
-  if (state.status === 'DONE') {
-    return fail('LIFECYCLE_BAD_STATE', `plan is closed; ${type} is not allowed`);
-  }
-  if (type === 'spec-approved' && state.approval === 'APPROVED') {
-    return fail('LIFECYCLE_BAD_STATE', 'spec has already been approved');
-  }
-  if (type === 'phase-closed') {
-    if ((state.phase_status || {})[phaseKey] !== 'COMPLETE') {
-      return fail('LIFECYCLE_BAD_STATE', `${phaseKey} is not COMPLETE; phase-closed is not allowed`);
-    }
-    if (phaseAlreadyClosed(doc, phaseKey)) {
-      return fail('LIFECYCLE_BAD_STATE', `${phaseKey} has already been closed`);
-    }
-  }
-  return { ok: true, code: null, message: null };
 }
 
 // Event identity plus payload integrity: the deterministic event ID for a
@@ -174,61 +109,6 @@ function findReplayEvent(doc, type, payloadHash) {
   return null;
 }
 
-// planPatch carries branch identity into `plan` (never into event fields).
-// Only `phase_branches` and per-phase `{ branch, base_branch }` entries are
-// accepted; anything else is rejected before any document mutation.
-const PLAN_PATCH_FIELDS = ['phase_branches', 'phases'];
-const PHASE_ENTRY_FIELDS = ['branch', 'base_branch'];
-const PHASE_KEY_PATTERN = /^phase-\d+$/;
-
-function isPlainObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function validatePlanPatch(patch) {
-  const bad = (message) => fail('LIFECYCLE_BAD_PLAN_PATCH', `invalid planPatch: ${message}`);
-  if (!isPlainObject(patch)) return bad('must be an object');
-  const keys = Object.keys(patch);
-  if (keys.length === 0) return bad('must not be empty');
-  for (const key of keys) {
-    if (!PLAN_PATCH_FIELDS.includes(key)) return bad(`unsupported field ${key}`);
-  }
-  if ('phase_branches' in patch && !isPlainObject(patch.phase_branches)) {
-    return bad('phase_branches must be an object');
-  }
-  if ('phases' in patch) {
-    if (!isPlainObject(patch.phases)) return bad('phases must be an object');
-    for (const [phaseKey, entry] of Object.entries(patch.phases)) {
-      if (!PHASE_KEY_PATTERN.test(phaseKey)) return bad(`phase key must match phase-N: ${phaseKey}`);
-      if (!isPlainObject(entry)) return bad(`${phaseKey} must be an object`);
-      for (const field of Object.keys(entry)) {
-        if (!PHASE_ENTRY_FIELDS.includes(field)) return bad(`${phaseKey} has unsupported field ${field}`);
-      }
-      for (const field of PHASE_ENTRY_FIELDS) {
-        if (typeof entry[field] !== 'string' || entry[field].length === 0) {
-          return bad(`${phaseKey}.${field} must be a non-empty string`);
-        }
-      }
-    }
-  }
-  return { ok: true, code: null, message: null };
-}
-
-// Merges a validated planPatch into `plan`. Existing unrelated fields and
-// other phase entries are preserved; a patched phase keeps any fields the
-// patch does not name.
-function applyPlanPatch(plan, patch) {
-  if ('phase_branches' in patch) {
-    plan.phase_branches = { ...(plan.phase_branches || {}), ...patch.phase_branches };
-  }
-  if ('phases' in patch) {
-    plan.phases = { ...(plan.phases || {}) };
-    for (const [phaseKey, entry] of Object.entries(patch.phases)) {
-      plan.phases[phaseKey] = { ...(plan.phases[phaseKey] || {}), ...entry };
-    }
-  }
-}
-
 // Commits one logical lifecycle transition atomically.
 // Input: { specDir, planDir, planId, type, artifacts, branch?,
 //          proofRef?, proofHash?, deps?: { now, stat, readFile, realpath, hashFile } }
@@ -242,11 +122,8 @@ function commitTransition(input) {
   return withLifecycleMutation(specDir, () => commitTransitionUnlocked(input));
 }
 
-function commitTransitionUnlocked(input) {
-  const { specDir, planDir, planId, type, artifacts, branch, phaseKey, planPatch } = input || {};
-  const deps = (input && input.deps) || {};
-  const now = deps.now || (() => new Date().toISOString());
-
+// Pre-read input checks: pure, and run before any I/O or document read.
+function checkTransitionInput({ specDir, type, artifacts, phaseKey, planPatch }) {
   if (typeof specDir !== 'string' || specDir.length === 0) {
     return fail('LIFECYCLE_BAD_SPEC_DIR', 'specDir must be a non-empty string');
   }
@@ -259,36 +136,19 @@ function commitTransitionUnlocked(input) {
   if (type === 'phase-closed' && (typeof phaseKey !== 'string' || phaseKey.length === 0)) {
     return fail('LIFECYCLE_PHASE_KEY_REQUIRED', 'phase-closed requires a non-empty phaseKey');
   }
+  if (planPatch !== undefined && planPatch !== null) return validatePlanPatch(planPatch);
+  return { ok: true, code: null, message: null };
+}
 
-  const hasPlanPatch = planPatch !== undefined && planPatch !== null;
-  if (hasPlanPatch) {
-    const patchCheck = validatePlanPatch(planPatch);
-    if (!patchCheck.ok) return fail(patchCheck.code, patchCheck.message);
-  }
-
-  let doc = readLifecycleDoc(specDir);
-  if (doc === null) {
-    doc = initDoc({ planId, specDir, planDir });
-  }
-  // Schema gate before any replay or mutation: a document this Core cannot
-  // read is never replayed, extended, or rewritten.
-  if (!isSupportedLifecycleSchema(doc.schema)) {
-    return fail(
-      'LIFECYCLE_SCHEMA_UNSUPPORTED',
-      `lifecycle schema ${doc.schema} is unsupported (this Core reads 1..${LIFECYCLE_SCHEMA})`,
-    );
-  }
-  if (doc.plan.plan_id !== planId) {
-    return fail('LIFECYCLE_PLAN_MISMATCH', 'plan_id does not match the lifecycle document');
-  }
-
+// Normalizes artifact refs, then checks plan_dir, root allowance, and on-disk
+// identity. Returns { ok: true, normalized } or the first failure.
+function validateTransitionArtifacts({ artifacts, type, specDir, planDir }, deps) {
   const normalized = [];
   for (const ref of artifacts) {
     const res = validateArtifactRef(ref);
     if (!res.ok) return fail(res.code, res.message);
     normalized.push(canonicalArtifactRef(ref));
   }
-
   if (requiredPlanDir(type) && (planDir === null || planDir === undefined)) {
     return fail('LIFECYCLE_PLAN_DIR_REQUIRED', `${type} requires a non-null plan_dir`);
   }
@@ -307,59 +167,12 @@ function commitTransitionUnlocked(input) {
     const disk = validateArtifactOnDisk(ref, rootDir, ioDeps);
     if (!disk.ok) return disk;
   }
+  return { ok: true, normalized };
+}
 
-  const payload = logicalPayload({
-    planId,
-    type,
-    artifactRefs: normalized,
-    proofRef: input.proofRef,
-    proofHash: input.proofHash,
-    phaseKey: input.phaseKey,
-  });
-  const payloadHash = hashCanonicalPayload(payload);
-
-  // Identical replay is a no-op: return the original event ID and revision
-  // without appending or rewriting the authoritative document. Looked up
-  // after validation (refs are real) but before the state gate so an already
-  // committed logical transition replays even when its type can no longer
-  // fire on the current state.
-  const replayed = findReplayEvent(doc, type, payloadHash);
-  if (replayed) return { ok: true, event: replayed, revision: replayed.revision };
-
-  // Identity conflict precedes the state gate: the existing journal entry
-  // already binds this event ID to a different canonical payload, so this
-  // submission is terminally rejected with zero mutation — no state
-  // change, no journal append, and no delivery change.
-  const revision = doc.plan.revision + 1;
-  const candidateEventId = buildEventId(planId, type, revision);
-  const conflicting = findIdentityConflict(doc, candidateEventId, payloadHash);
-  if (conflicting) {
-    return fail(
-      'LIFECYCLE_INTEGRITY_CONFLICT',
-      `event ${candidateEventId} conflicts with a different canonical payload`,
-      { event_id: candidateEventId, terminal: true },
-    );
-  }
-
-  const gate = checkStateAllowsTransition(doc, type, phaseKey);
-  if (!gate.ok) return gate;
-
-  const event = {
-    event_id: candidateEventId,
-    plan_id: planId,
-    type,
-    revision,
-    occurred_at: now(),
-    artifact_refs: normalized,
-    payload_hash: payloadHash,
-    proof_ref: payload.proof_ref,
-    proof_hash: payload.proof_hash,
-    delivery: { status: 'pending', attempts: 0 },
-  };
-
-  const valid = validateEvent(event);
-  if (!valid.ok) return fail(valid.code, valid.message);
-
+// Applies a fully validated transition to the in-memory document. Only reached
+// after every gate passed, so a rejected commit never mutates anything.
+function applyTransition(doc, { event, type, branch, planDir, planPatch, hasPlanPatch }) {
   applyStateSnapshot(doc, type);
   if (type === 'phase-complete' && typeof branch === 'string' && branch.length > 0) {
     doc.plan.branch = branch;
@@ -369,21 +182,117 @@ function commitTransitionUnlocked(input) {
     applyPlanPatch(doc.plan, planPatch);
     doc.schema = LIFECYCLE_PLAN_PATCH_SCHEMA;
   }
-  doc.plan.revision = revision;
+  doc.plan.revision = event.revision;
   doc.events.push(event);
+}
 
-  const target = lifecyclePathFor(specDir);
-  // All-or-nothing commit: the single authoritative document is replaced
-  // via temp-file plus rename. Any write/rename failure leaves the previous
-  // document byte-identical with no orphan temp (the atomic writer cleans
-  // up); the caller sees LIFECYCLE_PERSISTENCE with no partial success.
+// All-or-nothing commit: the authoritative document is replaced via temp-file
+// plus rename. A write/rename failure leaves the previous document
+// byte-identical with no orphan temp; the caller sees LIFECYCLE_PERSISTENCE.
+function persistDocument(specDir, doc, atomicOptions) {
   try {
-    writeFileAtomicSync(target, serializeDoc(doc), deps.atomic || {});
+    writeFileAtomicSync(lifecyclePathFor(specDir), serializeDoc(doc), atomicOptions || {});
   } catch (err) {
     const detail = err && err.message ? err.message : String(err);
     return fail('LIFECYCLE_PERSISTENCE', `lifecycle persistence failed: ${detail}`);
   }
+  return null;
+}
 
+// Document checks before replay. The schema gate runs first, so a document
+// this Core cannot read is never replayed, extended, or rewritten.
+function checkDocumentForCommit(doc, planId) {
+  if (!isSupportedLifecycleSchema(doc.schema)) {
+    return fail(
+      'LIFECYCLE_SCHEMA_UNSUPPORTED',
+      `lifecycle schema ${doc.schema} is unsupported (this Core reads 1..${LIFECYCLE_SCHEMA})`,
+    );
+  }
+  if (doc.plan.plan_id !== planId) {
+    return fail('LIFECYCLE_PLAN_MISMATCH', 'plan_id does not match the lifecycle document');
+  }
+  return { ok: true, code: null, message: null };
+}
+
+// Terminal integrity failure when the candidate event ID is already bound to a
+// different payload. Returns null when there is no conflict.
+function identityConflictFailure(doc, eventId, payloadHash) {
+  if (!findIdentityConflict(doc, eventId, payloadHash)) return null;
+  return fail(
+    'LIFECYCLE_INTEGRITY_CONFLICT',
+    `event ${eventId} conflicts with a different canonical payload`,
+    { event_id: eventId, terminal: true },
+  );
+}
+
+function buildTransitionEvent({ planId, type, revision, occurredAt, normalized, payload, payloadHash }) {
+  return {
+    event_id: buildEventId(planId, type, revision),
+    plan_id: planId,
+    type,
+    revision,
+    occurred_at: occurredAt,
+    artifact_refs: normalized,
+    payload_hash: payloadHash,
+    proof_ref: payload.proof_ref,
+    proof_hash: payload.proof_hash,
+    delivery: { status: 'pending', attempts: 0 },
+  };
+}
+
+function commitTransitionUnlocked(input) {
+  const source = input || {};
+  const { specDir, planDir, planId, type, branch, phaseKey, planPatch } = source;
+  const deps = source.deps || {};
+  const now = deps.now || (() => new Date().toISOString());
+
+  const checked = checkTransitionInput(source);
+  if (!checked.ok) return checked;
+  const hasPlanPatch = planPatch !== undefined && planPatch !== null;
+
+  let doc = readLifecycleDoc(specDir);
+  if (doc === null) doc = initDoc({ planId, specDir, planDir });
+  const docCheck = checkDocumentForCommit(doc, planId);
+  if (!docCheck.ok) return docCheck;
+
+  const artifacts = validateTransitionArtifacts(source, deps);
+  if (!artifacts.ok) return artifacts;
+  const normalized = artifacts.normalized;
+
+  const payload = logicalPayload({
+    planId,
+    type,
+    artifactRefs: normalized,
+    proofRef: source.proofRef,
+    proofHash: source.proofHash,
+    phaseKey,
+  });
+  const payloadHash = hashCanonicalPayload(payload);
+
+  // Identical replay is a no-op: return the original event without appending
+  // or rewriting. Checked before the state gate so an already committed
+  // transition replays even when its type can no longer fire.
+  const replayed = findReplayEvent(doc, type, payloadHash);
+  if (replayed) return { ok: true, event: replayed, revision: replayed.revision };
+
+  // Identity conflict precedes the state gate: the journal already binds this
+  // event ID to a different payload, so the submission is terminally rejected.
+  const revision = doc.plan.revision + 1;
+  const conflict = identityConflictFailure(doc, buildEventId(planId, type, revision), payloadHash);
+  if (conflict) return conflict;
+
+  const gate = checkStateAllowsTransition(doc, type, phaseKey);
+  if (!gate.ok) return gate;
+
+  const event = buildTransitionEvent({
+    planId, type, revision, occurredAt: now(), normalized, payload, payloadHash,
+  });
+  const valid = validateEvent(event);
+  if (!valid.ok) return fail(valid.code, valid.message);
+
+  applyTransition(doc, { event, type, branch, planDir, planPatch, hasPlanPatch });
+  const persistFailure = persistDocument(specDir, doc, deps.atomic);
+  if (persistFailure) return persistFailure;
   return { ok: true, event, revision };
 }
 

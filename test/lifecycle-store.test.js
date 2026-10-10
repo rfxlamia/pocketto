@@ -731,3 +731,95 @@ test('phase-closed requires phaseKey: a missing phaseKey fails with LIFECYCLE_PH
     assert.equal(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'), before, 'doc must be byte-identical');
   }
 });
+
+test('planPatch rejects malformed input with LIFECYCLE_BAD_PLAN_PATCH and no mutation', () => {
+  const fixture = seedApprovedWithPlanDirs();
+  const before = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+  const malformed = [
+    ['a string', 'nope'],
+    ['an array', []],
+    ['an empty object', {}],
+    ['an unknown top-level field', { unknown: {} }],
+    ['phase_branches as a string', { phase_branches: 'x' }],
+    ['phases as a string', { phases: 'x' }],
+    ['a non-phase-N key', { phases: { 'phase-x': { branch: 'b', base_branch: 'a' } } }],
+    ['a non-object phase entry', { phases: { 'phase-1': 'x' } }],
+    ['a phase entry missing branch', { phases: { 'phase-1': { base_branch: 'a' } } }],
+    ['a phase entry missing base_branch', { phases: { 'phase-1': { branch: 'b' } } }],
+    ['an empty branch', { phases: { 'phase-1': { branch: '', base_branch: 'a' } } }],
+    ['a non-string branch', { phases: { 'phase-1': { branch: 5, base_branch: 'a' } } }],
+    ['an unknown phase entry field', { phases: { 'phase-1': { branch: 'b', base_branch: 'a', extra: 1 } } }],
+  ];
+  assert.ok(malformed.length >= 11, 'must cover at least 11 invalid patches');
+  for (const [label, patch] of malformed) {
+    const res = commitTransition({ ...phaseCompleteInput(fixture), planPatch: patch });
+    assert.equal(res.ok, false, `${label} must be rejected: ${JSON.stringify(res)}`);
+    assert.equal(res.code, 'LIFECYCLE_BAD_PLAN_PATCH', `${label} needs the stable code`);
+    assert.equal(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'), before, `${label} must leave the doc byte-identical`);
+  }
+});
+
+test('planPatch merges into existing phase entry without dropping branch', () => {
+  const fixture = seedApprovedWithPlanDirs();
+  const first = commitTransition({
+    ...phaseCompleteInput(fixture),
+    planPatch: { phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'feature/x' } } },
+  });
+  assert.equal(first.ok, true, `first patch should commit: ${JSON.stringify(first)}`);
+
+  const second = commitTransition({
+    ...phaseClosedInput(fixture, 'phase-1'),
+    planPatch: { phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'main' } } },
+  });
+  assert.equal(second.ok, true, `second patch should commit: ${JSON.stringify(second)}`);
+
+  const doc = JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'));
+  assert.deepEqual(doc.plan.phases, {
+    'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'main' },
+  }, 'the patched phase must keep branch and take the new base_branch');
+  assert.equal(doc.schema, 2);
+});
+
+test('planPatch never downgrades schema', () => {
+  const fixture = seedApprovedWithPlanDirs();
+  const patched = commitTransition({
+    ...phaseCompleteInput(fixture),
+    planPatch: { phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'feature/x' } } },
+  });
+  assert.equal(patched.ok, true, `first patch should commit: ${JSON.stringify(patched)}`);
+  assert.equal(JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8')).schema, 2);
+
+  const again = commitTransition({
+    ...phaseClosedInput(fixture, 'phase-1'),
+    planPatch: { phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'main' } } },
+  });
+  assert.equal(again.ok, true, `second patch should commit: ${JSON.stringify(again)}`);
+  assert.equal(JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8')).schema, 2, 'a patch on a schema-2 doc stays 2');
+
+  const unpatched = commitTransition({
+    specDir: fixture.specDir,
+    planDir: fixture.planDir,
+    planId: 'demo-plan',
+    type: 'plan-closed',
+    artifacts: [{ root: 'plan', kind: 'phase-evidence', path: 'phase-1.md', sha256: fixture.planSha, revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(unpatched.ok, true, `unpatched plan-closed should commit: ${JSON.stringify(unpatched)}`);
+  assert.equal(JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8')).schema, 2, 'schema 2 must not be downgraded by an unpatched commit');
+});
+
+test('planPatch null is a no-op: schema stays 1 and bytes match the unpatched commit', () => {
+  const absent = seedApprovedWithPlanDirs();
+  const nulled = seedApprovedWithPlanDirs();
+  assert.equal(commitTransition(phaseCompleteInput(absent)).ok, true);
+  assert.equal(commitTransition({ ...phaseCompleteInput(nulled), planPatch: null }).ok, true);
+
+  const normalize = (f) => readFileSync(lifecyclePathFor(f.specDir), 'utf8')
+    .replaceAll(f.specDir, '<SPEC_DIR>')
+    .replaceAll(f.planDir, '<PLAN_DIR>');
+  const doc = JSON.parse(readFileSync(lifecyclePathFor(nulled.specDir), 'utf8'));
+  assert.equal(doc.schema, 1, 'a null planPatch must not bump the schema');
+  assert.equal('phases' in doc.plan, false, 'a null planPatch must not add plan.phases');
+  assert.equal('phase_branches' in doc.plan, false, 'a null planPatch must not add plan.phase_branches');
+  assert.equal(normalize(nulled), normalize(absent), 'null planPatch bytes must equal the absent planPatch bytes');
+});
