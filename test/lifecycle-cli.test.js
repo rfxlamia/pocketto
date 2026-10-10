@@ -1211,6 +1211,22 @@ test('stacked phase-complete rejects a wrong or detached branch before any commi
   assert.equal(readFileSync(logPath, 'utf8'), logBefore, 'log.json must be byte-identical on detached HEAD');
 });
 
+test('stacked phase-complete checks the branch even without a lifecycle document', { skip: !hasGit() }, () => {
+  const { planDir } = branchIdentityFixture('lifecycle-stacked-no-doc-');
+  stampStackedIdentity(planDir);
+  // Remove the lifecycle document so the stacked guard must not depend on it.
+  rmSync(path.join(planDir, 'lifecycle.json'));
+  const logPath = path.join(planDir, 'log.json');
+  const logBefore = readFileSync(logPath, 'utf8');
+
+  gitIn(planDir, ['checkout', '-q', '-b', 'feature/other']);
+  const wrongBranch = failureEnvelope(['log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW', '--json', '--contract', '3']);
+  assert.equal(wrongBranch.ok, false);
+  assert.equal(wrongBranch.error.code, 'PHASE_BRANCH_MISMATCH');
+  assert.equal(readFileSync(logPath, 'utf8'), logBefore, 'log.json must be byte-identical after a wrong branch');
+  assert.equal(existsSync(path.join(planDir, 'lifecycle.json')), false, 'no lifecycle document may be created on a wrong branch');
+});
+
 test('repair branch identity restores lifecycle identity into log.json', { skip: !hasGit() }, () => {
   const { planDir } = branchIdentityFixture('lifecycle-repair-restore-');
   // Schema-2 lifecycle doc carrying the identity; log.json has none of it.

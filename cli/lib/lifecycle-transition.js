@@ -249,10 +249,28 @@ function readOptionalLog(planDir) {
 // authoritative document.
 //
 // Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
+// Fail closed before any commit for stacked plans: HEAD must be exactly this
+// phase's branch (a detached HEAD reads as null and is a mismatch too). No-op
+// when `stacked` is null, so none plans never reach git here. Runs before the
+// lifecycle-document early returns, so the guard holds with or without a doc.
+function assertStackedHeadOnPhaseBranch(planDir, phaseFile, stacked) {
+  if (!stacked) return;
+  const headBranch = worktreeCurrentBranch(planDir);
+  if (headBranch !== stacked.branch) {
+    throw new CliError(
+      'PHASE_BRANCH_MISMATCH',
+      `${phaseFile} belongs on ${stacked.branch}, but HEAD is ${headBranch === null ? 'detached' : headBranch}. ` +
+        `Run: git switch ${stacked.branch}`,
+    );
+  }
+}
+
 function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus, log }) {
   if (level !== 'phase') return null;
   if (newStatus !== 'REVIEW') return null;
   if (oldStatus === 'REVIEW') return null;
+  const stacked = stackedPhaseIdentity(log === undefined ? readOptionalLog(planDir) : log, phaseFile);
+  assertStackedHeadOnPhaseBranch(planDir, phaseFile, stacked);
   // v3-only plans (no lifecycle identity or no lifecycle document) keep
   // existing `log update` behavior untouched: no event, no error, no new
   // file. Only plans already carrying a lifecycle document participate.
@@ -263,19 +281,8 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
   const existing = readLifecycleDoc(specDir);
   if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
   const artifacts = [phaseEvidenceRef(planDir, phaseFile)];
-  const stacked = stackedPhaseIdentity(log === undefined ? readOptionalLog(planDir) : log, phaseFile);
   let branch;
   if (stacked) {
-    // Fail closed before any commit: HEAD must be exactly this phase's branch
-    // (a detached HEAD reads as null and is a mismatch too).
-    const headBranch = worktreeCurrentBranch(planDir);
-    if (headBranch !== stacked.branch) {
-      throw new CliError(
-        'PHASE_BRANCH_MISMATCH',
-        `${phaseFile} belongs on ${stacked.branch}, but HEAD is ${headBranch === null ? 'detached' : headBranch}. ` +
-          `Run: git switch ${stacked.branch}`,
-      );
-    }
     branch = stacked.branch;
   } else {
     branch = currentBranch(planDir);
