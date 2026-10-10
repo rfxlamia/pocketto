@@ -161,7 +161,7 @@ function assertPackedPackageMetadata(extracted) {
       CLI_VERSION: '4.1.0',
       CONTRACT: 3,
       PIPELINE: 5,
-      LIFECYCLE_SCHEMA: 1,
+      LIFECYCLE_SCHEMA: 2,
       ADAPTER_CONTRACT: 1,
       SURFACE_MANIFEST: 1,
     },

@@ -18,7 +18,7 @@ test('v4 preflight independently rejects mismatched or missing protocol versions
     releaseMajor: 4,
     contract: 3,
     pipeline: 5,
-    lifecycleSchema: 1,
+    lifecycleSchema: 2,
     adapterContract: 1,
     surfaceManifest: 1,
   };
@@ -33,7 +33,7 @@ test('v4 preflight independently rejects mismatched or missing protocol versions
     { name: 'missing Core CONTRACT', surface: 'core', field: 'contract', missing: true },
     { name: 'Core PIPELINE mismatch', surface: 'core', field: 'pipeline', value: 4 },
     { name: 'missing Core PIPELINE', surface: 'core', field: 'pipeline', missing: true },
-    { name: 'Core LIFECYCLE_SCHEMA mismatch', surface: 'core', field: 'lifecycleSchema', value: 2 },
+    { name: 'Core LIFECYCLE_SCHEMA mismatch', surface: 'core', field: 'lifecycleSchema', value: 1 },
     { name: 'missing Core LIFECYCLE_SCHEMA', surface: 'core', field: 'lifecycleSchema', missing: true },
     { name: 'Core SURFACE_MANIFEST mismatch', surface: 'core', field: 'surfaceManifest', value: 2 },
     { name: 'missing Core SURFACE_MANIFEST', surface: 'core', field: 'surfaceManifest', missing: true },

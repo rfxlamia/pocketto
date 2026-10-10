@@ -30,7 +30,16 @@ const {
 } = require('./lifecycle-contract');
 
 const LIFECYCLE_FILE = 'lifecycle.json';
-const LIFECYCLE_SCHEMA = 1;
+// Schema written by unpatched documents. A planPatch bumps it to 2.
+const LIFECYCLE_INITIAL_SCHEMA = 1;
+const LIFECYCLE_PLAN_PATCH_SCHEMA = 2;
+// Highest schema this Core can read (single source: cli/lib/version.js).
+const { LIFECYCLE_SCHEMA } = require('./version');
+
+// Readers accept 1..LIFECYCLE_SCHEMA; anything else fails closed.
+function isSupportedLifecycleSchema(schema) {
+  return Number.isInteger(schema) && schema >= LIFECYCLE_INITIAL_SCHEMA && schema <= LIFECYCLE_SCHEMA;
+}
 
 function lifecyclePathFor(specDir) {
   return path.join(specDir, LIFECYCLE_FILE);
@@ -55,7 +64,7 @@ function readLifecycleDoc(specDir) {
 
 function initDoc({ planId, specDir, planDir }) {
   return {
-    schema: LIFECYCLE_SCHEMA,
+    schema: LIFECYCLE_INITIAL_SCHEMA,
     plan: {
       plan_id: planId,
       spec_dir: specDir,
@@ -71,14 +80,19 @@ function initDoc({ planId, specDir, planDir }) {
 // Logical payload: everything that defines what the event means, minus
 // revision (assigned by the journal) and volatile delivery fields.
 // Identical logical transitions share one payload hash → replay-safe.
-function logicalPayload({ planId, type, artifactRefs, proofRef, proofHash }) {
-  return {
+// phase-closed carries its phaseKey in the payload (never as an event field),
+// so closing two phases with identical artifact refs cannot collide on replay.
+// Other types omit phase_key entirely, keeping their payload hashes unchanged.
+function logicalPayload({ planId, type, artifactRefs, proofRef, proofHash, phaseKey }) {
+  const payload = {
     plan_id: planId,
     type,
     artifact_refs: artifactRefs,
     proof_ref: proofRef === undefined ? null : proofRef,
     proof_hash: proofHash === undefined ? null : proofHash,
   };
+  if (type === 'phase-closed') payload.phase_key = phaseKey;
+  return payload;
 }
 
 function applyStateSnapshot(doc, type) {
@@ -102,13 +116,38 @@ function serializeDoc(doc) {
 // once the plan is closed (DONE) no further transition is legal. Rejection
 // happens before any journal mutation, so an invalid transition emits no
 // event and leaves the document byte-identical.
-function checkStateAllowsTransition(doc, type) {
+//
+// phase-closed is legal once per phase, and only after that phase's
+// phase-complete. Events never store phaseKey (EVENT_FIELDS is closed), so a
+// prior close for this phaseKey is found by recomputing each stored
+// phase-closed payload hash with the candidate phaseKey.
+function phaseAlreadyClosed(doc, phaseKey) {
+  return doc.events.some((event) => event.type === 'phase-closed'
+    && hashCanonicalPayload(logicalPayload({
+      planId: event.plan_id,
+      type: 'phase-closed',
+      artifactRefs: event.artifact_refs,
+      proofRef: event.proof_ref,
+      proofHash: event.proof_hash,
+      phaseKey,
+    })) === event.payload_hash);
+}
+
+function checkStateAllowsTransition(doc, type, phaseKey) {
   const state = (doc.plan && doc.plan.state) || {};
   if (state.status === 'DONE') {
     return fail('LIFECYCLE_BAD_STATE', `plan is closed; ${type} is not allowed`);
   }
   if (type === 'spec-approved' && state.approval === 'APPROVED') {
     return fail('LIFECYCLE_BAD_STATE', 'spec has already been approved');
+  }
+  if (type === 'phase-closed') {
+    if ((state.phase_status || {})[phaseKey] !== 'COMPLETE') {
+      return fail('LIFECYCLE_BAD_STATE', `${phaseKey} is not COMPLETE; phase-closed is not allowed`);
+    }
+    if (phaseAlreadyClosed(doc, phaseKey)) {
+      return fail('LIFECYCLE_BAD_STATE', `${phaseKey} has already been closed`);
+    }
   }
   return { ok: true, code: null, message: null };
 }
@@ -135,6 +174,61 @@ function findReplayEvent(doc, type, payloadHash) {
   return null;
 }
 
+// planPatch carries branch identity into `plan` (never into event fields).
+// Only `phase_branches` and per-phase `{ branch, base_branch }` entries are
+// accepted; anything else is rejected before any document mutation.
+const PLAN_PATCH_FIELDS = ['phase_branches', 'phases'];
+const PHASE_ENTRY_FIELDS = ['branch', 'base_branch'];
+const PHASE_KEY_PATTERN = /^phase-\d+$/;
+
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validatePlanPatch(patch) {
+  const bad = (message) => fail('LIFECYCLE_BAD_PLAN_PATCH', `invalid planPatch: ${message}`);
+  if (!isPlainObject(patch)) return bad('must be an object');
+  const keys = Object.keys(patch);
+  if (keys.length === 0) return bad('must not be empty');
+  for (const key of keys) {
+    if (!PLAN_PATCH_FIELDS.includes(key)) return bad(`unsupported field ${key}`);
+  }
+  if ('phase_branches' in patch && !isPlainObject(patch.phase_branches)) {
+    return bad('phase_branches must be an object');
+  }
+  if ('phases' in patch) {
+    if (!isPlainObject(patch.phases)) return bad('phases must be an object');
+    for (const [phaseKey, entry] of Object.entries(patch.phases)) {
+      if (!PHASE_KEY_PATTERN.test(phaseKey)) return bad(`phase key must match phase-N: ${phaseKey}`);
+      if (!isPlainObject(entry)) return bad(`${phaseKey} must be an object`);
+      for (const field of Object.keys(entry)) {
+        if (!PHASE_ENTRY_FIELDS.includes(field)) return bad(`${phaseKey} has unsupported field ${field}`);
+      }
+      for (const field of PHASE_ENTRY_FIELDS) {
+        if (typeof entry[field] !== 'string' || entry[field].length === 0) {
+          return bad(`${phaseKey}.${field} must be a non-empty string`);
+        }
+      }
+    }
+  }
+  return { ok: true, code: null, message: null };
+}
+
+// Merges a validated planPatch into `plan`. Existing unrelated fields and
+// other phase entries are preserved; a patched phase keeps any fields the
+// patch does not name.
+function applyPlanPatch(plan, patch) {
+  if ('phase_branches' in patch) {
+    plan.phase_branches = { ...(plan.phase_branches || {}), ...patch.phase_branches };
+  }
+  if ('phases' in patch) {
+    plan.phases = { ...(plan.phases || {}) };
+    for (const [phaseKey, entry] of Object.entries(patch.phases)) {
+      plan.phases[phaseKey] = { ...(plan.phases[phaseKey] || {}), ...entry };
+    }
+  }
+}
+
 // Commits one logical lifecycle transition atomically.
 // Input: { specDir, planDir, planId, type, artifacts, branch?,
 //          proofRef?, proofHash?, deps?: { now, stat, readFile, realpath, hashFile } }
@@ -149,7 +243,7 @@ function commitTransition(input) {
 }
 
 function commitTransitionUnlocked(input) {
-  const { specDir, planDir, planId, type, artifacts, branch } = input || {};
+  const { specDir, planDir, planId, type, artifacts, branch, phaseKey, planPatch } = input || {};
   const deps = (input && input.deps) || {};
   const now = deps.now || (() => new Date().toISOString());
 
@@ -162,10 +256,27 @@ function commitTransitionUnlocked(input) {
   if (!Array.isArray(artifacts) || artifacts.length === 0) {
     return fail('LIFECYCLE_BAD_ARTIFACT', 'artifact_refs must be a non-empty array');
   }
+  if (type === 'phase-closed' && (typeof phaseKey !== 'string' || phaseKey.length === 0)) {
+    return fail('LIFECYCLE_PHASE_KEY_REQUIRED', 'phase-closed requires a non-empty phaseKey');
+  }
+
+  const hasPlanPatch = planPatch !== undefined && planPatch !== null;
+  if (hasPlanPatch) {
+    const patchCheck = validatePlanPatch(planPatch);
+    if (!patchCheck.ok) return fail(patchCheck.code, patchCheck.message);
+  }
 
   let doc = readLifecycleDoc(specDir);
   if (doc === null) {
     doc = initDoc({ planId, specDir, planDir });
+  }
+  // Schema gate before any replay or mutation: a document this Core cannot
+  // read is never replayed, extended, or rewritten.
+  if (!isSupportedLifecycleSchema(doc.schema)) {
+    return fail(
+      'LIFECYCLE_SCHEMA_UNSUPPORTED',
+      `lifecycle schema ${doc.schema} is unsupported (this Core reads 1..${LIFECYCLE_SCHEMA})`,
+    );
   }
   if (doc.plan.plan_id !== planId) {
     return fail('LIFECYCLE_PLAN_MISMATCH', 'plan_id does not match the lifecycle document');
@@ -203,6 +314,7 @@ function commitTransitionUnlocked(input) {
     artifactRefs: normalized,
     proofRef: input.proofRef,
     proofHash: input.proofHash,
+    phaseKey: input.phaseKey,
   });
   const payloadHash = hashCanonicalPayload(payload);
 
@@ -229,7 +341,7 @@ function commitTransitionUnlocked(input) {
     );
   }
 
-  const gate = checkStateAllowsTransition(doc, type);
+  const gate = checkStateAllowsTransition(doc, type, phaseKey);
   if (!gate.ok) return gate;
 
   const event = {
@@ -252,6 +364,10 @@ function commitTransitionUnlocked(input) {
   if (type === 'phase-complete' && typeof branch === 'string' && branch.length > 0) {
     doc.plan.branch = branch;
     doc.plan.plan_dir = planDir;
+  }
+  if (hasPlanPatch) {
+    applyPlanPatch(doc.plan, planPatch);
+    doc.schema = LIFECYCLE_PLAN_PATCH_SCHEMA;
   }
   doc.plan.revision = revision;
   doc.events.push(event);
@@ -290,6 +406,7 @@ function updateEventDelivery(specDir, eventId, patch) {
 module.exports = {
   LIFECYCLE_FILE,
   LIFECYCLE_SCHEMA,
+  isSupportedLifecycleSchema,
   lifecyclePathFor,
   readLifecycleDoc,
   commitTransition,

@@ -492,3 +492,242 @@ test('CYCLE 6: same event ID with different canonical payload is a terminal inte
     'replay must not rewrite the authoritative document',
   );
 });
+
+// T2 schema 2: phase-closed, per-phase replay/legality, planPatch, schema guard.
+function seedPhaseOneComplete() {
+  const fixture = seedApprovedWithPlanDirs();
+  const complete = commitTransition(phaseCompleteInput(fixture));
+  assert.equal(complete.ok, true, `phase-1 completion should succeed: ${JSON.stringify(complete)}`);
+  return fixture;
+}
+
+function phaseClosedInput(fixture, phaseKey, extra = {}) {
+  return {
+    specDir: fixture.specDir,
+    planDir: fixture.planDir,
+    planId: 'demo-plan',
+    type: 'phase-closed',
+    phaseKey,
+    artifacts: [
+      { root: 'plan', kind: 'phase-evidence', path: 'phase-1.md', sha256: fixture.planSha, revision: 1 },
+    ],
+    deps: { now: () => FIXED_CLOCK },
+    ...extra,
+  };
+}
+
+test('phase-closed commit: appends one event and adds no phase_status key', () => {
+  const fixture = seedPhaseOneComplete();
+  const before = JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'));
+
+  const res = commitTransition(phaseClosedInput(fixture, 'phase-1'));
+  assert.equal(res.ok, true, `phase-closed should commit: ${JSON.stringify(res)}`);
+  assert.equal(res.event.type, 'phase-closed');
+  assert.equal(res.event.event_id, 'demo-plan:phase-closed:r3');
+
+  const doc = JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'));
+  assert.equal(doc.events.length, before.events.length + 1, 'exactly one event must be appended');
+  assert.deepEqual(
+    doc.plan.state.phase_status,
+    before.plan.state.phase_status,
+    'phase_status keys must be unchanged by phase-closed',
+  );
+  assert.deepEqual(Object.keys(doc.plan.state.phase_status), ['phase-1']);
+});
+
+test('phase-closed replay: identical call replays and each phaseKey gets its own event', () => {
+  const fixture = seedPhaseOneComplete();
+  const first = commitTransition(phaseClosedInput(fixture, 'phase-1'));
+  assert.equal(first.ok, true, `phase-1 phase-closed should commit: ${JSON.stringify(first)}`);
+  const beforeReplay = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+
+  const replay = commitTransition(phaseClosedInput(fixture, 'phase-1'));
+  assert.equal(replay.ok, true, `identical phase-closed should replay: ${JSON.stringify(replay)}`);
+  assert.equal(replay.event.event_id, first.event.event_id, 'replay must return the original event ID');
+  assert.equal(replay.revision, first.revision, 'replay must return the original revision');
+  assert.equal(
+    readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'),
+    beforeReplay,
+    'replay must not append or rewrite the document',
+  );
+
+  const phase2Artifact = writeArtifact(fixture.planDir, 'phase-2.md', 'phase 2\n');
+  const complete2 = commitTransition({
+    specDir: fixture.specDir,
+    planDir: fixture.planDir,
+    planId: 'demo-plan',
+    type: 'phase-complete',
+    artifacts: [
+      { root: 'plan', kind: 'phase-evidence', path: 'phase-2.md', sha256: phase2Artifact, revision: 1 },
+    ],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(complete2.ok, true, `phase-2 completion should succeed: ${JSON.stringify(complete2)}`);
+
+  const second = commitTransition(phaseClosedInput(fixture, 'phase-2'));
+  assert.equal(second.ok, true, `phase-2 phase-closed should commit: ${JSON.stringify(second)}`);
+  assert.notEqual(second.event.event_id, first.event.event_id, 'phase-2 must not replay phase-1 event');
+  assert.notEqual(second.event.payload_hash, first.event.payload_hash, 'phaseKey must be part of the payload');
+  const doc = JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'));
+  assert.equal(doc.events.filter((e) => e.type === 'phase-closed').length, 2, 'one phase-closed per phaseKey');
+});
+
+test('phase-closed legality: non-COMPLETE phase, closed plan, and a second close are rejected with no mutation', () => {
+  // (a) phase-2 has no phase-complete yet.
+  {
+    const fixture = seedPhaseOneComplete();
+    const before = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+    const res = commitTransition(phaseClosedInput(fixture, 'phase-2'));
+    assert.equal(res.ok, false, `phase-2 is not COMPLETE: ${JSON.stringify(res)}`);
+    assert.equal(res.code, 'LIFECYCLE_BAD_STATE');
+    assert.equal(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'), before, 'doc must be byte-identical');
+  }
+
+  // (b) plan already closed: phase-closed is never legal after plan-closed.
+  {
+    const fixture = seedPhaseOneComplete();
+    const closed = commitTransition({
+      specDir: fixture.specDir,
+      planDir: fixture.planDir,
+      planId: 'demo-plan',
+      type: 'plan-closed',
+      artifacts: [
+        { root: 'plan', kind: 'phase-evidence', path: 'phase-1.md', sha256: fixture.planSha, revision: 1 },
+      ],
+      deps: { now: () => FIXED_CLOCK },
+    });
+    assert.equal(closed.ok, true, `plan-closed should commit: ${JSON.stringify(closed)}`);
+    const before = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+    const res = commitTransition(phaseClosedInput(fixture, 'phase-1'));
+    assert.equal(res.ok, false, `closed plan must reject phase-closed: ${JSON.stringify(res)}`);
+    assert.equal(res.code, 'LIFECYCLE_BAD_STATE');
+    assert.equal(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'), before, 'doc must be byte-identical');
+  }
+
+  // (c) at most once per phaseKey, even with different artifact refs.
+  {
+    const fixture = seedPhaseOneComplete();
+    const first = commitTransition(phaseClosedInput(fixture, 'phase-1'));
+    assert.equal(first.ok, true, `first phase-1 close should commit: ${JSON.stringify(first)}`);
+    const otherSha = writeArtifact(fixture.planDir, 'phase-1-amended.md', 'amended phase 1\n');
+    const before = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+    const res = commitTransition(phaseClosedInput(fixture, 'phase-1', {
+      artifacts: [
+        { root: 'plan', kind: 'phase-evidence', path: 'phase-1-amended.md', sha256: otherSha, revision: 1 },
+      ],
+    }));
+    assert.equal(res.ok, false, `second phase-1 close must be rejected: ${JSON.stringify(res)}`);
+    assert.equal(res.code, 'LIFECYCLE_BAD_STATE');
+    assert.equal(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'), before, 'doc must be byte-identical');
+  }
+});
+
+test('planPatch merge: phase-complete with planPatch writes plan.phases and bumps schema to 2', () => {
+  const fixture = seedApprovedWithPlanDirs();
+  const seeded = JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'));
+  assert.equal(seeded.schema, 1, 'seed document must be schema 1');
+
+  const res = commitTransition({
+    ...phaseCompleteInput(fixture),
+    planPatch: {
+      phase_branches: { mode: 'stacked', root_base: 'feature/x' },
+      phases: { 'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'feature/x' } },
+    },
+  });
+  assert.equal(res.ok, true, `phase-complete with planPatch should commit: ${JSON.stringify(res)}`);
+
+  const doc = JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'));
+  assert.equal(doc.schema, 2, 'an applied planPatch must bump the schema to 2');
+  assert.deepEqual(doc.plan.phase_branches, { mode: 'stacked', root_base: 'feature/x' });
+  assert.deepEqual(doc.plan.phases, {
+    'phase-1': { branch: 'pocket/p/phase-1', base_branch: 'feature/x' },
+  });
+  assert.equal(doc.plan.plan_id, 'demo-plan', 'unrelated plan fields must survive the merge');
+  assert.equal(doc.plan.spec_dir, seeded.plan.spec_dir);
+  assert.equal(doc.plan.plan_dir, seeded.plan.plan_dir);
+  assert.equal(doc.plan.revision, 2);
+  assert.equal(doc.plan.state.approval, 'APPROVED');
+  assert.deepEqual(doc.plan.state.phase_status, { 'phase-1': 'COMPLETE' });
+});
+
+test('unpatched schema 1: commit without planPatch writes the schema-1 bytes with no phases key', () => {
+  const specDir = mkdtempSync(path.join(tmpdir(), 'lifecycle-guard-'));
+  const content = 'spec content\n';
+  writeFileSync(path.join(specDir, 'spec-doc.md'), content);
+  const sha = sha256Hex(content);
+
+  const res = commitTransition({
+    specDir,
+    planDir: null,
+    planId: 'demo-plan',
+    type: 'spec-approved',
+    artifacts: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha, revision: 1 }],
+    deps: { now: () => FIXED_CLOCK },
+  });
+  assert.equal(res.ok, true, `unpatched commit should succeed: ${JSON.stringify(res)}`);
+
+  // Literal canonical 5-key payload (no phase_key, no planPatch-derived fields),
+  // hashed independently of the store so the guard cannot follow the code under test.
+  const literalPayload = `{"artifact_refs":[{"kind":"spec-doc","path":"spec-doc.md","revision":1,"root":"spec","sha256":"${sha}"}],"plan_id":"demo-plan","proof_hash":null,"proof_ref":null,"type":"spec-approved"}`;
+  const literalPayloadHash = createHash('sha256').update(literalPayload).digest('hex');
+  const expected = {
+    schema: 1,
+    plan: {
+      plan_id: 'demo-plan',
+      spec_dir: specDir,
+      plan_dir: null,
+      branch: null,
+      state: { approval: 'APPROVED', phase_status: {}, status: 'IN_PROGRESS' },
+      revision: 1,
+    },
+    events: [{
+      event_id: 'demo-plan:spec-approved:r1',
+      plan_id: 'demo-plan',
+      type: 'spec-approved',
+      revision: 1,
+      occurred_at: FIXED_CLOCK,
+      artifact_refs: [{ root: 'spec', kind: 'spec-doc', path: 'spec-doc.md', sha256: sha, revision: 1 }],
+      payload_hash: literalPayloadHash,
+      proof_ref: null,
+      proof_hash: null,
+      delivery: { status: 'pending', attempts: 0 },
+    }],
+  };
+  assert.equal(
+    readFileSync(lifecyclePathFor(specDir), 'utf8'),
+    `${JSON.stringify(expected, null, 2)}\n`,
+    'unpatched document must be byte-identical to the schema-1 literal',
+  );
+});
+
+test('schema 3 rejected: future schema fails closed with LIFECYCLE_SCHEMA_UNSUPPORTED and no mutation', () => {
+  const fixture = seedPhaseOneComplete();
+  const doc = JSON.parse(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'));
+  doc.schema = 3;
+  writeFileSync(lifecyclePathFor(fixture.specDir), `${JSON.stringify(doc, null, 2)}\n`);
+  const before = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+
+  const attempts = [
+    ['phase-closed', phaseClosedInput(fixture, 'phase-1')],
+    // Identical to the committed phase-1 completion: must still fail closed, not replay.
+    ['phase-complete replay', phaseCompleteInput(fixture)],
+    ['planPatch commit', { ...phaseCompleteInput(fixture), planPatch: { phases: { 'phase-2': { branch: 'b', base_branch: 'a' } } } }],
+  ];
+  for (const [label, input] of attempts) {
+    const res = commitTransition(input);
+    assert.equal(res.ok, false, `${label} must be rejected for schema 3: ${JSON.stringify(res)}`);
+    assert.equal(res.code, 'LIFECYCLE_SCHEMA_UNSUPPORTED', `${label} needs the stable schema code`);
+    assert.equal(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'), before, `${label} must leave the doc byte-identical`);
+  }
+});
+
+test('phase-closed requires phaseKey: a missing phaseKey fails with LIFECYCLE_PHASE_KEY_REQUIRED and no mutation', () => {
+  const fixture = seedPhaseOneComplete();
+  const before = readFileSync(lifecyclePathFor(fixture.specDir), 'utf8');
+  for (const phaseKey of [undefined, '']) {
+    const res = commitTransition(phaseClosedInput(fixture, phaseKey));
+    assert.equal(res.ok, false, `phaseKey ${JSON.stringify(phaseKey)} must be rejected: ${JSON.stringify(res)}`);
+    assert.equal(res.code, 'LIFECYCLE_PHASE_KEY_REQUIRED', 'missing phaseKey needs the stable code');
+    assert.equal(readFileSync(lifecyclePathFor(fixture.specDir), 'utf8'), before, 'doc must be byte-identical');
+  }
+});

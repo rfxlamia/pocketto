@@ -115,7 +115,7 @@ function expectedProtocolVersions() {
   return {
     contract: CORE_VERSION ? CORE_VERSION.CONTRACT : 3,
     pipeline: CORE_VERSION ? CORE_VERSION.PIPELINE : 5,
-    lifecycleSchema: CORE_VERSION ? CORE_VERSION.LIFECYCLE_SCHEMA : 1,
+    lifecycleSchema: CORE_VERSION ? CORE_VERSION.LIFECYCLE_SCHEMA : 2,
     adapterContract: CORE_VERSION ? CORE_VERSION.ADAPTER_CONTRACT : ADAPTER_CONTRACT,
     surfaceManifest: CORE_VERSION ? CORE_VERSION.SURFACE_MANIFEST : 1,
   };

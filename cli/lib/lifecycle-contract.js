@@ -8,7 +8,7 @@
 
 const { createHash } = require('node:crypto');
 
-const EVENT_TYPES = ['spec-approved', 'phase-complete', 'plan-closed'];
+const EVENT_TYPES = ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed'];
 
 const DELIVERY_STATUSES = [
   'pending',

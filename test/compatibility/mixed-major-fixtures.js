@@ -23,7 +23,7 @@ function readCoreInfo(manifestPath) {
     releaseMajor: major,
     contract: major === 3 ? 2 : 3,
     pipeline: major === 3 ? 4 : 5,
-    lifecycleSchema: major === 3 ? null : 1,
+    lifecycleSchema: major === 3 ? null : 2,
     adapterContract: 1,
     surfaceManifest: manifest.schema,
   };

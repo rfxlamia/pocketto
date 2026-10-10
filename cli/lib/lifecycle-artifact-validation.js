@@ -13,7 +13,7 @@ function hashBytes(bytes) {
 }
 
 function requiredPlanDir(type) {
-  return type === 'phase-complete' || type === 'plan-closed';
+  return type === 'phase-complete' || type === 'phase-closed' || type === 'plan-closed';
 }
 
 function allowedRootsFor(type) {

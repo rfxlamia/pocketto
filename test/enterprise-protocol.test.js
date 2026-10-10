@@ -66,7 +66,7 @@ test('CYCLE 1: install atomically writes registration with schema 1, adapter con
   assert.equal(record.adapter_contract, 1, 'adapter contract must be 1');
   assert.ok(Array.isArray(record.argv) && record.argv.length > 0, 'argv must be a non-empty executable argv');
   assert.ok(record.argv.every((a) => typeof a === 'string' && a.length > 0), 'argv entries must be strings');
-  assert.deepEqual(record.events, ['spec-approved', 'phase-complete', 'plan-closed']);
+  assert.deepEqual(record.events, ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed']);
   assert.equal(record.timeout_ms, 30000);
 
   const orphans = (pocketDirListing(root) || []).filter((f) => f.includes('.tmp-'));

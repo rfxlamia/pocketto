@@ -10,6 +10,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { CliError } = require('./envelope');
 const { writeFileAtomicSync } = require('./atomic-file');
 const { withLifecycleMutation } = require('./lifecycle-lock');
+const { isSupportedLifecycleSchema } = require('./lifecycle-store');
 
 const LIFECYCLE_SCHEMA = 1;
 const PLAN_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -140,7 +141,7 @@ function serializeLifecycle(doc) {
 
 function matchesLifecycleIdentity(doc, specDir, planId) {
   return isObject(doc)
-    && doc.schema === LIFECYCLE_SCHEMA
+    && isSupportedLifecycleSchema(doc.schema)
     && isObject(doc.plan)
     && doc.plan.plan_id === planId
     && typeof doc.plan.spec_dir === 'string'
@@ -210,7 +211,9 @@ function runMigration({ specDir, from } = {}) {
     const log = readV3Snapshot(absoluteSpecDir);
     if (existing) {
       const expected = lifecycleSnapshot(absoluteSpecDir, log);
-      if (!isDeepStrictEqual(existing.doc, expected)) {
+      // Only the schema may differ: a schema-2 reader accepts the same pristine
+      // snapshot. Any real progress (events, plan.phases) still fails the compare.
+      if (!isDeepStrictEqual({ ...existing.doc, schema: expected.schema }, expected)) {
         return fail(
           'LIFECYCLE_ALREADY_EXISTS',
           `lifecycle document is not the pristine v3 migration snapshot and will not be replaced: ${path.join(absoluteSpecDir, LIFECYCLE_FILE)}`,

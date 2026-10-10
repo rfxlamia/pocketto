@@ -422,7 +422,7 @@ test('Core invokes the packaged Enterprise runner for all concrete handlers thro
   const registration = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
   assert.deepEqual(registration.argv, [process.execPath, DISPATCH, fixture.root],
     'default argv must pin Node, the packaged dispatcher, and this explicit project root');
-  assert.deepEqual(registration.events, ['spec-approved', 'phase-complete', 'plan-closed']);
+  assert.deepEqual(registration.events, ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed']);
 
   const record = registeredAdapter(fixture.root);
   const beforeSpec = readCalls(tracePath).length;
