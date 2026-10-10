@@ -587,3 +587,38 @@ test('stacked init adopt without base record: a manually created phase-1 branch 
   assert.equal(head(repo), sha);
   assert.equal(fs.existsSync(path.join(planDir, 'log.json')), false);
 });
+
+// ─── Cycle 13: adopt after commits and subdirectory prefixes ────────────────
+
+test('stacked init adopt records fork point: a rerun after a phase-1 commit records the original fork SHA, not the phase tip', () => {
+  const repo = makeRepo();
+  const { planDir } = writePlan(repo, 'p');
+  const first = logInit(repo, planDir, ['--phase-branches', 'stacked']);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  const forkSha = git(repo, 'rev-parse', 'feature/x');
+  writeFile(path.join(repo, 'work.txt'), 'phase 1 work\n');
+  git(repo, 'add', 'work.txt');
+  git(repo, 'commit', '-q', '-m', 'phase 1 work');
+  const phaseTip = head(repo);
+  assert.notEqual(phaseTip, forkSha);
+  fs.rmSync(path.join(planDir, 'log.json'));
+
+  const res = logInit(repo, planDir, ['--phase-branches', 'stacked']);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(currentBranch(repo), 'pocket/p/phase-1');
+  const rootBase = readLog(planDir).header.phase_branches.root_base;
+  assert.equal(rootBase.branch, 'feature/x');
+  assert.equal(rootBase.sha, forkSha);
+  assert.notEqual(rootBase.sha, phaseTip);
+});
+
+test('stacked init ignores plan paths under a subdirectory: a registration under app/ does not flag plan and spec files', () => {
+  const repo = makeRepo();
+  const app = path.join(repo, 'app');
+  const { planDir } = writePlan(app, 'p');
+  writeFile(path.join(app, '.pocket', 'lifecycle-adapter.json'), `${JSON.stringify(registrationBody(), null, 2)}\n`);
+  const res = logInit(app, planDir, ['--phase-branches', 'stacked']);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(currentBranch(repo), 'pocket/p/phase-1');
+  assert.equal(res.env.data.branch.created, 'pocket/p/phase-1');
+});

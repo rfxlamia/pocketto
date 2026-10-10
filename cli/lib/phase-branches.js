@@ -14,6 +14,8 @@ const { readLog } = require('./logjson');
 const {
   currentBranch,
   branchTip,
+  mergeBase,
+  repoPathPrefix,
   dirtyPaths,
   createAndSwitch,
   localConfigGet,
@@ -72,9 +74,11 @@ function relativeUnder(root, p) {
 }
 
 // Plan dir, the spec dir, and the machine-local adapter registration file, as
-// repo-relative prefixes. The registration is one exact file, never a directory.
-// An unresolvable spec dir leaves only the others allowed (reported as a concern).
-function allowedPrefixes(planDir, projectRoot) {
+// repo-root-relative prefixes: project-relative paths rebased onto gitBase (the
+// project root's location in the repo). The registration is one exact file,
+// never a directory. An unresolvable spec dir leaves only the others allowed
+// (reported as a concern).
+function allowedPrefixes(planDir, projectRoot, gitBase) {
   let specDir = null;
   try {
     specDir = lifecycleSpecDirForPlan(planDir);
@@ -83,7 +87,7 @@ function allowedPrefixes(planDir, projectRoot) {
   }
   const registration = path.join(projectRoot, REGISTRATION_PATH);
   const candidates = [planDir, specDir, registration].filter(Boolean).map((p) => relativeUnder(projectRoot, p));
-  return candidates.filter(Boolean);
+  return candidates.filter(Boolean).map((rel) => `${gitBase}${rel}`);
 }
 
 function isUnder(prefix, rel) {
@@ -92,7 +96,10 @@ function isUnder(prefix, rel) {
 
 function assertCleanOutsidePlan(planDir) {
   const projectRoot = resolveProjectRoot(planDir) || planDir;
-  const prefixes = allowedPrefixes(planDir, projectRoot);
+  // dirtyPaths reports paths relative to the git toplevel, so the allowed set is
+  // rebased onto the same base. An unknown base allows nothing (fail closed).
+  const gitBase = repoPathPrefix(projectRoot);
+  const prefixes = gitBase === null ? [] : allowedPrefixes(planDir, projectRoot, gitBase);
   const foreign = dirtyPaths(planDir).filter((p) => !prefixes.some((prefix) => isUnder(prefix, p)));
   if (foreign.length === 0) return;
   const err = new CliError(
@@ -154,13 +161,26 @@ function recordAndCreate(planDir, branch, rootBranch) {
   return { ...created, message: `${created.message}${note}` };
 }
 
+// Fork point of the phase branch from its root base: the merge base of the base
+// branch and HEAD. On adopt, HEAD may already carry phase-1 commits, so HEAD is
+// not the fork point. There is no safe substitute for a missing merge base, so
+// it throws before any write.
+function forkPointOrFail(planDir, branch, base) {
+  const sha = mergeBase(planDir, `refs/heads/${base}`, 'HEAD');
+  if (sha) return sha;
+  throw new CliError(
+    'PHASE_BRANCHES_ROOT_BASE_UNKNOWN',
+    `Cannot find the fork point of ${branch} from base '${base}' (git merge-base found no common ancestor with HEAD). Manual action: check that ${base} and HEAD share history (git merge-base refs/heads/${base} HEAD), then rerun log init --phase-branches stacked. HEAD and log.json were not changed.`,
+  );
+}
+
 // Creates (or adopts) pocket/<plan_id>/phase-1 and returns the identity to
 // record. Throws before any write when the init cannot be done safely.
 function prepareStackedInit(planDir) {
   const planId = planIdOrFail(planDir);
   const branch = `pocket/${planId}/phase-1`;
   const rootBranch = currentBranch(planDir);
-  const rootSha = branchTip(planDir, 'HEAD');
+  const headSha = branchTip(planDir, 'HEAD');
   if (!rootBranch) {
     throw new CliError(
       'PHASE_BRANCHES_DETACHED',
@@ -174,19 +194,22 @@ function prepareStackedInit(planDir) {
   if (rootBranch === branch) {
     // A prior init created this branch and recorded its base. Adopt reads only
     // that record; a missing or dangling record fails closed without a guess.
-    rootBase = { branch: recordedRootBase(planDir, branch), sha: rootSha };
+    const base = recordedRootBase(planDir, branch);
+    rootBase = { branch: base, sha: forkPointOrFail(planDir, branch, base) };
     branchInfo = { from: rootBase.branch, created: null, switched: false, status: 'adopted' };
   } else {
     const existingTip = branchTip(planDir, branch);
     if (existingTip) {
-      throw branchExistsError(branch, existingTip, rootSha);
+      throw branchExistsError(branch, existingTip, headSha);
     }
+    // Checked before recordAndCreate, so a missing fork point writes nothing.
+    const forkSha = forkPointOrFail(planDir, branch, rootBranch);
     const created = recordAndCreate(planDir, branch, rootBranch);
     if (!created.ok) {
-      if (created.code === 'GIT_BRANCH_EXISTS') throw branchExistsError(branch, branchTip(planDir, branch), rootSha);
+      if (created.code === 'GIT_BRANCH_EXISTS') throw branchExistsError(branch, branchTip(planDir, branch), headSha);
       throw new CliError(created.code, created.message);
     }
-    rootBase = { branch: rootBranch, sha: rootSha };
+    rootBase = { branch: rootBranch, sha: forkSha };
     branchInfo = { from: rootBranch, created: branch, switched: true, status: 'created' };
   }
 

@@ -89,6 +89,31 @@ function branchTip(cwd, branch) {
   }
 }
 
+// Best common ancestor of <a> and <b>, or null when there is none or git fails.
+// Refs are passed as given, so callers pass fully qualified names when a branch
+// name could collide with a path.
+function mergeBase(cwd, a, b) {
+  try {
+    if (!isBranchName(a) || !isBranchName(b)) return null;
+    const r = runGit(cwd, ['merge-base', a, b]);
+    return succeeded(r) ? r.stdout.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+// Location of <cwd> relative to the repository root, with a trailing slash
+// ('app/'), or '' at the root. Null outside a repository. Paths that git reports
+// in status output are root-relative, so this is the base they are compared to.
+function repoPathPrefix(cwd) {
+  try {
+    const r = runGit(cwd, ['rev-parse', '--show-prefix']);
+    return succeeded(r) ? r.stdout.replace(/\r?\n$/, '') : null;
+  } catch {
+    return null;
+  }
+}
+
 // Porcelain v1 entries are "XY <path>" NUL-terminated. A rename or copy entry
 // is followed by one extra NUL field holding the source path; both are kept.
 function parsePorcelainPaths(out) {
@@ -252,6 +277,8 @@ function headTrailer(cwd, key) {
 module.exports = {
   currentBranch,
   branchTip,
+  mergeBase,
+  repoPathPrefix,
   dirtyPaths,
   stagedPaths,
   ignoredPaths,
