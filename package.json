@@ -50,6 +50,7 @@
     "enterprise/adapter.js",
     "enterprise/registration.js",
     "enterprise/registration-record.js",
+    "enterprise/registration-phase.js",
     "enterprise/registration-version.js",
     "enterprise/registration-preflight.js",
     "enterprise/github.js",

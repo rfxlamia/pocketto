@@ -6,7 +6,14 @@ const path = require('node:path');
 const { writeFileAtomicSync } = require('../cli/lib/atomic-file');
 const { EVENT_TYPES } = require('../cli/lib/lifecycle-contract');
 const { MAX_ADAPTER_TIMEOUT_MS } = require('../cli/lib/lifecycle-adapter');
-const { detectMode } = require('../cli/lib/mode');
+const {
+  OPTIONAL_REGISTRATION_FIELDS,
+  PHASE_BRANCHES_MODES,
+  PUSH_CONSENT_PHASE_BRANCHES,
+  applyPhaseFields,
+  resolvePhaseInstall,
+  validatePhaseFields,
+} = require('./registration-phase');
 
 let CORE_VERSION = null;
 let CORE_VERSION_PATH = null;
@@ -25,11 +32,8 @@ const REGISTRATION_FILE = 'lifecycle-adapter.json';
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_TIMEOUT_MS = MAX_ADAPTER_TIMEOUT_MS;
 const REGISTRATION_FIELDS = ['schema', 'adapter_contract', 'argv', 'events', 'timeout_ms'];
-// Optional neutral fields. Validation stays closed: any other key is rejected.
-const OPTIONAL_REGISTRATION_FIELDS = ['phase_branches', 'push_consent'];
-const PHASE_BRANCHES_MODES = ['stacked', 'none'];
-// The only push consent a registration may carry. Consent never permits force.
-const PUSH_CONSENT_PHASE_BRANCHES = Object.freeze({ scope: 'pocket-phase-branches', force: false });
+// Optional phase fields (OPTIONAL_REGISTRATION_FIELDS) are owned by registration-phase.js.
+// Validation stays closed: any other key is rejected.
 
 function fail(code, message, extra = {}) {
   return { ok: false, code, message, ...extra };
@@ -57,9 +61,7 @@ function buildRegistration({
     events: Array.isArray(events) ? events.slice() : events,
     timeout_ms: timeoutMs,
   };
-  if (phaseBranches !== undefined) record.phase_branches = phaseBranches;
-  if (pushConsent !== undefined) record.push_consent = isPlainObject(pushConsent) ? { ...pushConsent } : pushConsent;
-  return record;
+  return applyPhaseFields(record, { phaseBranches, pushConsent });
 }
 
 function validateRegistrationShape(record) {
@@ -156,28 +158,9 @@ function validateRegistrationTimeout(record) {
   return null;
 }
 
-function isFixedPushConsent(value) {
-  if (!isPlainObject(value)) return false;
-  const keys = Object.keys(value).sort().join(',');
-  return keys === 'force,scope'
-    && value.scope === PUSH_CONSENT_PHASE_BRANCHES.scope
-    && value.force === PUSH_CONSENT_PHASE_BRANCHES.force;
-}
-
 function validateOptionalFields(record) {
-  if ('phase_branches' in record && !PHASE_BRANCHES_MODES.includes(record.phase_branches)) {
-    return fail(
-      'ENTERPRISE_REGISTRATION_MALFORMED',
-      'Adapter registration phase_branches must be "stacked" or "none". Re-run enterprise install to repair it.'
-    );
-  }
-  if ('push_consent' in record && !isFixedPushConsent(record.push_consent)) {
-    return fail(
-      'ENTERPRISE_REGISTRATION_MALFORMED',
-      'Adapter registration push_consent must be the fixed phase-branches consent without force. Re-run enterprise install to repair it.'
-    );
-  }
-  return null;
+  const failure = validatePhaseFields(record);
+  return failure ? fail(failure.code, failure.message) : null;
 }
 
 function validateRegistration(record) {
@@ -236,50 +219,17 @@ function loadRegistration(projectRoot, deps = {}) {
   return { ok: true, code: null, message: null, record: parsed, path: target };
 }
 
-// main-local publishes to the base branch without phase branches, so it always
-// wins over a requested stacked strategy, and the override is reported.
-function resolvePhaseBranches(projectRoot, requested) {
-  let mode;
-  try {
-    mode = detectMode(projectRoot);
-  } catch (err) {
-    return { error: err && err.message ? err.message : String(err) };
-  }
-  if (mode.branch_strategy === 'main-local') {
-    const warning = requested === 'stacked'
-      ? {
-        code: 'PHASE_BRANCHES_MAIN_LOCAL',
-        message: 'phase_branches stacked was overridden to none because Pocket Enterprise branch_strategy is main-local.',
-      }
-      : undefined;
-    return { value: 'none', warning };
-  }
-  return { value: requested === undefined ? 'stacked' : requested, warning: undefined };
-}
-
 function installRegistration(projectRoot, opts = {}) {
   const writeAtomic = opts.writeAtomic || ((target, content) => writeFileAtomicSync(target, content));
   const mkdir = opts.mkdir || fs.mkdirSync;
-  // Input is checked before the main-local override so an invalid value is never masked.
-  if (opts.phaseBranches !== undefined && !PHASE_BRANCHES_MODES.includes(opts.phaseBranches)) {
-    return fail('ENTERPRISE_INSTALL_FAILED', `--phase-branches must be one of: ${PHASE_BRANCHES_MODES.join(', ')}.`);
-  }
-  if (opts.pushConsent !== undefined && opts.pushConsent !== 'phase-branches') {
-    return fail('ENTERPRISE_INSTALL_FAILED', '--push-consent must be one of: phase-branches.');
-  }
-  const resolved = resolvePhaseBranches(projectRoot, opts.phaseBranches);
-  if (resolved.error) {
-    return fail('ENTERPRISE_INSTALL_FAILED', `Enterprise adapter install failed: ${resolved.error}`);
-  }
-  // The CLI token `phase-branches` maps to the fixed consent object; nothing else is accepted.
-  const pushConsent = opts.pushConsent === 'phase-branches' ? PUSH_CONSENT_PHASE_BRANCHES : undefined;
-  const phaseBranches = resolved.value;
+  const phase = resolvePhaseInstall(projectRoot, opts);
+  if (phase.error) return fail(phase.error.code, phase.error.message);
   const record = buildRegistration({
     argv: opts.argv,
     events: opts.events,
     timeoutMs: opts.timeoutMs,
-    phaseBranches,
-    pushConsent,
+    phaseBranches: phase.phaseBranches,
+    pushConsent: phase.pushConsent,
   });
   const checked = validateRegistration(record);
   if (!checked.ok) {
@@ -301,7 +251,7 @@ function installRegistration(projectRoot, opts = {}) {
     );
   }
   const result = { ok: true, code: null, message: null, path: target, record };
-  if (resolved.warning) result.warning = resolved.warning;
+  if (phase.warning) result.warning = phase.warning;
   return result;
 }
 
