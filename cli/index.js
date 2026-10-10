@@ -4,7 +4,7 @@
 // pocketto-pi — cross-platform CLI for the pocket-* development skills.
 //
 //   pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset] [--json]
-//   pocketto-pi log init   <plan_dir>                      [--json]
+//   pocketto-pi log init   <plan_dir>                      [--phase-branches stacked|none] [--json]
 //   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
 //   pocketto-pi log close  <plan_dir>                      [--json]
 //   pocketto-pi meta get   <dir> <field>                   [--json]
@@ -108,6 +108,7 @@ function parseArgs(argv) {
     recommended: false,
     enterprise: null,
     branchStrategy: null,
+    phaseBranches: null,
     createPr: null,
     requireApproval: null,
     file: null,
@@ -153,6 +154,8 @@ function parseArgs(argv) {
     else if (a === '--recommended') flags.recommended = true;
     else if (a === '--enterprise') flags.enterprise = requireValue(argv[++i], '--enterprise');
     else if (a.startsWith('--enterprise=')) flags.enterprise = requireValue(a.slice('--enterprise='.length), '--enterprise');
+    else if (a === '--phase-branches') flags.phaseBranches = requireValue(argv[++i], '--phase-branches');
+    else if (a.startsWith('--phase-branches=')) flags.phaseBranches = requireValue(a.slice('--phase-branches='.length), '--phase-branches');
     else if (a === '--branch-strategy') flags.branchStrategy = requireValue(argv[++i], '--branch-strategy');
     else if (a.startsWith('--branch-strategy=')) flags.branchStrategy = requireValue(a.slice('--branch-strategy='.length), '--branch-strategy');
     else if (a === '--create-pr') flags.createPr = requireValue(argv[++i], '--create-pr');
@@ -221,7 +224,7 @@ const HELP = `pocketto-pi — CLI for the pocket-* development skills
 
 Usage:
   pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset] [--json]
-  pocketto-pi log init   <plan_dir>                       [--json]
+  pocketto-pi log init   <plan_dir>                       [--phase-branches stacked|none] [--json]
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
   pocketto-pi log update <plan_dir> <phase_file> --correction <sha> [--for-task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
@@ -338,6 +341,7 @@ function main() {
         forTask: flags.forTask,
         sha: flags.sha,
         allowDuplicateSha: flags.allowDuplicateSha,
+        phaseBranches: flags.phaseBranches,
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'lifecycle') {

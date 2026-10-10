@@ -14,6 +14,7 @@ const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, i
 const { currentBranch } = require('../lib/git-worktree');
 const { pendingDrainActions } = require('../lib/next-actions');
 const { planArtifactWarnings } = require('../lib/artifact-ignore');
+const phaseBranches = require('../lib/phase-branches');
 const { PIPELINE } = require('../lib/version');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
@@ -228,14 +229,18 @@ function buildOwnerMap(planDir, phase, baselineSha) {
 
 // ─── INIT ───────────────────────────────────────────────────────────────────
 
-function init(positionals) {
+function init(positionals, { phaseBranches: requested = null } = {}) {
   if (positionals.length !== 1) {
     throw new CliError('USAGE', 'Usage: pocketto-pi log init <plan_dir>');
   }
   const planDir = resolvePlanDir(positionals[0]);
   const logPath = path.join(planDir, 'log.json');
+  const flag = phaseBranches.assertRequested(requested);
 
-  if (existsSync(logPath)) return migrateExisting(planDir, logPath);
+  if (existsSync(logPath)) {
+    phaseBranches.assertUnlocked({ logPath, requested: flag });
+    return migrateExisting(planDir, logPath);
+  }
 
   // A fresh init cannot produce duplicate done_sha values: tasks are created
   // without done_sha, which is only ever set by `log update … DONE`.
@@ -256,10 +261,21 @@ function init(positionals) {
     header.plan_file = planFile;
   }
 
+  // Stacked init creates the phase-1 branch before log.json is written; any
+  // refusal throws here, so nothing has been written yet.
+  const strategy = phaseBranches.selectInitStrategy({ planDir, requested: flag });
+  const stacked = strategy.mode === 'stacked' ? phaseBranches.prepareStackedInit(planDir) : null;
+  if (stacked) {
+    header.phase_branches = stacked.header;
+    phases[0].branch = stacked.branch;
+    phases[0].base_branch = stacked.rootBaseBranch;
+  }
+
   const log = { header, phases };
   writeLog(logPath, log);
 
   const human = [`Created ${logPath}`, `  type    : ${planType}`, `  phases  : ${phases.length}`];
+  if (stacked) human.push(`  branch  : ${stacked.branch} (${stacked.branchInfo.status})`);
   for (const p of phases) {
     const ids = (p.tasks || []).map((t) => t.id).join(', ');
     human.push(`    [${p.order}] ${p.file} → ${p.status} | tasks: ${ids || 'none'}`);
@@ -269,7 +285,10 @@ function init(positionals) {
     command: 'log init',
     exit: 0,
     human,
-    data: { planDir, logPath, planType, migrated: false, phaseCount: phases.length, phases },
+    data: {
+      planDir, logPath, planType, migrated: false, phaseCount: phases.length, phases,
+      ...phaseBranches.initEnvelope({ strategy, stacked }),
+    },
   };
 }
 
@@ -860,8 +879,8 @@ function run(input = {}) {
   return withProjectionMutation(logPath, () => runUnlocked(input));
 }
 
-function runUnlocked({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha, projectionWriter = null, adapterRunner = null } = {}) {
-  if (sub === 'init') return init(positionals);
+function runUnlocked({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha, phaseBranches: requestedPhaseBranches = null, projectionWriter = null, adapterRunner = null } = {}) {
+  if (sub === 'init') return init(positionals, { phaseBranches: requestedPhaseBranches });
   if (sub === 'update') {
     if (correction) {
       if (sha) {

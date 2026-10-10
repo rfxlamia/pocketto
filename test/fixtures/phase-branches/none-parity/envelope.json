@@ -1,0 +1,34 @@
+{
+  "ok": true,
+  "command": "log init",
+  "cliVersion": "4.1.0",
+  "contract": 3,
+  "data": {
+    "planDir": "<PLAN_DIR>",
+    "logPath": "<PLAN_DIR>/log.json",
+    "planType": "phased",
+    "migrated": false,
+    "phaseCount": 1,
+    "phases": [
+      {
+        "order": 1,
+        "file": "execution-plan/phase-1.md",
+        "status": "WAITING",
+        "tasks": [
+          {
+            "id": "T1",
+            "name": "Add the first behavior",
+            "status": "WAITING"
+          },
+          {
+            "id": "T2",
+            "name": "Add the second behavior",
+            "status": "WAITING",
+            "depends": "T1"
+          }
+        ]
+      }
+    ]
+  },
+  "error": null
+}

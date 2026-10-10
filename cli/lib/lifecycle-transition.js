@@ -464,4 +464,4 @@ function runPlanCloseTransition({ planDir, logPath, log, phaseFiles, mutate, dep
   });
 }
 
-module.exports = { parseArtifactFlag, planIdFor, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };
+module.exports = { parseArtifactFlag, planIdFor, planIdForLog, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };

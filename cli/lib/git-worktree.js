@@ -78,6 +78,20 @@ function currentBranch(cwd) {
   }
 }
 
+// Branch checked out before the current one (the `@{-1}` reflog step), or
+// null when the previous checkout was not a branch. Read-only; never throws.
+function previousBranch(cwd) {
+  try {
+    const r = runGit(cwd, ['rev-parse', '--symbolic-full-name', '--quiet', '@{-1}']);
+    if (!succeeded(r)) return null;
+    const ref = r.stdout.trim();
+    const prefix = 'refs/heads/';
+    return ref.startsWith(prefix) && ref.length > prefix.length ? ref.slice(prefix.length) : null;
+  } catch {
+    return null;
+  }
+}
+
 // Commit SHA for <branch>. 'HEAD' resolves even when detached. Null if unknown.
 function branchTip(cwd, branch) {
   try {
@@ -228,6 +242,7 @@ function headTrailer(cwd, key) {
 module.exports = {
   currentBranch,
   branchTip,
+  previousBranch,
   dirtyPaths,
   stagedPaths,
   ignoredPaths,
