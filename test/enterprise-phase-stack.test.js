@@ -348,6 +348,7 @@ test('publish diverged: a remote phase branch tip absent locally blocks with PR_
   git(other, 'push', '-q', 'origin', 'pocket/p/phase-1');
   const remoteTip = remoteRef(env, 'pocket/p/phase-1');
   assert.notEqual(remoteTip, env.phase1Head);
+  const metaBefore = fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8');
 
   assert.throws(() => publish(env, gh), (error) => {
     assert.equal(error.code, 'PR_BLOCKED');
@@ -358,6 +359,7 @@ test('publish diverged: a remote phase branch tip absent locally blocks with PR_
   });
   assert.equal(remoteRef(env, 'pocket/p/phase-1'), remoteTip, 'origin tip unchanged');
   assert.equal(callsOf(gh, 'create').length, 0, 'no pr create call');
+  assert.equal(fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8'), metaBefore, 'metadata unchanged');
 });
 
 test('publish parent missing: a child whose parent branch is not on origin is blocked before any push', (t) => {
@@ -457,6 +459,7 @@ test('publish ambiguous: two open PRs for the same head block with a terminal PR
       body: 'Human text.\n',
     });
   }
+  const metaBefore = fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8');
 
   assert.throws(() => publish(env, gh), (error) => {
     assert.equal(error.code, 'PR_BLOCKED');
@@ -466,6 +469,7 @@ test('publish ambiguous: two open PRs for the same head block with a terminal PR
   });
   assert.equal(callsOf(gh, 'edit').length, 0, 'no pr edit on ambiguous identity');
   assert.equal(callsOf(gh, 'create').length, 0, 'no pr create on ambiguous identity');
+  assert.equal(fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8'), metaBefore, 'metadata unchanged');
 });
 
 test('publish retargeted: a recorded PR whose base was changed on GitHub is blocked, never reused', (t) => {
@@ -485,6 +489,7 @@ test('publish retargeted: a recorded PR whose base was changed on GitHub is bloc
   });
   enterpriseMeta.setPrIdentity(env.specDir, 'phase-2', { number: 101, url: `${REPO_URL}/pull/101` });
   const createsBefore = callsOf(gh, 'create').length;
+  const metaBefore = fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8');
 
   assert.throws(() => publish(env, gh, { phase: phase2() }), (error) => {
     assert.equal(error.code, 'PR_BLOCKED');
@@ -494,6 +499,7 @@ test('publish retargeted: a recorded PR whose base was changed on GitHub is bloc
   });
   assert.equal(callsOf(gh, 'edit').length, 0, 'no pr edit on a retargeted PR');
   assert.equal(callsOf(gh, 'create').length, createsBefore, 'no pr create on a retargeted PR');
+  assert.equal(fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8'), metaBefore, 'metadata unchanged');
 });
 
 test('publish malformed block: a reusable body with an unmatched start marker blocks without edit or metadata change', (t) => {
@@ -709,6 +715,7 @@ test('harden foreign list candidate: a listed PR on another base blocks without 
     body: 'Human text.\n',
   };
   const gh = fakeGh({ failures: { list: { exit: 0, stdout: JSON.stringify([foreign]), stderr: '', timedOut: false } } });
+  const metaBefore = fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8');
 
   assert.throws(() => publish(env, gh), (error) => {
     assert.equal(error.code, 'PR_BLOCKED');
@@ -721,6 +728,7 @@ test('harden foreign list candidate: a listed PR on another base blocks without 
   const listed = callsOf(gh, 'list');
   assert.equal(listed.length, 1);
   assert.match(valueFor(listed[0], '--json'), /(^|,)state(,|$)/, 'the list requests state so OPEN can be verified');
+  assert.equal(fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8'), metaBefore, 'metadata unchanged');
 });
 
 test('harden open state filter: a listed CLOSED PR for this exact head and base is terminal PR_BLOCKED with no edit or create', (t) => {
@@ -735,6 +743,7 @@ test('harden open state filter: a listed CLOSED PR for this exact head and base 
     body: 'Human text.\n',
   };
   const gh = fakeGh({ failures: { list: { exit: 0, stdout: JSON.stringify([closed]), stderr: '', timedOut: false } } });
+  const metaBefore = fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8');
 
   assert.throws(() => publish(env, gh), (error) => {
     assert.equal(error.code, 'PR_BLOCKED');
@@ -745,6 +754,33 @@ test('harden open state filter: a listed CLOSED PR for this exact head and base 
   });
   assert.equal(callsOf(gh, 'edit').length, 0, 'no pr edit on a CLOSED candidate');
   assert.equal(callsOf(gh, 'create').length, 0, 'no pr create on a CLOSED candidate');
+  assert.equal(fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8'), metaBefore, 'metadata unchanged');
+});
+
+test('harden head ref filter: a listed OPEN PR on this base but another head is terminal PR_BLOCKED with no edit or create', (t) => {
+  const env = setupRepo(t);
+  const otherHead = {
+    number: 79,
+    url: `${REPO_URL}/pull/79`,
+    state: 'OPEN',
+    headRefName: 'pocket/other/phase-1',
+    baseRefName: ROOT_BASE,
+    title: 'other phase 1',
+    body: 'Human text.\n',
+  };
+  const gh = fakeGh({ failures: { list: { exit: 0, stdout: JSON.stringify([otherHead]), stderr: '', timedOut: false } } });
+  const metaBefore = fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8');
+
+  assert.throws(() => publish(env, gh), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, 'foreign PR in list');
+    assert.equal(error.retryable, false);
+    assert.equal(error.status, 'terminal');
+    return true;
+  });
+  assert.equal(callsOf(gh, 'edit').length, 0, 'no pr edit on a foreign head candidate');
+  assert.equal(callsOf(gh, 'create').length, 0, 'no pr create on a foreign head candidate');
+  assert.equal(fs.readFileSync(path.join(env.specDir, '.pocket-meta.json'), 'utf8'), metaBefore, 'metadata unchanged');
 });
 
 test('harden list not array: a non-array pr list is retryable GH_MALFORMED_OUTPUT with no create', (t) => {
