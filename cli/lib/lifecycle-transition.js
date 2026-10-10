@@ -357,6 +357,47 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
   return res.event;
 }
 
+// Emission hook for `log handoff` (stacked plans): commits one `phase-closed`
+// event for phase `order`, referencing the phase file and the immutable
+// closeout snapshot, plus the next phase's branch identity as a planPatch.
+// An identical rerun replays in the store (same payload hash), so no second
+// event is appended.
+//
+// Plans without a matching lifecycle document (no slug, no spec dir, no
+// document, or another plan_id) skip the event and return null, like the
+// sibling hooks; the caller still mirrors identity into log.json.
+//
+// Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
+function emitPhaseClosed({ planDir, phaseFile, order, snapshot, nextIdentity = null }) {
+  const planId = planIdForLog(planDir);
+  if (!planId) return null;
+  const specDir = lifecycleSpecDirForPlan(planDir);
+  if (!specDir) return null;
+  const existing = readLifecycleDoc(specDir);
+  if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  const artifacts = [
+    phaseEvidenceRef(planDir, phaseFile),
+    { root: 'plan', kind: 'closeout-snapshot', path: snapshot.path, sha256: snapshot.sha256, revision: 1 },
+  ];
+  const transition = {
+    specDir,
+    planDir,
+    planId,
+    type: 'phase-closed',
+    artifacts,
+    phaseKey: `phase-${order}`,
+    deps: { now: lifecycleNow },
+  };
+  if (nextIdentity) {
+    transition.planPatch = { phases: { [nextIdentity.phaseKey]: { branch: nextIdentity.branch, base_branch: nextIdentity.base_branch } } };
+  }
+  const res = commitTransition(transition);
+  if (!res.ok) {
+    throw new CliError(res.code, res.message);
+  }
+  return res.event;
+}
+
 // Runs the adapter runner for a committed event exactly once the projection
 // write has succeeded. Never invoked on a projection failure — the event
 // stays pending with dispatch deferred. The default runner keeps the Cycle-6
@@ -464,4 +505,4 @@ function runPlanCloseTransition({ planDir, logPath, log, phaseFiles, mutate, dep
   });
 }
 
-module.exports = { parseArtifactFlag, planIdFor, planIdForLog, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };
+module.exports = { parseArtifactFlag, planIdFor, planIdForLog, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, emitPhaseClosed, runLifecycleTransition, transitionDeps, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };

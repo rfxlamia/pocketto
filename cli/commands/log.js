@@ -15,6 +15,7 @@ const { currentBranch } = require('../lib/git-worktree');
 const { pendingDrainActions } = require('../lib/next-actions');
 const { planArtifactWarnings } = require('../lib/artifact-ignore');
 const phaseBranches = require('../lib/phase-branches');
+const phaseHandoff = require('../lib/phase-handoff');
 const { PIPELINE } = require('../lib/version');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
@@ -872,6 +873,7 @@ function run(input = {}) {
   let expectedCount = null;
   if (sub === 'init' || sub === 'close') expectedCount = 1;
   else if (sub === 'update') expectedCount = correction ? 2 : 3;
+  else if (sub === 'handoff') expectedCount = 2;
   if (expectedCount === null || args.length !== expectedCount) return runUnlocked(input);
 
   const planDir = resolvePlanDir(args[0]);
@@ -891,7 +893,10 @@ function runUnlocked({ sub, positionals, task, correction, forTask, sha, allowDu
     return update(positionals, task, { sha, allowDuplicateSha, projectionWriter, adapterRunner });
   }
   if (sub === 'close') return close(positionals, { projectionWriter, adapterRunner });
-  throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'log' subcommand: ${sub || '(none)'}. Use init | update | close.`);
+  if (sub === 'handoff') {
+    return phaseHandoff.handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter, adapterRunner });
+  }
+  throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'log' subcommand: ${sub || '(none)'}. Use init | update | close | handoff.`);
 }
 
 module.exports = { run };
