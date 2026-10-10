@@ -119,7 +119,12 @@ function specApprovalProof(metadata, event) {
     : null;
 }
 
+// phase-handler.js requires this module, so its deferred helpers are loaded lazily to avoid a require cycle.
 function phaseCompletionProof(metadata, event) {
+  const deferred = require('./phase-handler');
+  if (event.delivery && event.delivery.proof_ref === deferred.DEFERRED_PROOF_REF) {
+    return { proof_ref: deferred.DEFERRED_PROOF_REF, proof_hash: deferred.deferredProofHash(event) };
+  }
   const refs = event.artifact_refs.filter((artifact) => artifact.root === 'plan' && artifact.kind === 'phase-evidence');
   const ref = refs[0];
   const match = ref && typeof ref.path === 'string' ? /phase[-_](\d+)/i.exec(ref.path) : null;

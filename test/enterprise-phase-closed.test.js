@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const enterpriseMeta = require('../enterprise/meta');
 const { handlePhaseComplete } = require('../enterprise/phase-handler');
+const { createLifecycleDelivery } = require('../enterprise/lifecycle-delivery');
 const { loadContext, phaseBranchFor } = require('../enterprise/phase-handler-context');
 const { resolveRepository, resolvePhasePr } = require('../enterprise/phase-handler-targets');
 const { createFixture } = require('../test-support/enterprise-phase/fixture');
@@ -154,6 +155,63 @@ test('deferred replay: tampered deferred proof hash is a terminal PHASE_PROOF_MI
   assert.equal(response.error.code, 'PHASE_PROOF_MISMATCH');
   assert.match(response.error.message, /deferred proof/, 'must fail on the deferred proof check, not the metadata proof check');
   assert.deepEqual(fixture.remote.calls, [], 'tampered deferred proof must fail before any GitHub call');
+});
+
+// RED cycle 5
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration (drain completion path: createLifecycleDelivery prepare + handler + complete)
+// Test intent: Given a stacked phase-2 pending event, When the handler returns the deferred success and the drain completion path runs, Then delivery completes as succeeded with no error, the watermark advances, and zero gh calls run across both steps.
+// Exercise through: createLifecycleDelivery(...).prepare / handlePhaseComplete / .complete
+// Test doubles: fake gh runner counting calls (fixture.remote.calls)
+// Expected RED: reconciling / ADAPTER_PROOF_NOT_DURABLE (lookup reads only metadata review.proof)
+// Exact command: `node --test --test-name-pattern="stacked deferred completes durably" test/enterprise-phase-closed.test.js`
+
+test('stacked deferred completes durably: deferred success completes delivery with zero gh calls', (t) => {
+  const fixture = stackedFixture(t);
+  const delivery = createLifecycleDelivery(fixture.root);
+  const prepared = delivery.prepare(fixture.event);
+  assert.ok(prepared.state, JSON.stringify(prepared.response));
+
+  const response = handlePhaseComplete(prepared.event, handlerOptions(fixture));
+  assert.equal(response.proof_ref, DEFERRED_PROOF_REF, JSON.stringify(response));
+  const completed = delivery.complete(prepared.event, response, prepared.state);
+
+  assert.equal(completed.status, 'succeeded', JSON.stringify(completed));
+  assert.equal(completed.error, undefined, JSON.stringify(completed));
+  assert.equal(completed.proof_ref, DEFERRED_PROOF_REF);
+  assert.equal(completed.proof_hash, expectedDeferredHash(fixture.event));
+  assert.equal(enterpriseMeta.readLifecycleDelivery(prepared.state.context.specDir, PLAN_ID, prepared.state.context).last_applied_revision, 1,
+    'completed deferred delivery must advance the watermark');
+  assert.deepEqual(fixture.remote.calls, [], 'deferred drain completion must make no GitHub call');
+});
+
+// RED cycle 6
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration (drain completion path)
+// Test intent: Given a stacked phase-2 deferred success whose proof_hash is altered by one character, When the completion path runs, Then terminal PHASE_PROOF_MISMATCH with the deferred-proof message, no watermark advance, and zero gh calls.
+// Exercise through: createLifecycleDelivery(...).prepare / handlePhaseComplete / .complete
+// Test doubles: fake gh runner counting calls (fixture.remote.calls)
+// Expected RED: reconciling / ADAPTER_PROOF_NOT_DURABLE (tampered hash is not compared against the deferred derivation)
+// Exact command: `node --test --test-name-pattern="deferred proof tampered rejected" test/enterprise-phase-closed.test.js`
+
+test('deferred proof tampered rejected: altered deferred proof hash is terminal PHASE_PROOF_MISMATCH', (t) => {
+  const fixture = stackedFixture(t);
+  const delivery = createLifecycleDelivery(fixture.root);
+  const prepared = delivery.prepare(fixture.event);
+  const response = handlePhaseComplete(prepared.event, handlerOptions(fixture));
+  assert.equal(response.status, 'succeeded', JSON.stringify(response));
+  const last = response.proof_hash.slice(-1);
+  const tamperedHash = response.proof_hash.slice(0, -1) + (last === '0' ? '1' : '0');
+  assert.notEqual(tamperedHash, response.proof_hash);
+
+  const completed = delivery.complete(prepared.event, { ...response, proof_hash: tamperedHash }, prepared.state);
+
+  assert.equal(completed.status, 'terminal', JSON.stringify(completed));
+  assert.equal(completed.error.code, 'PHASE_PROOF_MISMATCH', JSON.stringify(completed));
+  assert.match(completed.error.message, /deferred proof/, 'must fail on the deferred proof derivation, not a generic durability check');
+  assert.equal(enterpriseMeta.readLifecycleDelivery(prepared.state.context.specDir, PLAN_ID, prepared.state.context).last_applied_revision, 0,
+    'tampered deferred proof must not advance the watermark');
+  assert.deepEqual(fixture.remote.calls, [], 'tampered deferred proof must make no GitHub call');
 });
 
 // RED cycle 4

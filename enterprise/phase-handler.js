@@ -227,4 +227,4 @@ function phaseEntry(meta, phaseKey) {
   return meta.phases[phaseKey];
 }
 
-module.exports = { handlePhaseComplete };
+module.exports = { handlePhaseComplete, DEFERRED_PROOF_REF, deferredProofHash };

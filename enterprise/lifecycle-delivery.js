@@ -6,6 +6,7 @@ const { serializeResponse } = require('./adapter');
 const enterpriseMeta = require('./meta');
 const { loadContext } = require('./phase-handler-context');
 const { isInside, staleArtifactError, validateCommittedArtifacts } = require('./lifecycle-proof');
+const { DEFERRED_PROOF_REF } = require('./phase-handler');
 
 const METADATA_ERROR_CODES = {
   'spec-approved': {
@@ -219,13 +220,23 @@ function readDurableHandlerProof(event, response, state) {
     };
   }
 
+  const deferred = response.proof_ref === DEFERRED_PROOF_REF;
+  const lookupEvent = deferred
+    ? { ...event, delivery: { ...event.delivery, proof_ref: DEFERRED_PROOF_REF } }
+    : event;
   let proof;
   try {
-    proof = enterpriseMeta.lifecycleEventProof(state.context.specDir, event, state.context);
+    proof = enterpriseMeta.lifecycleEventProof(state.context.specDir, lookupEvent, state.context);
   } catch {
     return {
       response: lifecycleDeliveryResponse(event, 'reconciling', 'ADAPTER_PROOF_READ_FAILED', true,
         'Enterprise handler succeeded but its canonical proof could not be read; retry delivery to reconcile proof before mutation.', response),
+    };
+  }
+  if (deferred && proof && proof.proof_ref === DEFERRED_PROOF_REF && proof.proof_hash !== response.proof_hash) {
+    return {
+      response: lifecycleDeliveryResponse(event, 'terminal', 'PHASE_PROOF_MISMATCH', false,
+        'Enterprise handler success does not match its deferred proof; resolve manually before completing delivery.'),
     };
   }
   if (!proof || proof.proof_ref !== response.proof_ref || proof.proof_hash !== response.proof_hash) {
