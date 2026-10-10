@@ -196,4 +196,4 @@ function requiredPr(message) {
 }
 
 
-module.exports = { resolveRepository, resolveOwnedIssue, resolvePhasePr };
+module.exports = { resolveRepository, resolveOwnedIssue, resolvePhasePr, sameRepository };

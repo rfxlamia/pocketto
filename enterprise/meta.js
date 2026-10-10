@@ -206,6 +206,33 @@ function setPrIdentity(specDir, phase, { number, url } = {}) {
   return getPrIdentity(specDir, phase);
 }
 
+// Stack identity for a phase PR (T11). Written only after a successful publish,
+// so a blocked or failed publish never touches metadata. Merges into the phase's
+// github_pr entry and leaves every sibling key (issue, review, approval) unchanged.
+function setPrStackIdentity(specDir, phase, identity = {}, context) {
+  if (typeof phase !== 'string' || phase.length === 0) {
+    throw new Error('ENTERPRISE_META: phase must be a non-empty string');
+  }
+  const { number, url, head, base, parent_pr: parentPr, head_sha: headSha } = identity;
+  validatePositiveInteger(number, 'PR number');
+  if (url !== undefined && (typeof url !== 'string' || url.length === 0)) {
+    throw new Error('ENTERPRISE_META: PR url must be a non-empty string');
+  }
+  if (typeof head !== 'string' || head.length === 0) throw new Error('ENTERPRISE_META: PR head must be a non-empty string');
+  if (typeof base !== 'string' || base.length === 0) throw new Error('ENTERPRISE_META: PR base must be a non-empty string');
+  if (parentPr !== null && parentPr !== undefined) validatePositiveInteger(parentPr, 'parent PR number');
+  if (typeof headSha !== 'string' || !PUSH_APPROVAL_SHA.test(headSha)) {
+    throw new Error('ENTERPRISE_META: PR head_sha must be 40 lowercase hex characters');
+  }
+  const patch = { number, head, base, head_sha: headSha };
+  if (url !== undefined) patch.url = url;
+  patch.parent_pr = parentPr === undefined ? null : parentPr;
+  const meta = readMetaFor(specDir, context);
+  coreMeta.setPr(meta, phase, patch);
+  writeMetaFor(specDir, meta, context);
+  return getPrIdentity(specDir, phase);
+}
+
 // --- Per-SHA push approval (Enterprise-owned consent fallback) ---
 
 const PUSH_APPROVAL_SHA = /^[0-9a-f]{40}$/;
@@ -279,6 +306,7 @@ module.exports = {
   setIssueIdentity,
   getPrIdentity,
   setPrIdentity,
+  setPrStackIdentity,
   getPushApproval,
   setPushApproval,
   issueProofRef,
