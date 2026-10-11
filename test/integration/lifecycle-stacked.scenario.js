@@ -172,25 +172,29 @@ function handOffPhase(fixture, order) {
   return coreCommand(fixture, 'log handoff', ['log', 'handoff', fixture.planDir, phasePath(order)]).data;
 }
 
+// Full phase delivery: REVIEW, handoff, then the drain that delivers phase-closed.
+function deliverPhase(fixture, order) {
+  const review = reviewPhase(fixture, order);
+  const handoff = handOffPhase(fixture, order);
+  const drained = drain(fixture);
+  return { review, handoff, drained };
+}
+
 test('stacked end to end: bases', (t) => {
   const fixture = createStackedFixture(t);
   setUpPlan(fixture);
 
-  const reviewOne = reviewPhase(fixture, 1);
+  const { review: reviewOne } = deliverPhase(fixture, 1);
   assert.deepEqual(reviewOne.data.deliveries.map(({ event_id, status }) => [event_id, status]), [
     [`${PLAN_ID}:phase-complete:r2`, 'succeeded'],
   ], 'phase-1 phase-complete must succeed as deferred');
   assert.equal(reviewOne.ghCalls, 0, 'phase-1 phase-complete drain must make zero gh calls');
-  handOffPhase(fixture, 1);
-  drain(fixture);
 
-  const reviewTwo = reviewPhase(fixture, 2);
+  const { review: reviewTwo } = deliverPhase(fixture, 2);
   assert.deepEqual(reviewTwo.data.deliveries.map(({ event_id, status }) => [event_id, status]), [
     [`${PLAN_ID}:phase-complete:r4`, 'succeeded'],
   ], 'phase-2 phase-complete must succeed as deferred');
   assert.equal(reviewTwo.ghCalls, 0, 'phase-2 phase-complete drain must make zero gh calls');
-  handOffPhase(fixture, 2);
-  drain(fixture);
 
   const creates = prCreates(fixture);
   const rootPr = creates.findIndex((args) => flag(args, '--base') === ROOT_BASE && flag(args, '--head') === phaseBranch(1));
@@ -204,9 +208,7 @@ test('stacked end to end: core no gh', (t) => {
   const fixture = createStackedFixture(t);
   const baseline = ghCallCount(fixture);
   setUpPlan(fixture);
-  reviewPhase(fixture, 1);
-  handOffPhase(fixture, 1);
-  drain(fixture);
+  deliverPhase(fixture, 1);
   reviewPhase(fixture, 2);
   handOffPhase(fixture, 2);
   coreCommand(fixture, 'log close', ['log', 'close', fixture.planDir]);
@@ -258,10 +260,8 @@ test('stacked end to end: plan.phases identity', (t) => {
 test('stacked end to end: pushed tip', (t) => {
   const fixture = createStackedFixture(t);
   setUpPlan(fixture);
-  reviewPhase(fixture, 1);
-  const handoff = handOffPhase(fixture, 1);
+  const { handoff } = deliverPhase(fixture, 1);
   assert.equal(handoff.steps.commit, 'committed', 'tracked plan artifacts must produce a handoff commit');
-  drain(fixture);
 
   const handoffCommits = gitOut(fixture, 'log', '--all', '--format=%H', '--fixed-strings',
     `--grep=Pocket-Handoff: ${PLAN_ID}/phase-1`).split('\n').filter(Boolean);
@@ -275,10 +275,9 @@ test('stacked end to end: pushed tip', (t) => {
 test('stacked end to end: notices', (t) => {
   const fixture = createStackedFixture(t, { ignored: true });
   setUpPlan(fixture);
-  reviewPhase(fixture, 1);
-  const handoff = handOffPhase(fixture, 1);
+  const { handoff, drained } = deliverPhase(fixture, 1);
   t.diagnostic(`ignored fixture: handoff commit step = ${handoff.steps.commit}`);
-  const { data } = drain(fixture);
+  const { data } = drained;
 
   const delivery = data.deliveries.find((item) => item.event_id.includes(':phase-closed:'));
   assert.ok(delivery, 'phase-1 phase-closed must be delivered by the drain after handoff');
@@ -304,9 +303,7 @@ test('stacked end to end: notices', (t) => {
 test('stacked end to end: close ordering', (t) => {
   const fixture = createStackedFixture(t);
   setUpPlan(fixture);
-  reviewPhase(fixture, 1);
-  handOffPhase(fixture, 1);
-  drain(fixture);
+  deliverPhase(fixture, 1);
   reviewPhase(fixture, 2);
   handOffPhase(fixture, 2);
   // The last phase is handed off before close: phase-closed after plan-closed is rejected (LIFECYCLE_BAD_STATE).
