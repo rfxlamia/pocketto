@@ -15,3 +15,4 @@ require('./lifecycle-review-threads.scenario');
 require('./lifecycle-enterprise-read-retry.scenario');
 require('./lifecycle-evidence-classification.scenario');
 require('./lifecycle-error-taxonomy.scenario');
+require('./lifecycle-stacked.scenario');
