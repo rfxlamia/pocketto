@@ -7,7 +7,7 @@ const enterpriseMeta = require('./meta');
 const { loadContext } = require('./phase-handler-context');
 const { isInside, staleArtifactError, validateCommittedArtifacts } = require('./lifecycle-proof');
 const { DEFERRED_PROOF_REF } = require('./phase-handler');
-const { ignoredNoticeForEvent, withIgnoredArtifactNotice } = require('./phase-closed-handler');
+const { withPrepareNotice, carryHandlerNotices } = require('./ignored-notice');
 
 const METADATA_ERROR_CODES = {
   'spec-approved': {
@@ -215,27 +215,7 @@ function validatePhaseClosedBeforeHandler(event, context) {
   return null;
 }
 
-// Display-only: the notice a prepare-stage response of a phase-closed or plan-closed event carries when
-// its plan directory resolves. A response produced before that (no metadata directory) gets none.
-function prepareNoticeFor(projectRoot, event) {
-  if (!event || (event.type !== 'phase-closed' && event.type !== 'plan-closed')) return null;
-  try {
-    const context = lifecycleDeliveryContext(projectRoot, event.plan_id);
-    const loaded = loadContext(event, { projectRoot: context.registeredProjectRoot, specDir: context.specDir });
-    return ignoredNoticeForEvent(event, { projectRoot: loaded.root, planDir: loaded.planDir, specDir: loaded.specDir });
-  } catch {
-    return null;
-  }
-}
-
-// One wrapper covers every prepare-stage return, so no return threads the notice by hand.
 function prepareLifecycleDelivery(projectRoot, event) {
-  const prepared = prepareLifecycleDeliveryState(projectRoot, event);
-  if (!prepared.response) return prepared;
-  return { ...prepared, response: withIgnoredArtifactNotice(prepared.response, prepareNoticeFor(projectRoot, event)) };
-}
-
-function prepareLifecycleDeliveryState(projectRoot, event) {
   const loaded = readDeliveryState(projectRoot, event);
   if (loaded.response) return loaded;
   const { context, delivery } = loaded;
@@ -288,18 +268,7 @@ function readDurableHandlerProof(event, response, state) {
   return { proof };
 }
 
-// Rewritten completion responses are built fresh and would drop the handler's notices. Carry them over.
-function carryHandlerNotices(completed, handlerResponse) {
-  const notices = Array.isArray(handlerResponse.notices) ? handlerResponse.notices : [];
-  if (completed === handlerResponse || notices.length === 0 || Array.isArray(completed.notices)) return completed;
-  return { ...completed, notices };
-}
-
 function completeLifecycleDelivery(event, response, state) {
-  return carryHandlerNotices(completeHandlerDelivery(event, response, state), response);
-}
-
-function completeHandlerDelivery(event, response, state) {
   if (!state || state.replay || response.status !== 'succeeded') return response;
   const persisted = readDurableHandlerProof(event, response, state);
   if (persisted.response) return persisted.response;
@@ -320,8 +289,9 @@ function completeHandlerDelivery(event, response, state) {
 
 function createLifecycleDelivery(projectRoot) {
   return {
-    prepare: (event) => prepareLifecycleDelivery(projectRoot, event),
-    complete: completeLifecycleDelivery,
+    // Every prepare-stage return gets the notice from one place, so no return threads it by hand.
+    prepare: (event) => withPrepareNotice(prepareLifecycleDelivery(projectRoot, event), projectRoot, event, lifecycleDeliveryContext),
+    complete: (event, response, state) => carryHandlerNotices(completeLifecycleDelivery(event, response, state), response),
   };
 }
 

@@ -29,7 +29,7 @@ const {
   upsertTasklist,
 } = require('./closure-tasklist');
 const { canonicalArtifactRefs } = require('./lifecycle-proof');
-const { ignoredNoticeForEvent, withIgnoredArtifactNotice } = require('./phase-closed-handler');
+const { ignoredNoticeForEvent, withIgnoredArtifactNotice } = require('./ignored-notice');
 
 const RECONCILABLE_DELIVERY_STATUSES = new Set(['claimed', 'pending', 'retryable', 'reconciling']);
 const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
