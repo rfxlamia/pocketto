@@ -145,8 +145,19 @@ function fakeGh(options = {}) {
     return json(matches.map(publicPr));
   }
 
+  // GitHub cannot open a PR for a head branch that is not on origin. `state.originDir` is set by
+  // `publish`; a test that never publishes keeps the check off.
+  function headOnOrigin(branch) {
+    if (!state.originDir) return true;
+    const res = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: state.originDir, encoding: 'utf8' });
+    return res.status === 0;
+  }
+
   function createPr(args) {
     if (state.failures.create) return state.failures.create;
+    if (!headOnOrigin(valueFor(args, '--head'))) {
+      return fail(`GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between base and head, Head ref must be a branch (createPullRequest)`);
+    }
     const number = state.nextNumber;
     state.nextNumber += 1;
     const pr = {
@@ -193,6 +204,7 @@ function phase2() {
 }
 
 function publish(env, gh, overrides = {}) {
+  gh.state.originDir = env.origin;
   return publishPhase({
     projectRoot: env.work,
     specDir: env.specDir,
@@ -1214,7 +1226,7 @@ test('fork hijack recorded: a recorded PR number that resolves to a fork PR is n
   assert.equal(gh.state.prs[0].body, 'attacker body');
 });
 
-function parentEndedScenario(t, { parentState, reason, deleteParentBranch, retryable = false }) {
+function parentEndedScenario(t, { parentState, reason, deleteParentBranch, retryable = false, pushes = 0 }) {
   const env = setupRepo(t);
   const gh = fakeGh();
   const parent = publish(env, gh);
@@ -1230,18 +1242,29 @@ function parentEndedScenario(t, { parentState, reason, deleteParentBranch, retry
     assert.equal(error.retryable, retryable, retryable ? 'retryable: the operator can resolve it and rerun' : 'terminal: a rerun fails the same way');
     assert.ok(error.message.includes(`#${parent.pr.number}`), 'message names the parent PR');
     assert.ok(!error.message.includes('fix the base on GitHub'), 'no false base-fix advice');
+    if (retryable) {
+      assert.ok(error.message.includes('is on origin'), 'message says the branch is already pushed');
+      assert.ok(error.message.includes('6 delivery attempts'), 'message names the drain attempt limit');
+      assert.ok(error.message.length <= 500, 'message fits the adapter notice bound');
+    }
     return true;
   });
-  assert.equal(pushCalls(git2).length, 0, 'no push');
+  assert.equal(pushCalls(git2).length, pushes, pushes ? 'the child head is pushed so the operator can open its PR' : 'no push');
+  for (const args of pushCalls(git2)) assert.ok(!args.some((arg) => /^--force|^-f$|^\+/.test(arg)), 'the push is never forced');
+  assert.equal(originHasBranch(env, phase2().branch), pushes > 0, 'child head on origin only when pushed');
   assert.equal(callsOf(gh, 'create').length, 1, 'only the parent PR was created');
 }
 
-test('parent merged: a child with no PR on the parent base is a retryable PR_BLOCKED with no push or create', (t) => {
-  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: false, retryable: true });
+function originHasBranch(env, branch) {
+  return spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: env.origin }).status === 0;
+}
+
+test('parent merged: a child with no PR on the parent base pushes its head, then is a retryable PR_BLOCKED with no create', (t) => {
+  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: false, retryable: true, pushes: 1 });
 });
 
 test('parent merged and deleted: a child whose parent branch was removed is told to open the PR, not to publish the parent', (t) => {
-  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: true, retryable: true });
+  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: true, retryable: true, pushes: 1 });
 });
 
 // A merged parent is the normal stacked flow. GitHub retargets the child PR to the parent's base,

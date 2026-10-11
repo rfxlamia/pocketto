@@ -124,12 +124,15 @@ function resolveParent(options, repo, phase, parentPr) {
 }
 
 // Retryable: the operator resolves it by opening (or retargeting) the child PR against the parent's
-// base on GitHub, and the rerun reuses that PR.
+// base on GitHub, and the rerun reuses that PR. The head branch is already on origin by then (see
+// `publishPhase`). The message names the drain attempt limit because each drain rerun spends one
+// attempt; a direct `publish-phase` rerun does not.
 function mergedParentBlocked(phase, parentPr, base) {
   const target = base ? `against ${base}` : 'against the base the parent merged into';
   return prBlocked('parent PR merged',
     `PR_BLOCKED: parent PR #${parentPr} (${phase.parentKey}) is already merged, so Pocket will not stack ${phase.key} on it and never creates, retargets, or rebases. `
-    + `Open or retarget the ${phase.key} PR (head ${phase.branch}) ${target} on GitHub, then rerun; Pocket reuses that PR.`, true);
+    + `Branch ${phase.branch} is on origin. Open or retarget the ${phase.key} PR ${target} on GitHub, then run publish-phase again; Pocket reuses that PR. `
+    + 'Each lifecycle drain rerun uses one of 6 delivery attempts, after which the event is terminal.', true);
 }
 
 // Every local precondition, in the order it has always run. Nothing here mutates remote
@@ -209,11 +212,16 @@ function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, r
     projectRoot, specDir, planId, phase, closeoutSnapshot, registration, options,
   });
   // A merged parent never gets a fresh PR from Pocket: only a PR the operator opened or GitHub
-  // retargeted is reused. The lookup is read-only, so that refusal also happens before the push.
+  // retargeted is reused. The blocked refusal still pushes the head first (non-force, and the
+  // consent was checked above), because the operator cannot open the PR on GitHub for a branch
+  // that is not on origin.
   let found = null;
   if (parent.merged) {
     found = findExistingPr(options, specDir, repo, target);
-    if (!found.candidate) throw parent.blocked;
+    if (!found.candidate) {
+      if (remoteSha !== headSha) pushBranch(options, projectRoot, phase.branch);
+      throw parent.blocked;
+    }
   }
   if (remoteSha !== headSha) pushBranch(options, projectRoot, phase.branch);
 
