@@ -21,6 +21,10 @@ const METADATA_ERROR_CODES = {
     ENTERPRISE_META_MISSING: 'CLOSEOUT_METADATA_MISSING',
     ENTERPRISE_META_PATH_INVALID: 'CLOSEOUT_METADATA_PATH_INVALID',
   },
+  'phase-closed': {
+    ENTERPRISE_META_MISSING: 'PHASE_CLOSED_METADATA_MISSING',
+    ENTERPRISE_META_PATH_INVALID: 'PHASE_CLOSED_METADATA_PATH_INVALID',
+  },
 };
 
 function lifecycleDeliveryContext(projectRoot, planId) {
@@ -146,7 +150,7 @@ function prepareAlreadyAppliedEvent(event, context) {
 
 function selectedArtifactContext(event, context) {
   if (event.type === 'spec-approved') return { specDir: context.specDir };
-  if (event.type === 'phase-complete' || event.type === 'plan-closed') {
+  if (event.type === 'phase-complete' || event.type === 'plan-closed' || event.type === 'phase-closed') {
     return loadContext(event, {
       projectRoot: context.registeredProjectRoot,
       specDir: context.specDir,
@@ -197,6 +201,19 @@ function recoverReconcilingEvent(event, context, delivery) {
   return { response: lifecycleDeliverySuccess(event, recovery.proof) };
 }
 
+// A reconciling event was already validated by recoverReconcilingEvent, so it is skipped here.
+// Validating before the handler keeps a stale phase-closed artifact from reaching remote work.
+function validatePhaseClosedBeforeHandler(event, context) {
+  const status = event.delivery && event.delivery.status;
+  if (event.type !== 'phase-closed' || status === 'reconciling') return null;
+  try {
+    validateCommittedArtifacts(event, selectedArtifactContext(event, context));
+  } catch (error) {
+    return lifecycleArtifactFailure(event, error);
+  }
+  return null;
+}
+
 function prepareLifecycleDelivery(projectRoot, event) {
   const loaded = readDeliveryState(projectRoot, event);
   if (loaded.response) return loaded;
@@ -209,6 +226,8 @@ function prepareLifecycleDelivery(projectRoot, event) {
   }
   const recovered = recoverReconcilingEvent(event, context, delivery);
   if (recovered) return recovered;
+  const stale = validatePhaseClosedBeforeHandler(event, context);
+  if (stale) return stale;
   return { event, state: { context, replay: false } };
 }
 
