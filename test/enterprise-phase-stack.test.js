@@ -1194,6 +1194,8 @@ test('fork hijack list: an open PR from a fork with our phase head is ignored, n
 
   assert.equal(result.created, true, 'a fresh PR is created instead of adopting the fork PR');
   assert.equal(result.pr.number, 100);
+  assert.deepEqual(result.notices.map((notice) => notice.code), ['PR_CREATED', 'FORK_PR_IGNORED'], 'the dropped fork PR is surfaced');
+  assert.ok(!result.notices[1].message.includes('attacker'), 'the notice never echoes remote text');
   assert.equal(callsOf(gh, 'edit').length, 0, 'the fork PR body is never edited');
   assert.equal(gh.state.prs[0].body, 'attacker body');
 });
@@ -1212,7 +1214,7 @@ test('fork hijack recorded: a recorded PR number that resolves to a fork PR is n
   assert.equal(gh.state.prs[0].body, 'attacker body');
 });
 
-function parentEndedScenario(t, { parentState, reason, deleteParentBranch }) {
+function parentEndedScenario(t, { parentState, reason, deleteParentBranch, retryable = false }) {
   const env = setupRepo(t);
   const gh = fakeGh();
   const parent = publish(env, gh);
@@ -1225,7 +1227,7 @@ function parentEndedScenario(t, { parentState, reason, deleteParentBranch }) {
   assert.throws(() => publish(env, gh, { phase: phase2(), gitRunner: git2.run }), (error) => {
     assert.equal(error.code, 'PR_BLOCKED');
     assert.equal(error.reason, reason);
-    assert.equal(error.retryable, false, 'terminal: a rerun fails the same way');
+    assert.equal(error.retryable, retryable, retryable ? 'retryable: the operator can resolve it and rerun' : 'terminal: a rerun fails the same way');
     assert.ok(error.message.includes(`#${parent.pr.number}`), 'message names the parent PR');
     assert.ok(!error.message.includes('fix the base on GitHub'), 'no false base-fix advice');
     return true;
@@ -1234,12 +1236,91 @@ function parentEndedScenario(t, { parentState, reason, deleteParentBranch }) {
   assert.equal(callsOf(gh, 'create').length, 1, 'only the parent PR was created');
 }
 
-test('parent merged: a child whose merged parent branch still exists is terminal PR_BLOCKED with no push', (t) => {
-  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: false });
+test('parent merged: a child with no PR on the parent base is a retryable PR_BLOCKED with no push or create', (t) => {
+  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: false, retryable: true });
 });
 
-test('parent merged and deleted: a child whose parent branch was removed is not told to publish the parent', (t) => {
-  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: true });
+test('parent merged and deleted: a child whose parent branch was removed is told to open the PR, not to publish the parent', (t) => {
+  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: true, retryable: true });
+});
+
+// A merged parent is the normal stacked flow. GitHub retargets the child PR to the parent's base,
+// and Pocket reuses that PR instead of blocking. It never creates a PR on top of a merged parent.
+function mergedParentEnv(t, { childBase, childOpen = true } = {}) {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const parent = publish(env, gh);
+  git(env.work, 'switch', '-q', '-c', 'pocket/p/phase-2');
+  commitFile(env.work, 'phase2.txt', 'phase two\n', 'phase two work');
+  let child = null;
+  if (childBase) {
+    child = {
+      number: 200,
+      url: `${REPO_URL}/pull/200`,
+      state: childOpen ? 'OPEN' : 'CLOSED',
+      headRefName: 'pocket/p/phase-2',
+      baseRefName: childBase,
+      title: 'p phase 2',
+      body: 'Human text.\n',
+    };
+    gh.state.prs.push(child);
+  }
+  gh.state.prs[0].state = 'MERGED';
+  git(env.origin, 'update-ref', '-d', `refs/heads/${phase1().branch}`);
+  return { env, gh, parent, child };
+}
+
+test('parent merged, child retargeted to the root: the existing child PR is reused, never created or retargeted', (t) => {
+  const { env, gh, parent, child } = mergedParentEnv(t, { childBase: ROOT_BASE });
+
+  const result = publish(env, gh, { phase: phase2() });
+
+  assert.equal(result.created, false);
+  assert.equal(result.pr.number, child.number);
+  assert.equal(result.notice.code, 'PR_REUSED');
+  assert.equal(result.base, ROOT_BASE, 'the published base is the retargeted base');
+  assert.equal(callsOf(gh, 'create').length, 1, 'only the parent PR was ever created');
+  assert.ok(child.body.includes(`Parent PR: #${parent.pr.number}`), 'the stack block still names the merged parent');
+  assert.ok(child.body.includes(`Base branch: \`${ROOT_BASE}\``), 'the stack block names the real base');
+  assert.ok(child.body.startsWith('Human text.'), 'human text is kept');
+  const identity = enterpriseMeta.getPrIdentity(env.specDir, 'phase-2');
+  assert.equal(identity.number, child.number);
+});
+
+test('parent merged, recorded child PR retargeted to the root: reused through metadata', (t) => {
+  const { env, gh, child } = mergedParentEnv(t, { childBase: ROOT_BASE });
+  enterpriseMeta.setPrIdentity(env.specDir, 'phase-2', { number: child.number, url: child.url });
+
+  const result = publish(env, gh, { phase: phase2() });
+
+  assert.equal(result.created, false);
+  assert.equal(result.pr.number, child.number);
+  assert.equal(callsOf(gh, 'create').length, 1);
+});
+
+test('parent merged, recorded child PR still on the old base: blocked with the base advice', (t) => {
+  const { env, gh, child } = mergedParentEnv(t, { childBase: 'pocket/p/phase-1' });
+  enterpriseMeta.setPrIdentity(env.specDir, 'phase-2', { number: child.number, url: child.url });
+
+  assert.throws(() => publish(env, gh, { phase: phase2() }), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, 'base retargeted');
+    assert.ok(error.message.includes(ROOT_BASE), 'the message names the base the PR must target');
+    return true;
+  });
+  assert.equal(callsOf(gh, 'create').length, 1);
+  assert.equal(callsOf(gh, 'edit').length, 0);
+});
+
+test('parent merged, child PR closed: not reused and not recreated', (t) => {
+  const { env, gh } = mergedParentEnv(t, { childBase: ROOT_BASE, childOpen: false });
+
+  assert.throws(() => publish(env, gh, { phase: phase2() }), (error) => {
+    assert.equal(error.reason, 'parent PR merged');
+    assert.equal(error.retryable, true);
+    return true;
+  });
+  assert.equal(callsOf(gh, 'create').length, 1);
 });
 
 test('parent closed: a child whose parent PR was closed without merge is terminal PR_BLOCKED with no push', (t) => {

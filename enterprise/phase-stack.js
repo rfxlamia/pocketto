@@ -105,20 +105,31 @@ function metadataPr(options, specDir, repo, phase) {
   return view;
 }
 
-// A child stacks on an open parent only. A merged or closed parent ends the stack for this
-// child: its base may already be gone, and GitHub may retarget the child, so the base checks
-// would give advice that cannot work. The read is gh-only, so it runs before any push.
-function assertParentOpen(options, repo, phase, parentPr) {
+// A child stacks on an open parent only. A closed parent ends the stack for this child. A merged
+// parent is the normal stacked flow: GitHub retargets the child PR to the parent's own base, so the
+// child may only reuse an open PR that already targets that base (see `publishPhase`). Pocket never
+// creates a PR against a merged parent, and never retargets or rebases. The read is gh-only, so it
+// runs before any push.
+function resolveParent(options, repo, phase, parentPr) {
   const view = viewRecordedPr(options, repo, parentPr);
-  if (!view) return; // stale hint: the base check below decides
+  if (!view) return { merged: false }; // stale hint: the base check below decides
   const state = String(view.state).toUpperCase();
-  if (state === 'OPEN') return;
+  if (state === 'OPEN') return { merged: false };
   if (state === 'MERGED') {
-    throw prBlocked('parent PR merged',
-      `PR_BLOCKED: parent PR #${parentPr} (${phase.parentKey}) is already merged. Pocket never stacks ${phase.key} on a merged parent and never retargets or rebases. A rerun fails the same way. Repairing ${phase.key} is a manual decision.`, false);
+    const base = typeof view.baseRefName === 'string' && view.baseRefName.length > 0 ? view.baseRefName : null;
+    return { merged: true, retargetBase: base, blocked: mergedParentBlocked(phase, parentPr, base) };
   }
   throw prBlocked('parent PR closed',
     `PR_BLOCKED: parent PR #${parentPr} (${phase.parentKey}) is closed without a merge. Pocket will not stack ${phase.key} on it. Reopen the parent PR on GitHub. A lifecycle event that is already terminal is not redelivered, so that case needs a manual decision.`, false);
+}
+
+// Retryable: the operator resolves it by opening (or retargeting) the child PR against the parent's
+// base on GitHub, and the rerun reuses that PR.
+function mergedParentBlocked(phase, parentPr, base) {
+  const target = base ? `against ${base}` : 'against the base the parent merged into';
+  return prBlocked('parent PR merged',
+    `PR_BLOCKED: parent PR #${parentPr} (${phase.parentKey}) is already merged, so Pocket will not stack ${phase.key} on it and never creates, retargets, or rebases. `
+    + `Open or retarget the ${phase.key} PR (head ${phase.branch}) ${target} on GitHub, then rerun; Pocket reuses that PR.`, true);
 }
 
 // Every local precondition, in the order it has always run. Nothing here mutates remote
@@ -132,20 +143,23 @@ function prePushChecks({ projectRoot, specDir, planId, phase, closeoutSnapshot, 
   assertBaseExpected(options, projectRoot, planId, phase);
   const repo = resolveRepository(phaseGhOptions(options));
   const parentPr = phase.parentKey ? parentPrNumber(specDir, phase.parentKey) : null;
-  if (parentPr !== null) assertParentOpen(options, repo, phase, parentPr);
-  assertBasePublished(options, projectRoot, phase);
-  const block = stackBlock({ planId, phaseKey: phase.key, phaseOrder: phase.order, phaseCount: phase.count, baseBranch: phase.baseBranch, parentPr });
+  const parent = parentPr !== null ? resolveParent(options, repo, phase, parentPr) : { merged: false };
+  // Under a merged parent the child can only reuse a PR on the parent's base, so that base is the target.
+  const target = parent.merged && parent.retargetBase ? { ...phase, baseBranch: parent.retargetBase } : phase;
+  if (!parent.merged) assertBasePublished(options, projectRoot, phase);
+  const block = stackBlock({ planId, phaseKey: phase.key, phaseOrder: phase.order, phaseCount: phase.count, baseBranch: target.baseBranch, parentPr });
   // closes only works when the PR merges into the default branch, which only a one-phase plan
   // does (its base is the root base). Multi-phase PRs target a phase branch, so they use refs.
   const body = phasePrBody({ closeoutSnapshot, block, issueLink: { issue, finalPhase: phase.count === 1 } });
   const remoteSha = remoteHeadOf(options, projectRoot, phase.branch);
   assertPushConsent({ projectRoot, specDir, phase, registration, localSha: headSha, remoteSha });
   assertFastForward(options, projectRoot, phase.branch, remoteSha, headSha);
-  return { repo, headSha, remoteSha, parentPr, block, body };
+  return { repo, headSha, remoteSha, parentPr, parent, target, block, body };
 }
 
 // The filtered list is the identity check when no recorded PR resolved. Every returned
 // candidate must be open for this exact head and base, and at most one may exist.
+// `forks` counts the explicit fork PRs that were dropped, so the caller can surface them.
 function listOwnCandidates(options, repo, phase) {
   const listed = runJson(['pr', 'list', '--repo', repo.nameWithOwner, '--head', phase.branch, '--base', phase.baseBranch,
     '--state', 'open', '--limit', String(PR_LIST_LIMIT), '--json', PR_LIST_FIELDS], phaseGhOptions(options));
@@ -156,6 +170,7 @@ function listOwnCandidates(options, repo, phase) {
   // blocking: a blocking rule would let anyone stall publishing with a fork PR. Anything whose
   // provenance is unknown stays in the list and fails the own-candidate check below.
   const own = listed.filter((candidate) => !(candidate && candidate.isCrossRepository === true));
+  const forks = listed.length - own.length;
   if (!own.every((candidate) => isOwnCandidate(candidate, phase))) {
     throw prBlocked('foreign PR in list',
       'PR_BLOCKED: pr list returned a PR that is not open for this exact phase head and base. Resolve it by hand, then rerun.', false);
@@ -164,26 +179,50 @@ function listOwnCandidates(options, repo, phase) {
     throw prBlocked('ambiguous PR identity',
       'PR_BLOCKED: more than one open PR matches this phase head and base. Close the duplicates by hand, then rerun.', false);
   }
-  return own;
+  return { own, forks };
+}
+
+// The PR to reuse, if any: the recorded one when it still resolves, else the single own listed PR.
+function findExistingPr(options, specDir, repo, phase) {
+  const recorded = metadataPr(options, specDir, repo, phase);
+  if (recorded) return { candidate: recorded, forks: 0 };
+  const { own, forks } = listOwnCandidates(options, repo, phase);
+  return { candidate: own.length === 1 ? own[0] : null, forks };
+}
+
+function forkNotice(phase, forks) {
+  return {
+    code: 'FORK_PR_IGNORED',
+    message: `Ignored ${forks} open fork PR${forks === 1 ? '' : 's'} that reuse${forks === 1 ? 's' : ''} the head branch ${phase.branch}. Pocket only reuses PRs from this repository.`,
+  };
+}
+
+function withForkNotice(result, phase, forks) {
+  if (forks === 0) return result;
+  const extra = forkNotice(phase, forks);
+  return { ...result, notices: [result.notice, extra] };
 }
 
 function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, registration, options = {} }) {
   // Every local precondition runs before the first remote mutation (the push).
-  const { repo, headSha, remoteSha, parentPr, block, body } = prePushChecks({
+  const { repo, headSha, remoteSha, parentPr, parent, target, block, body } = prePushChecks({
     projectRoot, specDir, planId, phase, closeoutSnapshot, registration, options,
   });
+  // A merged parent never gets a fresh PR from Pocket: only a PR the operator opened or GitHub
+  // retargeted is reused. The lookup is read-only, so that refusal also happens before the push.
+  let found = null;
+  if (parent.merged) {
+    found = findExistingPr(options, specDir, repo, target);
+    if (!found.candidate) throw parent.blocked;
+  }
   if (remoteSha !== headSha) pushBranch(options, projectRoot, phase.branch);
 
   // Metadata first: a recorded PR number is viewed before the filtered list is consulted.
-  const recorded = metadataPr(options, specDir, repo, phase);
-  if (recorded) {
-    return reusePr({ options, specDir, repo, phase, block, parentPr, headSha, candidate: recorded });
+  if (!found) found = findExistingPr(options, specDir, repo, target);
+  if (found.candidate) {
+    return withForkNotice(reusePr({ options, specDir, repo, phase: target, block, parentPr, headSha, candidate: found.candidate }), phase, found.forks);
   }
-
-  const listed = listOwnCandidates(options, repo, phase);
-  if (listed.length === 1) {
-    return reusePr({ options, specDir, repo, phase, block, parentPr, headSha, candidate: listed[0] });
-  }
+  const { forks } = found;
 
   let created;
   try {
@@ -196,16 +235,17 @@ function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, r
     // A concurrent publish created the PR after our list ran. Re-list once: reuse the PR when
     // exactly one own PR is there, otherwise the refusal stands.
     const raced = listOwnCandidates(options, repo, phase);
-    if (raced.length !== 1) throw error;
-    return reusePr({ options, specDir, repo, phase, block, parentPr, headSha, candidate: raced[0] });
+    if (raced.own.length !== 1) throw error;
+    return withForkNotice(reusePr({ options, specDir, repo, phase, block, parentPr, headSha, candidate: raced.own[0] }), phase, Math.max(forks, raced.forks));
   }
   recordIdentity({ specDir, phase, pr: created, parentPr, headSha });
-  return {
+  return withForkNotice({
     pr: created,
     created: true,
     headSha,
+    base: phase.baseBranch,
     notice: { code: 'PR_CREATED', message: `Phase ${phase.order} PR created against ${phase.baseBranch}.` },
-  };
+  }, phase, forks);
 }
 
 // Reuse touches only the stack block. Human text outside the managed span is kept
@@ -231,6 +271,7 @@ function reusePr({ options, specDir, repo, phase, block, parentPr, headSha, cand
     pr,
     created: false,
     headSha,
+    base: phase.baseBranch,
     notice: { code: 'PR_REUSED', message: `Phase ${phase.order} PR reused against ${phase.baseBranch}.` },
   };
 }

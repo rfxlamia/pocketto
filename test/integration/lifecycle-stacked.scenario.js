@@ -332,3 +332,69 @@ test('stacked end to end: close ordering', (t) => {
   assert.deepEqual(branches, [phaseBranch(1), phaseBranch(2)], 'the last-phase handoff must not create a phase-3 branch');
   assert.equal(gitOut(fixture, 'rev-parse', '--abbrev-ref', 'HEAD'), phaseBranch(2), 'HEAD must stay on the phase-2 branch');
 });
+
+function writeRemote(fixture, mutate) {
+  const state = readRemote(fixture);
+  mutate(state);
+  fs.writeFileSync(fixture.remotePath, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+// The retry backoff is real time; the test clears it so the rerun happens "later".
+function clearRetryBackoff(fixture) {
+  const file = path.join(fixture.specDir, 'lifecycle.json');
+  const lifecycle = readLifecycle(fixture);
+  for (const event of lifecycle.events) {
+    if (event.delivery && event.delivery.next_attempt_at) delete event.delivery.next_attempt_at;
+  }
+  fs.writeFileSync(file, `${JSON.stringify(lifecycle, null, 2)}\n`);
+}
+
+test('stacked end to end: merged parent', (t) => {
+  const fixture = createStackedFixture(t);
+  setUpPlan(fixture);
+  deliverPhase(fixture, 1);
+  const phaseOnePr = readRemote(fixture).pullRequests.find((pr) => pr.headRefName === phaseBranch(1));
+  writeRemote(fixture, (state) => {
+    state.pullRequests.find((pr) => pr.number === phaseOnePr.number).state = 'MERGED';
+  });
+  reviewAndHandOff(fixture, 2);
+  coreCommand(fixture, 'log close', ['log', 'close', fixture.planDir]);
+  const lifecycle = readLifecycle(fixture);
+  const phaseTwoClosed = lifecycle.events.filter((event) => event.type === 'phase-closed')[1];
+  const planClosed = lifecycle.events.find((event) => event.type === 'plan-closed');
+
+  // Phase 1 is merged and no phase-2 PR exists: the event is held, not lost, and nothing is created.
+  const blocked = drain(fixture);
+  const blockedStatus = blocked.data.deliveries.find((delivery) => delivery.revision === phaseTwoClosed.revision);
+  assert.equal(blockedStatus.status, 'retryable', JSON.stringify(blocked.data.deliveries));
+  assert.ok(!blocked.data.deliveries.some((delivery) => delivery.revision === planClosed.revision && delivery.status === 'succeeded'),
+    'plan-closed must wait behind phase-2 phase-closed');
+  assert.equal(prCreates(fixture).length, 1, 'only the phase-1 PR was created');
+
+  // The operator opens the phase-2 PR against the parent base on GitHub; the rerun reuses it and closes the plan.
+  writeRemote(fixture, (state) => {
+    const number = Math.max(...state.pullRequests.map((pr) => pr.number)) + 1;
+    state.pullRequests.push({
+      number,
+      url: `${phaseOnePr.url.replace(/\/pull\/\d+$/, '')}/pull/${number}`,
+      state: 'OPEN',
+      headRefName: phaseBranch(2),
+      baseRefName: ROOT_BASE,
+      headRefOid: 'abc123def456',
+      isCrossRepository: false,
+      title: 'operator opened phase 2',
+      body: 'Opened by hand.\n',
+    });
+  });
+  clearRetryBackoff(fixture);
+
+  const resolved = drain(fixture);
+  assert.deepEqual(resolved.data.deliveries.map((delivery) => [delivery.revision, delivery.status]), [
+    [phaseTwoClosed.revision, 'succeeded'],
+    [planClosed.revision, 'succeeded'],
+  ], 'the rerun must deliver phase-2 phase-closed and then plan-closed');
+  assert.equal(prCreates(fixture).length, 1, 'Pocket still created no PR on top of the merged parent');
+  const reused = readRemote(fixture).pullRequests.find((pr) => pr.headRefName === phaseBranch(2));
+  assert.ok(reused.body.startsWith('Opened by hand.'), 'the operator PR keeps its text');
+  assert.ok(reused.body.includes(`Base branch: \`${ROOT_BASE}\``), 'the stack block names the real base');
+});

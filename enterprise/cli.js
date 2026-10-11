@@ -223,7 +223,7 @@ function publishStackedPhase(projectRootArg, specDirArg, phaseKey) {
     pr_number: published.pr.number,
     pr_url: published.pr.url,
     created: published.created,
-    notices: [published.notice],
+    notices: published.notices || [published.notice],
   };
 }
 

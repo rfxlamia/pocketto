@@ -146,7 +146,7 @@ function persistStackProof(event, context, phase, published, marker, fingerprint
     pr_number: published.pr.number,
     pr_url: published.pr.url,
     head_sha: published.headSha,
-    base: phase.baseBranch,
+    base: published.base || phase.baseBranch,
     marker,
     fingerprints,
     artifact_refs: canonicalArtifactRefs(event),
@@ -188,7 +188,7 @@ function publishStackedPhase(event, context, options) {
     status: 'succeeded',
     proof_ref: stackProofRef(phase.key),
     proof_hash: proofHash,
-    notices: [published.notice],
+    notices: published.notices || [published.notice],
   };
 }
 

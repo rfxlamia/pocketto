@@ -2,6 +2,12 @@
 
 All notable changes to Pocketto are documented here, newest first. Dates are the tag's commit date.
 
+## Unreleased
+
+**Stacked phase PRs.** A child phase whose parent PR is already merged now reuses its open PR when that PR targets the base the parent merged into, instead of ending the lifecycle event. With no such PR the event is retryable (`parent PR merged`): open or retarget the child PR on GitHub, then rerun the drain. Pocket still never creates a PR on a merged parent, and never retargets or rebases. A fork PR that reuses a phase head name is ignored with a `FORK_PR_IGNORED` notice.
+
+**Behavior change (stacked plans only).** For stacked plans, phase PR lookup now requires the head to live in this repository (`isCrossRepository === false`). Non-stacked plans are unchanged: a fork-headed PR is still accepted.
+
 ## 4.1.0 — 2026-10-09
 
 **Fixed (issue #64, artifact lifecycle).** Event validation no longer masks nested artifact-ref errors: a bad `root`, escaping `path`, invalid `sha256`, or stale digest now surfaces its specific `LIFECYCLE_*` code instead of collapsing to `LIFECYCLE_BAD_ARTIFACT`. Artifact-ref canonicalization treats `path` as an exact code-point identity rather than normalizing it, so two references that differ only by Unicode normalization no longer hash the same.
