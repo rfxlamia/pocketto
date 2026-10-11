@@ -42,6 +42,7 @@ function seedPhasePullRequests(fixture) {
       headRefName: `feature/${PLAN_ID}`,
       baseRefName: 'main',
       headRefOid: `abc123def${String(number).padStart(3, '0')}`,
+      isCrossRepository: false,
       title: `Phase ${phaseNumber}: ${PLAN_ID}`,
       body: `Implements ${PLAN_ID}`,
     });

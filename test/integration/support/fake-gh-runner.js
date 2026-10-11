@@ -87,7 +87,7 @@ function createPullRequest() {
   const url = `${repositoryUrl}/pull/${nextNumber}`;
   state.pullRequests.push({
     number: nextNumber, url, state: 'OPEN', headRefName: value('--head'), baseRefName: value('--base'),
-    headRefOid: 'abc123def456', title: value('--title'), body: bodyFromFile(),
+    headRefOid: 'abc123def456', isCrossRepository: false, title: value('--title'), body: bodyFromFile(),
   });
   state.effects.push({ kind: 'pr-create', number: nextNumber });
   fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);

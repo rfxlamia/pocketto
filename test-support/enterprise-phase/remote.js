@@ -151,6 +151,7 @@ function makePr(number, planId = 'demo-plan') {
     headRefName: 'feature/demo-plan',
     baseRefName: 'main',
     headRefOid: 'abc123def456',
+    isCrossRepository: false,
     title: `Phase 1: ${planId}`,
     body: `Implements ${planId}`,
     commentPages: [[], []],

@@ -16,6 +16,7 @@ const path = require('node:path');
 const enterpriseMeta = require('../enterprise/meta');
 const { stackBlock, phasePrBody, upsertStackBlock } = require('../enterprise/stack-body');
 const { publishPhase } = require('../enterprise/phase-stack');
+const { resolvePhasePr, resolveRepository } = require('../enterprise/phase-handler-targets');
 const { installFakeGitHub, createEnvironment } = require('./integration/support/fixture');
 const { ENTERPRISE_CLI, CORE_CLI } = require('./integration/support/constants');
 
@@ -107,6 +108,7 @@ function fakeGh(options = {}) {
       title: pr.title,
       body: pr.body,
       headRefOid: null,
+      isCrossRepository: pr.isCrossRepository === true,
     };
   }
 
@@ -264,6 +266,17 @@ test('publish root: pushes phase 1 without force and creates a PR based on root_
   assert.equal(identity.head_sha, env.phase1Head);
 });
 
+test('publish single phase: a one-phase plan targets the root base and closes its issue', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const single = { key: 'phase-1', order: 1, count: 1, branch: 'pocket/p/phase-1', baseBranch: ROOT_BASE, parentKey: null };
+
+  publish(env, gh, { phase: single });
+
+  const body = gh.state.prs[0].body;
+  assert.equal(body.trimEnd().split('\n').pop(), `closes #${ISSUE_NUMBER}`, 'the only phase is the final phase, so closes is used');
+});
+
 test('publish child: phase 2 PR targets the phase 1 branch and records parent_pr', (t) => {
   const env = setupRepo(t);
   const gh = fakeGh();
@@ -287,7 +300,7 @@ test('publish child: phase 2 PR targets the phase 1 branch and records parent_pr
       baseBranch: 'pocket/p/phase-1',
       parentPr: parent.pr.number,
     }),
-    issueLink: { issue: ISSUE_NUMBER, finalPhase: true },
+    issueLink: { issue: ISSUE_NUMBER, finalPhase: false },
   });
   assert.equal(gh.state.prs[1].body, expectedBody);
   assert.equal(readMeta(env.specDir).phases['phase-2'].github_pr.parent_pr, parent.pr.number);
@@ -1156,4 +1169,177 @@ test('publish-phase stale snapshot: a snapshot edited after its event is STALE_A
   assert.equal(envelope.error.code, 'STALE_ARTIFACT');
   assert.equal(originHas(plan, 'pocket/p/phase-1'), false, 'nothing pushed');
   assert.equal(fakeState(plan).calls.filter((args) => args[0] === 'pr').length, 0, 'zero pr calls');
+});
+
+function forkPr(number, overrides = {}) {
+  return {
+    number,
+    url: `${REPO_URL}/pull/${number}`,
+    state: 'OPEN',
+    headRefName: 'pocket/p/phase-1',
+    baseRefName: ROOT_BASE,
+    title: 'fork',
+    body: 'attacker body',
+    isCrossRepository: true,
+    ...overrides,
+  };
+}
+
+test('fork hijack list: an open PR from a fork with our phase head is ignored, never edited or adopted', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  gh.state.prs.push(forkPr(50));
+
+  const result = publish(env, gh);
+
+  assert.equal(result.created, true, 'a fresh PR is created instead of adopting the fork PR');
+  assert.equal(result.pr.number, 100);
+  assert.equal(callsOf(gh, 'edit').length, 0, 'the fork PR body is never edited');
+  assert.equal(gh.state.prs[0].body, 'attacker body');
+});
+
+test('fork hijack recorded: a recorded PR number that resolves to a fork PR is never reused', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  gh.state.prs.push(forkPr(50));
+  enterpriseMeta.setPrIdentity(env.specDir, 'phase-1', { number: 50, url: `${REPO_URL}/pull/50` });
+
+  const result = publish(env, gh);
+
+  assert.equal(result.created, true);
+  assert.equal(result.pr.number, 100);
+  assert.equal(callsOf(gh, 'edit').length, 0, 'the fork PR body is never edited');
+  assert.equal(gh.state.prs[0].body, 'attacker body');
+});
+
+function parentEndedScenario(t, { parentState, reason, deleteParentBranch }) {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const parent = publish(env, gh);
+  gh.state.prs[0].state = parentState;
+  if (deleteParentBranch) git(env.origin, 'update-ref', '-d', `refs/heads/${phase1().branch}`);
+  git(env.work, 'switch', '-q', '-c', 'pocket/p/phase-2');
+  commitFile(env.work, 'phase2.txt', 'phase two\n', 'phase two work');
+  const git2 = recordingGit();
+
+  assert.throws(() => publish(env, gh, { phase: phase2(), gitRunner: git2.run }), (error) => {
+    assert.equal(error.code, 'PR_BLOCKED');
+    assert.equal(error.reason, reason);
+    assert.equal(error.retryable, false, 'terminal: a rerun fails the same way');
+    assert.ok(error.message.includes(`#${parent.pr.number}`), 'message names the parent PR');
+    assert.ok(!error.message.includes('fix the base on GitHub'), 'no false base-fix advice');
+    return true;
+  });
+  assert.equal(pushCalls(git2).length, 0, 'no push');
+  assert.equal(callsOf(gh, 'create').length, 1, 'only the parent PR was created');
+}
+
+test('parent merged: a child whose merged parent branch still exists is terminal PR_BLOCKED with no push', (t) => {
+  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: false });
+});
+
+test('parent merged and deleted: a child whose parent branch was removed is not told to publish the parent', (t) => {
+  parentEndedScenario(t, { parentState: 'MERGED', reason: 'parent PR merged', deleteParentBranch: true });
+});
+
+test('parent closed: a child whose parent PR was closed without merge is terminal PR_BLOCKED with no push', (t) => {
+  parentEndedScenario(t, { parentState: 'CLOSED', reason: 'parent PR closed', deleteParentBranch: false });
+});
+
+test('publish race: a create refused as already existing reuses the PR the re-list finds', (t) => {
+  const env = setupRepo(t);
+  const gh = fakeGh();
+  const realRun = gh.run;
+  let listCalls = 0;
+  gh.state.prs.push({
+    number: 77,
+    url: `${REPO_URL}/pull/77`,
+    state: 'OPEN',
+    headRefName: 'pocket/p/phase-1',
+    baseRefName: ROOT_BASE,
+    title: 'racer',
+    body: 'human body',
+  });
+  gh.run = (args) => {
+    if (args[0] === 'pr' && args[1] === 'list') {
+      listCalls += 1;
+      if (listCalls === 1) {
+        gh.state.calls.push(args.slice());
+        return { exit: 0, stdout: '[]', stderr: '', timedOut: false };
+      }
+    }
+    if (args[0] === 'pr' && args[1] === 'create') {
+      gh.state.calls.push(args.slice());
+      return {
+        exit: 1,
+        stdout: '',
+        stderr: 'a pull request for branch "pocket/p/phase-1" into branch "feature/x" already exists: https://github.com/pocketto-test/phase-stack/pull/77',
+        timedOut: false,
+      };
+    }
+    return realRun(args);
+  };
+
+  const result = publish(env, gh);
+
+  assert.equal(result.created, false);
+  assert.equal(result.pr.number, 77, 'the racing PR is reused');
+  assert.equal(callsOf(gh, 'create').length, 1, 'create ran once and was refused');
+  assert.equal(listCalls, 2, 'the list ran once before create and once after the refusal');
+  assert.ok(gh.state.prs[0].body.includes('<!-- pocket-stack-context:start -->'), 'stack block upserted onto the reused PR');
+});
+
+// Phase-closed lookups (resolvePhasePr) share the fork rule with the publisher: a fork PR
+// that reuses the head name is never selected, whether it came from metadata or from search.
+function lookupGh(prs, commentsByNumber) {
+  const ok = (stdout) => ({ exit: 0, stdout, stderr: '', timedOut: false });
+  return (args) => {
+    if (args[0] === 'repo' && args[1] === 'view') {
+      return ok(JSON.stringify({ owner: { login: OWNER }, name: REPO, url: REPO_URL }));
+    }
+    if (args[0] === 'pr' && args[1] === 'view') {
+      const pr = prs.find((candidate) => candidate.number === Number(args[2]));
+      return pr ? ok(JSON.stringify(pr)) : { exit: 1, stdout: '', stderr: 'pull request not found', timedOut: false };
+    }
+    if (args[0] === 'pr' && args[1] === 'list') {
+      const head = valueFor(args, '--head');
+      return ok(JSON.stringify(prs.filter((pr) => pr.headRefName === head && pr.state === 'OPEN')));
+    }
+    if (args[0] === 'api') {
+      const number = Number(/issues\/(\d+)\/comments/.exec(args[1])[1]);
+      return ok(JSON.stringify([commentsByNumber[number] || []]));
+    }
+    return { exit: 1, stdout: '', stderr: `unexpected lookup call: ${args.join(' ')}`, timedOut: false };
+  };
+}
+
+function phaseOneSummaryComments() {
+  return [{ body: '<!-- pocket-phase-1-summary -->\nSummary.' }];
+}
+
+test('phase lookup fork search: an own PR and a fork PR on the same head select the own PR without manual resolution', (t) => {
+  const env = setupRepo(t);
+  const ownPr = { number: 10, url: `${REPO_URL}/pull/10`, state: 'OPEN', headRefName: 'pocket/p/phase-1', baseRefName: ROOT_BASE, isCrossRepository: false, headRefOid: 'abc' };
+  const fork = forkPr(20);
+  const gh = lookupGh([fork, ownPr], { 10: phaseOneSummaryComments() });
+  const repo = resolveRepository({ ghRunner: gh });
+  const context = { specDir: env.specDir, stacked: true, phases: { 'phase-1': { branch: 'pocket/p/phase-1' } } };
+
+  const selected = resolvePhasePr(context, { key: 'phase-1', number: 1 }, repo, { ghRunner: gh });
+
+  assert.equal(selected.pr.number, 10, 'the own PR is selected');
+});
+
+test('phase lookup fork metadata: a recorded fork PR is never selected and search picks the own PR', (t) => {
+  const env = setupRepo(t);
+  const ownPr = { number: 10, url: `${REPO_URL}/pull/10`, state: 'OPEN', headRefName: 'pocket/p/phase-1', baseRefName: ROOT_BASE, isCrossRepository: false, headRefOid: 'abc' };
+  const fork = forkPr(20);
+  enterpriseMeta.setPrIdentity(env.specDir, 'phase-1', { number: 20, url: `${REPO_URL}/pull/20` });
+  const gh = lookupGh([fork, ownPr], { 10: phaseOneSummaryComments(), 20: phaseOneSummaryComments() });
+  const repo = resolveRepository({ ghRunner: gh });
+  const context = { specDir: env.specDir, stacked: true, phases: { 'phase-1': { branch: 'pocket/p/phase-1' } } };
+
+  const selected = resolvePhasePr(context, { key: 'phase-1', number: 1 }, repo, { ghRunner: gh });
+
+  assert.equal(selected.pr.number, 10, 'the fork PR recorded in metadata is not selected');
 });

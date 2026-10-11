@@ -417,6 +417,7 @@ function publicPrFields(pr) {
     title: pr.title,
     body: pr.body,
     headRefOid: pr.headRefOid,
+    isCrossRepository: pr.isCrossRepository === true,
   };
 }
 

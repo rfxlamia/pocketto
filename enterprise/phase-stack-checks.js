@@ -159,11 +159,12 @@ function assertBaseExpected(options, cwd, planId, phase) {
   }
 }
 
-// A listed PR is ours only when it is open for this exact head and base. gh filters by
-// --head/--base already; re-checking the returned fields guards against any other candidate.
+// A listed PR is ours only when it is open for this exact head and base, and it comes from
+// this repository. gh filters by --head/--base already; re-checking the returned fields guards
+// against any other candidate. A missing isCrossRepository fails closed (not ours).
 function isOwnCandidate(candidate, phase) {
   return Boolean(candidate) && candidate.headRefName === phase.branch && candidate.baseRefName === phase.baseBranch
-    && String(candidate.state).toUpperCase() === 'OPEN';
+    && String(candidate.state).toUpperCase() === 'OPEN' && candidate.isCrossRepository === false;
 }
 
 module.exports = {

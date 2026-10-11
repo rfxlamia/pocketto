@@ -110,11 +110,14 @@ function resolveMetadataPr(stored, context, phase, repo, branch, options) {
 }
 
 function searchPhasePr(context, phase, repo, branch, options) {
-  const candidates = runJson(['pr', 'list', '--repo', repo.nameWithOwner, '--head', branch, '--state', 'open',
-    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid'], options);
-  if (!Array.isArray(candidates)) {
+  const listed = runJson(['pr', 'list', '--repo', repo.nameWithOwner, '--head', branch, '--state', 'open',
+    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid,isCrossRepository'], options);
+  if (!Array.isArray(listed)) {
     throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'PR search response must be an array.', { status: 'retryable', retryable: true });
   }
+  // An explicit fork PR that reuses the head name is not a candidate and must not block the
+  // search. Unknown provenance is kept, and validOpenPr rejects it.
+  const candidates = listed.filter((candidate) => !(candidate && candidate.isCrossRepository === true));
   const matches = candidates.map((candidate) => searchCandidate(candidate, branch, phase, repo, options)).filter(Boolean);
   if (matches.length === 1) return matches[0];
   if (matches.length > 1 || candidates.length > 0) {
@@ -138,7 +141,7 @@ function searchCandidate(candidate, branch, phase, repo, options) {
 
 function loadPrView(number, repo, options) {
   const pr = runJson(['pr', 'view', String(number), '--repo', repo.nameWithOwner,
-    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid'], options);
+    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid,isCrossRepository'], options);
   if (pr.number !== number || !sameRepository(pr.url, repo)) {
     throw new PhaseHandlerError('PR_OWNERSHIP_UNPROVEN', 'The PR does not belong to the current origin repository.');
   }
@@ -149,7 +152,8 @@ function validOpenPr(pr, branch, repo) {
   return pr
     && sameRepository(pr.url, repo)
     && String(pr.state).toUpperCase() === 'OPEN'
-    && pr.headRefName === branch;
+    && pr.headRefName === branch
+    && pr.isCrossRepository === false;
 }
 
 function hasPhaseIdentity(comments, phaseNumber, metadataFirst) {

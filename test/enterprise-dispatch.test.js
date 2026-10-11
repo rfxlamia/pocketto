@@ -178,7 +178,7 @@ const issue = {
 };
 const pr = {
   number: ${PR_NUMBER}, url: '${PR_URL}', state: 'OPEN', headRefName: 'feature/${PLAN_ID}',
-  baseRefName: 'main', headRefOid: 'abc123def456', title: 'Phase 1: ${PLAN_ID}', body: '${PLAN_ID}'
+  baseRefName: 'main', headRefOid: 'abc123def456', isCrossRepository: false, title: 'Phase 1: ${PLAN_ID}', body: '${PLAN_ID}'
 };
 const json = (value) => process.stdout.write(JSON.stringify(value));
 const field = (name) => {

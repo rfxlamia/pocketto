@@ -32,9 +32,9 @@ const {
 
 // `state` is required so each listed candidate can be verified as OPEN. The limit is
 // explicit because gh's default of 30 would hide duplicates beyond it.
-const PR_LIST_FIELDS = 'number,url,state,headRefName,baseRefName,body';
+const PR_LIST_FIELDS = 'number,url,state,headRefName,baseRefName,body,isCrossRepository';
 const PR_LIST_LIMIT = 100;
-const PR_VIEW_FIELDS = 'number,url,state,headRefName,baseRefName,body';
+const PR_VIEW_FIELDS = 'number,url,state,headRefName,baseRefName,body,isCrossRepository';
 
 // The phase-handler seam (runJson, resolveRepository) reads `ghRunner`.
 function phaseGhOptions(options) {
@@ -96,13 +96,29 @@ function metadataPr(options, specDir, repo, phase) {
   const recorded = enterpriseMeta.getPrIdentity(specDir, phase.key).number;
   if (!Number.isInteger(recorded) || recorded <= 0) return null;
   const view = viewRecordedPr(options, repo, recorded);
-  if (!view || !sameRepository(view.url, repo)) return null;
+  if (!view || !sameRepository(view.url, repo) || view.isCrossRepository !== false) return null;
   if (String(view.state).toUpperCase() !== 'OPEN' || view.headRefName !== phase.branch) return null;
   if (view.baseRefName !== phase.baseBranch) {
     throw prBlocked('base retargeted',
       `PR_BLOCKED: the recorded PR for ${phase.key} now targets ${view.baseRefName}, not ${phase.baseBranch}. Pocket does not retarget; fix the base on GitHub, then rerun.`, false);
   }
   return view;
+}
+
+// A child stacks on an open parent only. A merged or closed parent ends the stack for this
+// child: its base may already be gone, and GitHub may retarget the child, so the base checks
+// would give advice that cannot work. The read is gh-only, so it runs before any push.
+function assertParentOpen(options, repo, phase, parentPr) {
+  const view = viewRecordedPr(options, repo, parentPr);
+  if (!view) return; // stale hint: the base check below decides
+  const state = String(view.state).toUpperCase();
+  if (state === 'OPEN') return;
+  if (state === 'MERGED') {
+    throw prBlocked('parent PR merged',
+      `PR_BLOCKED: parent PR #${parentPr} (${phase.parentKey}) is already merged. Pocket never stacks ${phase.key} on a merged parent and never retargets or rebases. A rerun fails the same way. Repairing ${phase.key} is a manual decision.`, false);
+  }
+  throw prBlocked('parent PR closed',
+    `PR_BLOCKED: parent PR #${parentPr} (${phase.parentKey}) is closed without a merge. Pocket will not stack ${phase.key} on it. Reopen the parent PR on GitHub. A lifecycle event that is already terminal is not redelivered, so that case needs a manual decision.`, false);
 }
 
 // Every local precondition, in the order it has always run. Nothing here mutates remote
@@ -115,10 +131,13 @@ function prePushChecks({ projectRoot, specDir, planId, phase, closeoutSnapshot, 
   const headSha = localHeadOf(options, projectRoot, phase.branch);
   assertBaseExpected(options, projectRoot, planId, phase);
   const repo = resolveRepository(phaseGhOptions(options));
-  assertBasePublished(options, projectRoot, phase);
   const parentPr = phase.parentKey ? parentPrNumber(specDir, phase.parentKey) : null;
+  if (parentPr !== null) assertParentOpen(options, repo, phase, parentPr);
+  assertBasePublished(options, projectRoot, phase);
   const block = stackBlock({ planId, phaseKey: phase.key, phaseOrder: phase.order, phaseCount: phase.count, baseBranch: phase.baseBranch, parentPr });
-  const body = phasePrBody({ closeoutSnapshot, block, issueLink: { issue, finalPhase: phase.order === phase.count } });
+  // closes only works when the PR merges into the default branch, which only a one-phase plan
+  // does (its base is the root base). Multi-phase PRs target a phase branch, so they use refs.
+  const body = phasePrBody({ closeoutSnapshot, block, issueLink: { issue, finalPhase: phase.count === 1 } });
   const remoteSha = remoteHeadOf(options, projectRoot, phase.branch);
   assertPushConsent({ projectRoot, specDir, phase, registration, localSha: headSha, remoteSha });
   assertFastForward(options, projectRoot, phase.branch, remoteSha, headSha);
@@ -133,15 +152,19 @@ function listOwnCandidates(options, repo, phase) {
   if (!Array.isArray(listed)) {
     throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'gh pr list did not return an array.', { status: 'retryable', retryable: true });
   }
-  if (!listed.every((candidate) => isOwnCandidate(candidate, phase))) {
+  // A fork PR can reuse our head branch name. An explicit fork is dropped here rather than
+  // blocking: a blocking rule would let anyone stall publishing with a fork PR. Anything whose
+  // provenance is unknown stays in the list and fails the own-candidate check below.
+  const own = listed.filter((candidate) => !(candidate && candidate.isCrossRepository === true));
+  if (!own.every((candidate) => isOwnCandidate(candidate, phase))) {
     throw prBlocked('foreign PR in list',
       'PR_BLOCKED: pr list returned a PR that is not open for this exact phase head and base. Resolve it by hand, then rerun.', false);
   }
-  if (listed.length > 1) {
+  if (own.length > 1) {
     throw prBlocked('ambiguous PR identity',
       'PR_BLOCKED: more than one open PR matches this phase head and base. Close the duplicates by hand, then rerun.', false);
   }
-  return listed;
+  return own;
 }
 
 function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, registration, options = {} }) {
@@ -162,10 +185,20 @@ function publishPhase({ projectRoot, specDir, planId, phase, closeoutSnapshot, r
     return reusePr({ options, specDir, repo, phase, block, parentPr, headSha, candidate: listed[0] });
   }
 
-  const created = prNumberFromUrl(ghWithBody(options, [
-    'pr', 'create', '--repo', repo.nameWithOwner, '--head', phase.branch, '--base', phase.baseBranch,
-    '--title', `${planId} phase ${phase.order}`,
-  ], body, classifyCreateFailure), repo);
+  let created;
+  try {
+    created = prNumberFromUrl(ghWithBody(options, [
+      'pr', 'create', '--repo', repo.nameWithOwner, '--head', phase.branch, '--base', phase.baseBranch,
+      '--title', `${planId} phase ${phase.order}`,
+    ], body, classifyCreateFailure), repo);
+  } catch (error) {
+    if (!error || error.reason !== 'existing PR for head') throw error;
+    // A concurrent publish created the PR after our list ran. Re-list once: reuse the PR when
+    // exactly one own PR is there, otherwise the refusal stands.
+    const raced = listOwnCandidates(options, repo, phase);
+    if (raced.length !== 1) throw error;
+    return reusePr({ options, specDir, repo, phase, block, parentPr, headSha, candidate: raced[0] });
+  }
   recordIdentity({ specDir, phase, pr: created, parentPr, headSha });
   return {
     pr: created,
