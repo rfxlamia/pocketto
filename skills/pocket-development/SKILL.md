@@ -29,6 +29,8 @@ No install step, PATH setup, or shell-specific guard — `npx` resolves the cros
 - `log.json` exists but tasks missing → migrates tasks into existing phases (status preserved)
 - `log.json` already complete → reports "no migration needed" and writes nothing
 
+Report `data.phase_branches` and `data.branch` from the `log init` envelope. For a stacked plan, `log init` may create and switch to the phase-1 branch automatically; say so in the startup report. Later phases use the branch recorded for them in `log.json` (see the stacked branch check in `references/entry-gate.md`).
+
 Full command reference and update/close commands: see **Execution Log** section below.
 
 **Pocket Education guard.** If the memory file in your context (`CLAUDE.md` / `AGENTS.md`) has no `## Pocket Education` heading, skip this paragraph. If it has one, confirm with `npx -y pocketto-pi edu --json --contract 3`. When `data.education` is `true` (or the command errors), ask whether the user wants to implement with guidance or use subagents—unless the user already explicitly chose subagent execution. An explicit handover in `pocket-education` or direct instruction to dispatch this plan counts as the answer.

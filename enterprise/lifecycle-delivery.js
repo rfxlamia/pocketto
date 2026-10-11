@@ -6,6 +6,8 @@ const { serializeResponse } = require('./adapter');
 const enterpriseMeta = require('./meta');
 const { loadContext } = require('./phase-handler-context');
 const { isInside, staleArtifactError, validateCommittedArtifacts } = require('./lifecycle-proof');
+const { DEFERRED_PROOF_REF } = require('./phase-handler');
+const { withPrepareNotice, carryHandlerNotices } = require('./ignored-notice');
 
 const METADATA_ERROR_CODES = {
   'spec-approved': {
@@ -19,6 +21,10 @@ const METADATA_ERROR_CODES = {
   'plan-closed': {
     ENTERPRISE_META_MISSING: 'CLOSEOUT_METADATA_MISSING',
     ENTERPRISE_META_PATH_INVALID: 'CLOSEOUT_METADATA_PATH_INVALID',
+  },
+  'phase-closed': {
+    ENTERPRISE_META_MISSING: 'PHASE_CLOSED_METADATA_MISSING',
+    ENTERPRISE_META_PATH_INVALID: 'PHASE_CLOSED_METADATA_PATH_INVALID',
   },
 };
 
@@ -145,7 +151,7 @@ function prepareAlreadyAppliedEvent(event, context) {
 
 function selectedArtifactContext(event, context) {
   if (event.type === 'spec-approved') return { specDir: context.specDir };
-  if (event.type === 'phase-complete' || event.type === 'plan-closed') {
+  if (event.type === 'phase-complete' || event.type === 'plan-closed' || event.type === 'phase-closed') {
     return loadContext(event, {
       projectRoot: context.registeredProjectRoot,
       specDir: context.specDir,
@@ -196,6 +202,19 @@ function recoverReconcilingEvent(event, context, delivery) {
   return { response: lifecycleDeliverySuccess(event, recovery.proof) };
 }
 
+// A reconciling event was already validated by recoverReconcilingEvent, so it is skipped here.
+// Validating before the handler keeps a stale phase-closed artifact from reaching remote work.
+function validatePhaseClosedBeforeHandler(event, context) {
+  const status = event.delivery && event.delivery.status;
+  if (event.type !== 'phase-closed' || status === 'reconciling') return null;
+  try {
+    validateCommittedArtifacts(event, selectedArtifactContext(event, context));
+  } catch (error) {
+    return lifecycleArtifactFailure(event, error);
+  }
+  return null;
+}
+
 function prepareLifecycleDelivery(projectRoot, event) {
   const loaded = readDeliveryState(projectRoot, event);
   if (loaded.response) return loaded;
@@ -208,6 +227,8 @@ function prepareLifecycleDelivery(projectRoot, event) {
   }
   const recovered = recoverReconcilingEvent(event, context, delivery);
   if (recovered) return recovered;
+  const stale = validatePhaseClosedBeforeHandler(event, context);
+  if (stale) return stale;
   return { event, state: { context, replay: false } };
 }
 
@@ -219,13 +240,23 @@ function readDurableHandlerProof(event, response, state) {
     };
   }
 
+  const deferred = response.proof_ref === DEFERRED_PROOF_REF;
+  const lookupEvent = deferred
+    ? { ...event, delivery: { ...event.delivery, proof_ref: DEFERRED_PROOF_REF } }
+    : event;
   let proof;
   try {
-    proof = enterpriseMeta.lifecycleEventProof(state.context.specDir, event, state.context);
+    proof = enterpriseMeta.lifecycleEventProof(state.context.specDir, lookupEvent, state.context);
   } catch {
     return {
       response: lifecycleDeliveryResponse(event, 'reconciling', 'ADAPTER_PROOF_READ_FAILED', true,
         'Enterprise handler succeeded but its canonical proof could not be read; retry delivery to reconcile proof before mutation.', response),
+    };
+  }
+  if (deferred && proof && proof.proof_ref === DEFERRED_PROOF_REF && proof.proof_hash !== response.proof_hash) {
+    return {
+      response: lifecycleDeliveryResponse(event, 'terminal', 'PHASE_PROOF_MISMATCH', false,
+        'Enterprise handler success does not match its deferred proof; resolve manually before completing delivery.'),
     };
   }
   if (!proof || proof.proof_ref !== response.proof_ref || proof.proof_hash !== response.proof_hash) {
@@ -258,8 +289,9 @@ function completeLifecycleDelivery(event, response, state) {
 
 function createLifecycleDelivery(projectRoot) {
   return {
-    prepare: (event) => prepareLifecycleDelivery(projectRoot, event),
-    complete: completeLifecycleDelivery,
+    // Every prepare-stage return gets the notice from one place, so no return threads it by hand.
+    prepare: (event) => withPrepareNotice(prepareLifecycleDelivery(projectRoot, event), projectRoot, event, lifecycleDeliveryContext),
+    complete: (event, response, state) => carryHandlerNotices(completeLifecycleDelivery(event, response, state), response),
   };
 }
 

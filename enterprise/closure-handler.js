@@ -29,6 +29,7 @@ const {
   upsertTasklist,
 } = require('./closure-tasklist');
 const { canonicalArtifactRefs } = require('./lifecycle-proof');
+const { ignoredNoticeForEvent, withIgnoredArtifactNotice } = require('./ignored-notice');
 
 const RECONCILABLE_DELIVERY_STATUSES = new Set(['claimed', 'pending', 'retryable', 'reconciling']);
 const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
@@ -341,7 +342,18 @@ function metadataFailure(eventId, error) {
     'Linked issue metadata is missing or has an unsafe path; manual resolution is required.', false);
 }
 
+// Every plan-closed response, success or failure, carries the notice when its directories are given.
+// The wrapper sits on the outer handler, so the early adapterResult returns never thread notices.
+// The notice is probed only after the handler has run, so its own reads never precede the handler's reads.
 function handlePlanClosed(event, opts = {}) {
+  const response = handlePlanClosedResponse(event, opts);
+  const notice = opts && opts.projectRoot && opts.planDir && opts.specDir
+    ? ignoredNoticeForEvent(event, { projectRoot: opts.projectRoot, planDir: opts.planDir, specDir: opts.specDir })
+    : null;
+  return withIgnoredArtifactNotice(response, notice);
+}
+
+function handlePlanClosedResponse(event, opts) {
   const eventId = event && typeof event.event_id === 'string' ? event.event_id : 'unknown-event';
   const invalid = validateEventAndPaths(event, opts, eventId);
   if (invalid) return invalid;

@@ -58,10 +58,51 @@ if (args[0] === 'pr' && args[1] === 'view') {
   if (pr) json(pr);
   fail('pull request not found in fake repository');
 }
-if (args[0] === 'pr' && args[1] === 'list') json(state.pullRequests);
+if (args[0] === 'pr' && args[1] === 'list') json(listPullRequests());
+if (args[0] === 'pr' && args[1] === 'create') createPullRequest();
+if (args[0] === 'pr' && args[1] === 'edit') editPullRequest();
 if (args[0] === 'api' && args[1] === 'graphql') handleGraphql();
 if (args[0] === 'api' && typeof args[1] === 'string') handleApiRequest(args[1]);
 fail(`fake GitHub rejected unexpected request: ${args.join(' ')}`);
+
+// Unfiltered `pr list` keeps returning every PR; --head/--base/--state narrow it like gh.
+function listPullRequests() {
+  const head = value('--head');
+  const base = value('--base');
+  const wanted = value('--state');
+  return state.pullRequests.filter((pr) => (
+    (head === null || pr.headRefName === head)
+    && (base === null || pr.baseRefName === base)
+    && (wanted === null || wanted === 'all' || pr.state === wanted.toUpperCase())
+  ));
+}
+
+function bodyFromFile() {
+  const bodyFile = value('--body-file');
+  return bodyFile ? fs.readFileSync(bodyFile, 'utf8') : '';
+}
+
+function createPullRequest() {
+  const nextNumber = Math.max(Number(process.env.FAKE_GH_PR_NUMBER), ...state.pullRequests.map((pr) => pr.number)) + 1;
+  const url = `${repositoryUrl}/pull/${nextNumber}`;
+  state.pullRequests.push({
+    number: nextNumber, url, state: 'OPEN', headRefName: value('--head'), baseRefName: value('--base'),
+    headRefOid: 'abc123def456', isCrossRepository: false, title: value('--title'), body: bodyFromFile(),
+  });
+  state.effects.push({ kind: 'pr-create', number: nextNumber });
+  fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+  process.stdout.write(`${url}\n`);
+  process.exit(0);
+}
+
+function editPullRequest() {
+  const pr = state.pullRequests.find((candidate) => candidate.number === Number(args[2]));
+  if (!pr) fail('pull request not found in fake repository');
+  pr.body = bodyFromFile();
+  state.effects.push({ kind: 'pr-edit', number: pr.number });
+  fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+  process.exit(0);
+}
 
 function handleGraphql() {
   const query = field('query') || '';

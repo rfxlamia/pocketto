@@ -18,6 +18,8 @@ const LIFECYCLE_CORE_MODULES = [
   'cli/lib/lifecycle-retry.js',
   'cli/lib/lifecycle-lock.js',
   'cli/lib/lifecycle-artifact-validation.js',
+  'cli/lib/lifecycle-plan-patch.js',
+  'cli/lib/lifecycle-state-rules.js',
   'cli/lib/lifecycle-delivery-store.js',
   'cli/lib/lifecycle-delivery-validation.js',
 ];

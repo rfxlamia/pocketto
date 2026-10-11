@@ -10,6 +10,7 @@ const path = require('node:path');
 const { dispatchEvent, serializeResponse } = require('./adapter');
 const { handleSpecApproved } = require('./issue-handler');
 const { handlePhaseComplete } = require('./phase-handler');
+const { handlePhaseClosed } = require('./phase-closed-handler');
 const { handlePlanClosed } = require('./closure-handler');
 const { loadContext } = require('./phase-handler-context');
 const { defaultRunner } = require('./github');
@@ -30,6 +31,7 @@ const handlers = {
       planDir: context.planDir,
     });
   },
+  'phase-closed': (event, options) => handlePhaseClosed(event, options),
 };
 
 function eventIdOf(event) {

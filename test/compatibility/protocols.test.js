@@ -18,14 +18,14 @@ test('v4 preflight independently rejects mismatched or missing protocol versions
     releaseMajor: 4,
     contract: 3,
     pipeline: 5,
-    lifecycleSchema: 1,
-    adapterContract: 1,
+    lifecycleSchema: 2,
+    adapterContract: 2,
     surfaceManifest: 1,
   };
   const validEnterprise = {
     packageMajor: 4,
     releaseMajor: 4,
-    adapterContract: 1,
+    adapterContract: 2,
     surfaceManifest: 1,
   };
   const scenarios = [
@@ -33,11 +33,11 @@ test('v4 preflight independently rejects mismatched or missing protocol versions
     { name: 'missing Core CONTRACT', surface: 'core', field: 'contract', missing: true },
     { name: 'Core PIPELINE mismatch', surface: 'core', field: 'pipeline', value: 4 },
     { name: 'missing Core PIPELINE', surface: 'core', field: 'pipeline', missing: true },
-    { name: 'Core LIFECYCLE_SCHEMA mismatch', surface: 'core', field: 'lifecycleSchema', value: 2 },
+    { name: 'Core LIFECYCLE_SCHEMA mismatch', surface: 'core', field: 'lifecycleSchema', value: 1 },
     { name: 'missing Core LIFECYCLE_SCHEMA', surface: 'core', field: 'lifecycleSchema', missing: true },
     { name: 'Core SURFACE_MANIFEST mismatch', surface: 'core', field: 'surfaceManifest', value: 2 },
     { name: 'missing Core SURFACE_MANIFEST', surface: 'core', field: 'surfaceManifest', missing: true },
-    { name: 'Enterprise ADAPTER_CONTRACT mismatch', surface: 'enterprise', field: 'adapterContract', value: 2 },
+    { name: 'Enterprise ADAPTER_CONTRACT mismatch', surface: 'enterprise', field: 'adapterContract', value: 3 },
     { name: 'missing Enterprise ADAPTER_CONTRACT', surface: 'enterprise', field: 'adapterContract', missing: true },
     { name: 'Enterprise SURFACE_MANIFEST mismatch', surface: 'enterprise', field: 'surfaceManifest', value: 2 },
     { name: 'missing Enterprise SURFACE_MANIFEST', surface: 'enterprise', field: 'surfaceManifest', missing: true },

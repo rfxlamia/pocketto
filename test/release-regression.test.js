@@ -161,8 +161,8 @@ function assertPackedPackageMetadata(extracted) {
       CLI_VERSION: '4.1.0',
       CONTRACT: 3,
       PIPELINE: 5,
-      LIFECYCLE_SCHEMA: 1,
-      ADAPTER_CONTRACT: 1,
+      LIFECYCLE_SCHEMA: 2,
+      ADAPTER_CONTRACT: 2,
       SURFACE_MANIFEST: 1,
     },
     'packed package and independent protocol versions must agree',
@@ -285,6 +285,14 @@ test('npm test command includes every v4 runtime suite and the T13 documentation
     'test/release-regression.test.js',
     'test/documentation.test.js',
     'test/bug-hunting-64.test.js',
+    'test/git-worktree.test.js',
+    'test/enterprise-stack-body.test.js',
+    'test/plan-notices.test.js',
+    'test/phase-branches.test.js',
+    'test/enterprise-phase-closed.test.js',
+    'test/phase-handoff.test.js',
+    'test/enterprise-phase-stack.test.js',
+    'test/enterprise-lifecycle-proof-phase-closed.test.js',
   ];
   const actualSuites = match[1].trim().split(/\s+/);
   assert.deepEqual(actualSuites, expectedSuites, 'scripts.test must name every v4 runtime suite and the merged T13 documentation gate, without omissions or unapproved extras');

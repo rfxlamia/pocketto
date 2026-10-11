@@ -125,7 +125,7 @@ function writeAdapterPackageMetadata(adapterPath) {
 }
 
 function registerAdapter(pocketDir, adapterPath, {
-  adapterContract = 1,
+  adapterContract = 2,
   events = ['spec-approved', 'phase-complete', 'plan-closed'],
   timeoutMs = 30_000,
 } = {}) {

@@ -61,12 +61,13 @@ test('CYCLE 1: install atomically writes registration with schema 1, adapter con
   assert.equal(fs.existsSync(regPath), true, 'registration file must exist');
   const record = JSON.parse(fs.readFileSync(regPath, 'utf8'));
   assert.deepEqual(record.argv, [dummy], 'an explicit custom --argv override must be registered verbatim');
-  assert.deepEqual(Object.keys(record).sort(), ['adapter_contract', 'argv', 'events', 'schema', 'timeout_ms']);
+  assert.deepEqual(Object.keys(record).sort(), ['adapter_contract', 'argv', 'events', 'phase_branches', 'schema', 'timeout_ms']);
+  assert.equal(record.phase_branches, 'stacked', 'default install must record phase_branches stacked');
   assert.equal(record.schema, 1, 'registration schema must be 1');
-  assert.equal(record.adapter_contract, 1, 'adapter contract must be 1');
+  assert.equal(record.adapter_contract, 2, 'adapter contract must be 2');
   assert.ok(Array.isArray(record.argv) && record.argv.length > 0, 'argv must be a non-empty executable argv');
   assert.ok(record.argv.every((a) => typeof a === 'string' && a.length > 0), 'argv entries must be strings');
-  assert.deepEqual(record.events, ['spec-approved', 'phase-complete', 'plan-closed']);
+  assert.deepEqual(record.events, ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed']);
   assert.equal(record.timeout_ms, 30000);
 
   const orphans = (pocketDirListing(root) || []).filter((f) => f.includes('.tmp-'));
@@ -114,9 +115,9 @@ test('CYCLE 1: preflight fails closed on missing registration with zero GitHub c
 test('CYCLE 1: preflight fails closed on malformed or partial registration', () => {
   for (const [name, body] of [
     ['truncated JSON', '{"schema": 1, "adapter_contract":'],
-    ['wrong schema', JSON.stringify({ schema: 99, adapter_contract: 1, argv: ['x'], events: ['spec-approved'], timeout_ms: 30000 })],
-    ['contract mismatch', JSON.stringify({ schema: 1, adapter_contract: 2, argv: ['x'], events: ['spec-approved'], timeout_ms: 30000 })],
-    ['missing argv', JSON.stringify({ schema: 1, adapter_contract: 1, events: ['spec-approved'], timeout_ms: 30000 })],
+    ['wrong schema', JSON.stringify({ schema: 99, adapter_contract: 2, argv: ['x'], events: ['spec-approved'], timeout_ms: 30000 })],
+    ['contract mismatch', JSON.stringify({ schema: 1, adapter_contract: 3, argv: ['x'], events: ['spec-approved'], timeout_ms: 30000 })],
+    ['missing argv', JSON.stringify({ schema: 1, adapter_contract: 2, events: ['spec-approved'], timeout_ms: 30000 })],
   ]) {
     const root = makeTempRoot();
     const dir = path.join(root, '.pocket');
@@ -146,7 +147,7 @@ test('CYCLE 1: preflight fails closed on missing or incompatible Core', () => {
 
   for (const [name, coreInfo] of [
     ['missing Core', { present: false, contract: null, lifecycleSchema: null, adapterContract: null }],
-    ['incompatible Core contract', { present: true, packageMajor: 4, releaseMajor: 4, contract: 2, lifecycleSchema: 1, adapterContract: 1 }],
+    ['incompatible Core contract', { present: true, packageMajor: 4, releaseMajor: 4, contract: 2, lifecycleSchema: 1, adapterContract: 2 }],
   ]) {
     let ghCalls = 0;
     const res = registration.preflight(root, {
@@ -186,6 +187,62 @@ test('CYCLE 1: failed install writes no partial registration state', () => {
 // T7 CYCLE 2: valid adapter responses are bounded and secret-free. Unit
 // through enterprise/adapter.js response serializer and enterprise/retry.js
 // redaction. Fixed response objects and a fake gh runner; never live GitHub.
+
+// T14 preflight ignored-artifact warnings. Warnings are display-only: preflight still passes.
+function gitInit(root) {
+  execFileSync('git', ['-C', root, 'init', '-q'], { stdio: 'ignore' });
+}
+
+function makePlanArtifacts(root) {
+  const specDir = path.join(root, 'docs', 'pocket', 'spec', 'demo-plan');
+  const planDir = path.join(root, 'docs', 'pocket', 'plans', 'demo-plan');
+  fs.mkdirSync(path.join(planDir, 'reviews'), { recursive: true });
+  fs.mkdirSync(specDir, { recursive: true });
+  const files = [
+    path.join(planDir, 'log.json'),
+    path.join(planDir, 'closeout.md'),
+    path.join(planDir, 'reviews', 'closeout-phase-1.md'),
+    path.join(specDir, 'lifecycle.json'),
+    path.join(specDir, '.pocket-meta.json'),
+  ];
+  for (const file of files) fs.writeFileSync(file, '{}\n');
+  return files.map((file) => path.relative(root, file).split(path.sep).join('/'));
+}
+
+test('preflight ignored warnings: an ignored docs/pocket emits POCKET_ARTIFACTS_IGNORED in data.warnings', () => {
+  const root = fs.realpathSync(makeTempRoot());
+  const dummy = makeDummyExecutable(root);
+  assert.equal(runCli(['install', root, '--argv', dummy, '--json']).exit, 0);
+  gitInit(root);
+  makePlanArtifacts(root);
+  fs.writeFileSync(path.join(root, '.gitignore'), 'docs/pocket/\n');
+
+  const res = runCli(['preflight', root, '--json']);
+  assert.equal(res.exit, 0, `ignored artifacts are warnings, not failures: ${res.stdout}`);
+  assert.equal(res.json.ok, true);
+  const [warning] = res.json.data.warnings || [];
+  assert.equal(warning && warning.code, 'POCKET_ARTIFACTS_IGNORED', JSON.stringify(res.json.data));
+  assert.match(warning.consequence, /another clone/, 'consequence must name other clones');
+  assert.match(warning.consequence, /\bCI\b/, 'consequence must name CI');
+  assert.ok(warning.paths.length > 0, 'warning must list the ignored paths');
+  assert.match(warning.fix, /git add -f/);
+  assert.match(warning.fix, /\.gitignore/);
+});
+
+test('preflight ignored warnings: tracked artifacts emit no warning and keep the legacy warning unchanged', () => {
+  const root = fs.realpathSync(makeTempRoot());
+  const dummy = makeDummyExecutable(root);
+  assert.equal(runCli(['install', root, '--argv', dummy, '--json']).exit, 0);
+  gitInit(root);
+  const tracked = makePlanArtifacts(root);
+  fs.writeFileSync(path.join(root, '.gitignore'), 'docs/pocket/\n');
+  execFileSync('git', ['-C', root, 'add', '-f', '--', ...tracked], { stdio: 'ignore' });
+
+  const res = runCli(['preflight', root, '--json']);
+  assert.equal(res.exit, 0, `preflight must pass: ${res.stdout}`);
+  assert.ok(!res.json.data.warnings || res.json.data.warnings.length === 0, JSON.stringify(res.json.data));
+  assert.equal(res.json.data.warning, undefined, 'no legacy warning on a compatible install');
+});
 
 const adapter = require('../enterprise/adapter');
 const retry = require('../enterprise/retry');
@@ -475,11 +532,11 @@ function installC4Root(events, argv) {
   return root;
 }
 
-test('CYCLE 4: Core contract 3 plus adapter registration contract 2 fails closed before any handler or GitHub call', () => {
+test('CYCLE 4: Core contract 3 plus adapter registration contract 3 fails closed before any handler or GitHub call', () => {
   const root = installC4Root(['spec-approved'], [process.execPath, 'adapter-stub.js']);
   const dir = path.join(root, '.pocket');
   const raw = JSON.parse(fs.readFileSync(path.join(dir, 'lifecycle-adapter.json'), 'utf8'));
-  raw.adapter_contract = 2;
+  raw.adapter_contract = 3;
   fs.writeFileSync(path.join(dir, 'lifecycle-adapter.json'), JSON.stringify(raw, null, 2) + '\n');
 
   let handlerCalls = 0;
@@ -532,9 +589,9 @@ test('CYCLE 4: event allowlist omission fails closed before any handler or GitHu
   assert.equal(ghCalls, 0, 'no GitHub call may run when the event is not allowlisted');
 });
 
-test('CYCLE 4: the handler dispatch table covers exactly the three lifecycle event types', () => {
-  assert.deepEqual(Object.keys(adapter.HANDLERS).sort(), ['phase-complete', 'plan-closed', 'spec-approved']);
-  for (const type of ['spec-approved', 'phase-complete', 'plan-closed']) {
+test('CYCLE 4: the handler dispatch table covers exactly the four lifecycle event types', () => {
+  assert.deepEqual(Object.keys(adapter.HANDLERS).sort(), ['phase-closed', 'phase-complete', 'plan-closed', 'spec-approved']);
+  for (const type of ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed']) {
     assert.equal(typeof adapter.HANDLERS[type], 'string', `${type} must map to an explicit named handler`);
     assert.ok(adapter.HANDLERS[type].length > 0, `${type} handler name must be non-empty`);
   }
@@ -648,4 +705,146 @@ test('SUP-3: malformed allowlisted lifecycle events fail before handler or trans
   assert.deepEqual(seen, ['demo-plan:spec-approved:r1']);
   assert.equal(handlerCalls, 1);
   assert.equal(transportCalls, 1);
+});
+
+// ADAPTER_CONTRACT 2: Enterprise serializer passes display-only notices through redaction.
+test('ADAPTER_CONTRACT 2 serializer redacts notices and registers contract 2', () => {
+  const secret = 'ghp_superSecretValue123';
+  const res = adapter.serializeResponse({
+    event_id: C2_EVENT_ID,
+    status: 'succeeded',
+    notices: [{ code: 'PR_CREATED', message: `phase-1 PR created with token ${secret}` }],
+  });
+  assert.ok(Array.isArray(res.notices), 'valid notice must survive serialization');
+  assert.equal(res.notices.length, 1);
+  assert.equal(res.notices[0].code, 'PR_CREATED');
+  assert.ok(!res.notices[0].message.includes(secret), 'notice message must be redacted');
+  assert.equal(validateAdapterResponse(res, C2_EVENT_ID).ok, true, 'serialized response must validate under Core');
+
+  const { buildRegistration } = require('../enterprise/registration-record');
+  assert.equal(buildRegistration({ argv: ['x'] }).adapter_contract, 2, 'new registrations must declare adapter contract 2');
+});
+
+test('ADAPTER_CONTRACT 2 serializer drops invalid notices and keeps valid ones', () => {
+  const res = adapter.serializeResponse({
+    event_id: C2_EVENT_ID,
+    status: 'succeeded',
+    notices: [
+      { code: 'PR_REUSED', message: 'phase-1 PR reused against main' },
+      { code: 'pr_created', message: 'lowercase code is invalid' },
+    ],
+  });
+  assert.deepEqual(res.notices, [{ code: 'PR_REUSED', message: 'phase-1 PR reused against main' }]);
+  assert.equal(validateAdapterResponse(res, C2_EVENT_ID).ok, true, 'serialized response must validate under Core');
+});
+
+// T9: registration phase fields, install flags, and push consent.
+
+function readRegistrationRecord(root) {
+  return JSON.parse(fs.readFileSync(path.join(root, '.pocket', 'lifecycle-adapter.json'), 'utf8'));
+}
+
+function writeModeConfig(root, branchStrategy) {
+  fs.writeFileSync(path.join(root, 'AGENTS.md'), [
+    '## Pocket Enterprise',
+    '',
+    '```',
+    'enterprise: true',
+    `branch_strategy: ${branchStrategy}`,
+    'create_pr: true',
+    '```',
+    '',
+  ].join('\n'));
+}
+
+test('registration default stacked: install without mode config records phase_branches stacked and no push_consent', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  const res = registration.installRegistration(root, { argv: [dummy] });
+  assert.equal(res.ok, true, `install should succeed: ${JSON.stringify(res)}`);
+  assert.equal(res.record.phase_branches, 'stacked');
+  assert.equal('push_consent' in res.record, false, 'push_consent must be absent unless consented');
+  assert.deepEqual(readRegistrationRecord(root), res.record, 'the written file must match the returned record');
+  assert.equal(registration.validateRegistration(res.record).ok, true, 'default record must validate');
+});
+
+test('registration main-local forces phase_branches none and warns when stacked was requested', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  writeModeConfig(root, 'main-local');
+
+  const defaulted = registration.installRegistration(root, { argv: [dummy] });
+  assert.equal(defaulted.ok, true, `install should succeed: ${JSON.stringify(defaulted)}`);
+  assert.equal(defaulted.record.phase_branches, 'none', 'main-local must resolve to none without an explicit flag');
+  assert.equal(defaulted.warning, undefined, 'no warning when none is the natural result');
+
+  const explicit = registration.installRegistration(root, { argv: [dummy], phaseBranches: 'stacked' });
+  assert.equal(explicit.ok, true, `install should succeed: ${JSON.stringify(explicit)}`);
+  assert.equal(explicit.record.phase_branches, 'none', 'main-local wins over an explicit stacked request');
+  assert.ok(explicit.warning, 'overriding an explicit stacked request must carry a warning');
+  assert.equal(explicit.warning.code, 'PHASE_BRANCHES_MAIN_LOCAL');
+  assert.match(explicit.warning.message, /main-local/, 'warning must explain why stacked was overridden');
+  assert.equal(readRegistrationRecord(root).phase_branches, 'none');
+});
+
+test('registration field validation: phase_branches and push_consent are closed and never permit force', () => {
+  const { validateRegistration, buildRegistration } = require('../enterprise/registration-record');
+  const base = buildRegistration({ argv: ['node', 'adapter.js'] });
+  assert.equal(validateRegistration(base).ok, true, 'base record without optional fields must stay valid');
+
+  const malformed = [
+    ['push_consent scope other than pocket-phase-branches', { push_consent: { scope: 'x', force: false } }],
+    ['push_consent force true', { push_consent: { scope: 'pocket-phase-branches', force: true } }],
+    ['push_consent force 0 (not boolean false)', { push_consent: { scope: 'pocket-phase-branches', force: 0 } }],
+    ['push_consent missing force', { push_consent: { scope: 'pocket-phase-branches' } }],
+    ['push_consent extra key', { push_consent: { scope: 'pocket-phase-branches', force: false, extra: true } }],
+    ['push_consent as a string', { push_consent: 'pocket-phase-branches' }],
+    ['phase_branches not in allowlist', { phase_branches: 'yes' }],
+    ['phase_branches mode branch', { phase_branches: 'branch' }],
+    ['unknown extra field', { force: true }],
+  ];
+  for (const [label, extra] of malformed) {
+    const result = validateRegistration({ ...base, ...extra });
+    assert.equal(result.ok, false, `${label} must be rejected`);
+    assert.equal(result.code, 'ENTERPRISE_REGISTRATION_MALFORMED', `${label} must fail malformed`);
+  }
+
+  for (const phaseBranches of ['stacked', 'none']) {
+    const result = validateRegistration({ ...base, phase_branches: phaseBranches });
+    assert.equal(result.ok, true, `phase_branches ${phaseBranches} must be valid`);
+  }
+  const consent = validateRegistration({
+    ...base,
+    phase_branches: 'stacked',
+    push_consent: { scope: 'pocket-phase-branches', force: false },
+  });
+  assert.equal(consent.ok, true, 'the fixed push_consent object must be valid');
+});
+
+test('install phase flags: --phase-branches none and --push-consent phase-branches are recorded in the registration', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  const res = runCli(['install', root, '--argv', dummy, '--phase-branches', 'none', '--push-consent', 'phase-branches', '--json']);
+  assert.equal(res.exit, 0, `install with phase flags should succeed: ${res.stdout}`);
+  assert.equal(res.json.ok, true);
+  const record = readRegistrationRecord(root);
+  assert.equal(record.phase_branches, 'none');
+  assert.deepEqual(record.push_consent, { scope: 'pocket-phase-branches', force: false });
+});
+
+test('install invalid phase flag: --phase-branches maybe and --push-consent other fail closed with no registration written', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  const badPhase = runCli(['install', root, '--argv', dummy, '--phase-branches', 'maybe', '--json']);
+  assert.equal(badPhase.exit, 1, `invalid --phase-branches must exit 1: ${badPhase.stdout}`);
+  assert.equal(badPhase.json.ok, false);
+  assert.equal(badPhase.json.error.code, 'ENTERPRISE_INSTALL_FAILED');
+  assert.match(badPhase.json.error.message, /--phase-branches must be one of: stacked, none/);
+  assert.equal(pocketDirListing(root), null, 'no .pocket directory may be written for an invalid phase value');
+
+  const badConsent = runCli(['install', root, '--argv', dummy, '--push-consent', 'yes', '--json']);
+  assert.equal(badConsent.exit, 1, `invalid --push-consent must exit 1: ${badConsent.stdout}`);
+  assert.equal(badConsent.json.ok, false);
+  assert.equal(badConsent.json.error.code, 'ENTERPRISE_INSTALL_FAILED');
+  assert.equal(pocketDirListing(root), null, 'no .pocket directory may be written for an invalid push consent');
 });

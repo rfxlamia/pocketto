@@ -4,12 +4,13 @@
 // pocketto-pi — cross-platform CLI for the pocket-* development skills.
 //
 //   pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset] [--json]
-//   pocketto-pi log init   <plan_dir>                      [--json]
+//   pocketto-pi log init   <plan_dir>                      [--phase-branches stacked|none] [--json]
 //   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
 //   pocketto-pi log close  <plan_dir>                      [--json]
+//   pocketto-pi log handoff <plan_dir> <phase_file>        [--json]
 //   pocketto-pi meta get   <dir> <field>                   [--json]
 //   pocketto-pi meta set   <dir> <field> <value>           [--json]
-//   pocketto-pi doctor                                     [--strict] [--json]
+//   pocketto-pi doctor [<plan_dir>]                        [--strict] [--json]
 //   pocketto-pi mode [<dir>]                               [--json]
 //   pocketto-pi mode init [<dir>]                          [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--require-approval <bool>] [--file <AGENTS.md|CLAUDE.md>] [--json]
 //   pocketto-pi edu [<dir>]                                [--json]
@@ -108,6 +109,7 @@ function parseArgs(argv) {
     recommended: false,
     enterprise: null,
     branchStrategy: null,
+    phaseBranches: null,
     createPr: null,
     requireApproval: null,
     file: null,
@@ -153,6 +155,8 @@ function parseArgs(argv) {
     else if (a === '--recommended') flags.recommended = true;
     else if (a === '--enterprise') flags.enterprise = requireValue(argv[++i], '--enterprise');
     else if (a.startsWith('--enterprise=')) flags.enterprise = requireValue(a.slice('--enterprise='.length), '--enterprise');
+    else if (a === '--phase-branches') flags.phaseBranches = requireValue(argv[++i], '--phase-branches');
+    else if (a.startsWith('--phase-branches=')) flags.phaseBranches = requireValue(a.slice('--phase-branches='.length), '--phase-branches');
     else if (a === '--branch-strategy') flags.branchStrategy = requireValue(argv[++i], '--branch-strategy');
     else if (a.startsWith('--branch-strategy=')) flags.branchStrategy = requireValue(a.slice('--branch-strategy='.length), '--branch-strategy');
     else if (a === '--create-pr') flags.createPr = requireValue(argv[++i], '--create-pr');
@@ -221,17 +225,18 @@ const HELP = `pocketto-pi — CLI for the pocket-* development skills
 
 Usage:
   pocketto-pi structure <execution-plan.md> [--dry-run] [--force] [--reset] [--json]
-  pocketto-pi log init   <plan_dir>                       [--json]
+  pocketto-pi log init   <plan_dir>                       [--phase-branches stacked|none] [--json]
   pocketto-pi log update <plan_dir> <phase_file> <status> [--task TN] [--sha <commit>] [--allow-duplicate-sha] [--json]
   pocketto-pi log update <plan_dir> <phase_file> --correction <sha> [--for-task TN] [--json]
   pocketto-pi log close  <plan_dir>                       [--json]
+  pocketto-pi log handoff <plan_dir> <phase_file>         [--json]
   pocketto-pi lifecycle transition <spec_dir> <event-type> --artifact <root>:<kind>:<path>:<sha256> [--json]
   pocketto-pi lifecycle drain <spec_dir>                  [--json]
   pocketto-pi lifecycle repair <spec_dir>                 [--json]
   pocketto-pi lifecycle migrate <spec_dir> --from v3      [--json] [--contract 3]
   pocketto-pi meta get   <dir> <field>                    [--json]
   pocketto-pi meta set   <dir> <field> <value>            [--json]
-  pocketto-pi doctor                                      [--strict] [--json]
+  pocketto-pi doctor [<plan_dir>]                         [--strict] [--json]
   pocketto-pi mode [<dir>]                                [--json]
   pocketto-pi mode init [<dir>]                           [--enterprise <bool>] [--branch-strategy <strategy>] [--create-pr <bool>] [--require-approval <bool>] [--file <AGENTS.md|CLAUDE.md>] [--json]
   pocketto-pi edu [<dir>]                                 [--json]
@@ -338,6 +343,7 @@ function main() {
         forTask: flags.forTask,
         sha: flags.sha,
         allowDuplicateSha: flags.allowDuplicateSha,
+        phaseBranches: flags.phaseBranches,
       });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'lifecycle') {
@@ -351,7 +357,7 @@ function main() {
       const metaResult = meta.run({ sub: positionals[1], positionals: positionals.slice(2) });
       emitSuccess(metaResult.command, metaResult, flags.json);
     } else if (command === 'doctor') {
-      const result = doctor.run({ strict: flags.strict });
+      const result = doctor.run({ strict: flags.strict, planDir: positionals[1] });
       emitSuccess(result.command, result, flags.json);
     } else if (command === 'mode') {
       const result = requireEnterpriseCommand('mode').run({

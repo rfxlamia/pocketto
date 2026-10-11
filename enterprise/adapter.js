@@ -6,7 +6,12 @@
 // `gh` invocations, and ownership rules never appear in responses — only
 // opaque proof refs plus redacted diagnostics.
 
-const { validateEvent, validateAdapterResponse } = require('../cli/lib/lifecycle-contract');
+const {
+  validateEvent,
+  validateAdapterResponse,
+  isValidAdapterNotice,
+  ADAPTER_NOTICE_MAX_COUNT,
+} = require('../cli/lib/lifecycle-contract');
 const { PhaseHandlerError } = require('./phase-handler-errors');
 const { redactSecrets } = require('./retry');
 
@@ -19,13 +24,14 @@ try {
 
 const ADAPTER_STATUSES = ['succeeded', 'retryable', 'terminal', 'reconciling'];
 
-// Explicit handler dispatch table: exactly the three neutral lifecycle
+// Explicit handler dispatch table: exactly the four neutral lifecycle
 // event types, each naming the Enterprise handler that owns it. The names
 // are local handler keys — remote policy stays in the Phase 2 handlers.
 const HANDLERS = {
   'spec-approved': 'handleSpecApproved',
   'phase-complete': 'handlePhaseComplete',
   'plan-closed': 'handlePlanClosed',
+  'phase-closed': 'handlePhaseClosed',
 };
 
 function buildError(code, message, retryable) {
@@ -34,6 +40,22 @@ function buildError(code, message, retryable) {
     retryable: retryable === true,
     message: redactSecrets(typeof message === 'string' ? message : String(message ?? '')),
   };
+}
+
+// Display-only notices: a notice must be valid as received (exactly code and
+// message, bounded), then its message is redacted. A redacted result that no
+// longer satisfies the Core notice rules is dropped rather than repaired.
+// Keeps at most ADAPTER_NOTICE_MAX_COUNT notices, so the response stays bounded.
+function serializeNotices(notices) {
+  if (!Array.isArray(notices)) return [];
+  const kept = [];
+  for (const notice of notices) {
+    if (kept.length >= ADAPTER_NOTICE_MAX_COUNT) break;
+    if (!isValidAdapterNotice(notice)) continue;
+    const redacted = { code: notice.code, message: redactSecrets(notice.message) };
+    if (isValidAdapterNotice(redacted)) kept.push(redacted);
+  }
+  return kept;
 }
 
 // Builds the bounded stdout protocol object. Drops every field outside the
@@ -82,6 +104,8 @@ function serializeResponse(input, expectedEventId) {
     }
     out.error = { code, retryable, message: redactSecrets(message) };
   }
+  const notices = serializeNotices(input.notices);
+  if (notices.length > 0) out.notices = notices;
   const checked = validateAdapterResponse(out, expected);
   if (!checked.ok) {
     throw new Error(`${checked.code}: ${checked.message}`);
@@ -262,7 +286,8 @@ function dispatchEvent(event, opts = {}) {
 
   const lifecycleDelivery = opts.lifecycleDelivery;
   const prepared = prepareLifecycleEvent(event, lifecycleDelivery);
-  if (prepared.response) return prepared.response;
+  // Prepare-stage responses pass the same response boundary as handler responses (notices included).
+  if (prepared.response) return serializeResponse(prepared.response, eventId === 'unknown-event' ? undefined : eventId);
   const invocation = invokeHandler(selected.handler, prepared.handlerEvent, projectRoot,
     registration.record, opts.ghRunner, eventId, protocolError);
   if (invocation.response) return invocation.response;

@@ -9,8 +9,8 @@ const version = require('../cli/lib/version');
 test('v4 protocol constants are independently versioned', () => {
   assert.equal(version.CONTRACT, 3, 'CONTRACT must be 3');
   assert.equal(version.PIPELINE, 5, 'PIPELINE must be 5');
-  assert.equal(version.LIFECYCLE_SCHEMA, 1, 'LIFECYCLE_SCHEMA must be 1');
-  assert.equal(version.ADAPTER_CONTRACT, 1, 'ADAPTER_CONTRACT must be 1');
+  assert.equal(version.LIFECYCLE_SCHEMA, 2, 'LIFECYCLE_SCHEMA must be 2');
+  assert.equal(version.ADAPTER_CONTRACT, 2, 'ADAPTER_CONTRACT must be 2');
   assert.equal(version.SURFACE_MANIFEST, 1, 'SURFACE_MANIFEST must be 1');
 });
 
@@ -306,4 +306,106 @@ test('rejects unknown response field with stable code', () => {
   const res = validateAdapterResponse(makeResponse({ frobnicate: true }), KNOWN_EVENT_ID);
   assert.equal(res.ok, false);
   assert.equal(res.code, ADAPTER_ERROR_CODES.UNKNOWN_FIELD);
+});
+
+// ADAPTER_CONTRACT 2: display-only notices[] of { code, message }, bounded and validated by Core.
+test('adapter contract 2 notices: a valid notice is accepted', () => {
+  const res = validateAdapterResponse(
+    makeResponse({ notices: [{ code: 'PR_CREATED', message: 'phase-1 PR targets main' }] }),
+    KNOWN_EVENT_ID,
+  );
+  assert.equal(res.ok, true, JSON.stringify(res));
+});
+
+test('adapter contract 2 notices: malformed notices fail with ADAPTER_BAD_NOTICE', () => {
+  const longMessage = 'x'.repeat(501);
+  const tenValid = Array.from({ length: 10 }, (_, i) => ({ code: `NOTICE_${i}`, message: 'ok' }));
+  const badNotices = [
+    ['eleven notices', [...tenValid, { code: 'NOTICE_10', message: 'ok' }]],
+    ['lowercase code', [{ code: 'pr_created', message: 'ok' }]],
+    ['extra key command', [{ code: 'PR_CREATED', message: 'ok', command: 'rm -rf x' }]],
+    ['501-char message', [{ code: 'PR_CREATED', message: longMessage }]],
+    ['empty message', [{ code: 'PR_CREATED', message: '' }]],
+    ['non-array notices', { code: 'PR_CREATED', message: 'ok' }],
+    ['notice that is not an object', ['PR_CREATED']],
+  ];
+  for (const [label, notices] of badNotices) {
+    const res = validateAdapterResponse(makeResponse({ notices }), KNOWN_EVENT_ID);
+    assert.equal(res.ok, false, `${label} must be rejected`);
+    assert.equal(res.code, ADAPTER_ERROR_CODES.BAD_NOTICE, `${label} must use ADAPTER_BAD_NOTICE`);
+  }
+});
+
+test('adapter contract 2 notices: a top-level pr_url field stays ADAPTER_UNKNOWN_FIELD', () => {
+  const res = validateAdapterResponse(makeResponse({ pr_url: 'https://github.com/o/r/pull/1' }), KNOWN_EVENT_ID);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, ADAPTER_ERROR_CODES.UNKNOWN_FIELD);
+});
+
+// T2 schema 2: phase-closed is a contract event and LIFECYCLE_SCHEMA is the max supported schema.
+test('schema 2 contract: validateEvent accepts a phase-closed event and LIFECYCLE_SCHEMA is 2', () => {
+  const event = {
+    event_id: buildEventId('demo-plan', 'phase-closed', 3),
+    plan_id: 'demo-plan',
+    type: 'phase-closed',
+    revision: 3,
+    occurred_at: FIXED_CLOCK,
+    artifact_refs: [
+      { root: 'plan', kind: 'phase-evidence', path: 'phase-1.md', sha256: '0'.repeat(64), revision: 1 },
+    ],
+    payload_hash: '1'.repeat(64),
+    proof_ref: null,
+    proof_hash: null,
+    delivery: { status: 'pending', attempts: 0 },
+  };
+  const res = validateEvent(event);
+  assert.deepEqual(res, { ok: true, code: null, message: null }, 'phase-closed must validate');
+  assert.ok(EVENT_TYPES.includes('phase-closed'), 'phase-closed must be an allowed event type');
+  assert.equal(version.LIFECYCLE_SCHEMA, 2, 'LIFECYCLE_SCHEMA must be 2');
+});
+
+// T2 schema 2: the v3 migration identity matcher accepts schema 1 and 2.
+test('migrate schema 2: a migrated plan whose lifecycle doc is schema 2 replays the existing migration', (t) => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { copyV3Plan, runCli } = require('./compatibility/support');
+  const fixture = copyV3Plan(t);
+  const args = ['lifecycle', 'migrate', fixture.specDir, '--from', 'v3', '--json', '--contract', '3'];
+
+  const first = runCli(args, { cwd: fixture.specDir });
+  assert.equal(first.status, 0, `first migration should succeed: ${first.stdout}${first.stderr}`);
+
+  const lifecyclePath = path.join(fixture.specDir, 'lifecycle.json');
+  const doc = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+  doc.schema = 2;
+  fs.writeFileSync(lifecyclePath, `${JSON.stringify(doc, null, 2)}\n`);
+
+  const second = runCli(args, { cwd: fixture.specDir });
+  assert.equal(second.status, 0, `schema-2 replay must not fail identity matching: ${second.stdout}${second.stderr}`);
+  assert.equal(second.json && second.json.ok, true, `expected success envelope: ${second.stdout}`);
+  assert.equal(second.json.data.idempotent, true, 'replay must report the existing migration');
+  assert.equal(second.json.data.revision, doc.plan.revision);
+});
+
+test('migrate schema 2: schema-2 documents with progress are still refused by the pristine compare', (t) => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { copyV3Plan, runCli } = require('./compatibility/support');
+  const fixture = copyV3Plan(t);
+  const args = ['lifecycle', 'migrate', fixture.specDir, '--from', 'v3', '--json', '--contract', '3'];
+
+  const first = runCli(args, { cwd: fixture.specDir });
+  assert.equal(first.status, 0, `first migration should succeed: ${first.stdout}${first.stderr}`);
+
+  const lifecyclePath = path.join(fixture.specDir, 'lifecycle.json');
+  const doc = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+  doc.schema = 2;
+  doc.plan.phases = { 'phase-1': { branch: 'pocket/v3-plan/phase-1', base_branch: 'main' } };
+  const planted = `${JSON.stringify(doc, null, 2)}\n`;
+  fs.writeFileSync(lifecyclePath, planted);
+
+  const second = runCli(args, { cwd: fixture.specDir });
+  assert.notEqual(second.status, 0, 'schema-2 progress must not replay as the pristine migration');
+  assert.equal(second.json && second.json.error && second.json.error.code, 'LIFECYCLE_ALREADY_EXISTS');
+  assert.equal(fs.readFileSync(lifecyclePath, 'utf8'), planted, 'refused replay must leave the document byte-identical');
 });

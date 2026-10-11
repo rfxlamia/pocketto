@@ -31,7 +31,7 @@ function initialRemoteState() {
     calls: [], effects: [], issues: [],
     pullRequests: [{
       number: PR_NUMBER, url: `${REPOSITORY_URL}/pull/${PR_NUMBER}`, state: 'OPEN',
-      headRefName: `feature/${PLAN_ID}`, baseRefName: 'main', headRefOid: 'abc123def456',
+      headRefName: `feature/${PLAN_ID}`, baseRefName: 'main', headRefOid: 'abc123def456', isCrossRepository: false,
       title: `Phase 1: ${PLAN_ID}`, body: `Implements ${PLAN_ID}`,
     }],
     comments: {}, nextIssueNumber: ISSUE_NUMBER, nextCommentId: 900,
@@ -52,4 +52,4 @@ function createEnvironment(fake) {
   return env;
 }
 
-module.exports = { createFixture };
+module.exports = { createFixture, installFakeGitHub, createEnvironment };

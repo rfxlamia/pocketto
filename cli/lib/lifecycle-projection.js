@@ -146,6 +146,30 @@ function projectionPathKey(value) {
   return String(value || '').replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// Restores per-phase branch identity from the lifecycle doc. Repair edits the
+// existing log.json object in place, so a field the lifecycle doc does not
+// carry keeps its current value: identity is never dropped. Only branch
+// identity is touched here; phase statuses are never changed by this step.
+function restoreBranchIdentity(plan, projection) {
+  if (isPlainObject(plan.phase_branches)) {
+    projection.header.phase_branches = {
+      ...(isPlainObject(projection.header.phase_branches) ? projection.header.phase_branches : {}),
+      ...plan.phase_branches,
+    };
+  }
+  if (!isPlainObject(plan.phases)) return;
+  for (const phase of projection.phases) {
+    const entry = plan.phases[`phase-${phase.order}`];
+    if (!isPlainObject(entry)) continue;
+    if (typeof entry.branch === 'string') phase.branch = entry.branch;
+    if (typeof entry.base_branch === 'string') phase.base_branch = entry.base_branch;
+  }
+}
+
 function applyLifecycleProjection(doc, projection) {
   const phases = projection.phases;
   const events = [...doc.events].sort((left, right) => left.revision - right.revision);
@@ -157,6 +181,8 @@ function applyLifecycleProjection(doc, projection) {
       if (phase && ['WAITING', 'BLOCKED'].includes(phase.status)) phase.status = 'REVIEW';
     }
   }
+
+  restoreBranchIdentity(doc.plan || {}, projection);
 
   const planState = (doc.plan && doc.plan.state) || {};
   if (planState.status === 'DONE') {

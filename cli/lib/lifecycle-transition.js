@@ -18,7 +18,8 @@ const { CliError } = require('./envelope');
 const { EVENT_TYPES } = require('./lifecycle-contract');
 const { commitTransition, readLifecycleDoc, hashBytes: sha256Bytes } = require('./lifecycle-store');
 const { resolveProjectRoot } = require('./lifecycle-adapter');
-const { writeProjection: defaultWriteProjection } = require('./logjson');
+const { writeProjection: defaultWriteProjection, readLog } = require('./logjson');
+const { currentBranch: worktreeCurrentBranch } = require('./git-worktree');
 
 // Parses one `--artifact <root>:<kind>:<relative-path>:<sha256>` flag value.
 // The relative path may itself contain ':' — it is everything between kind
@@ -206,10 +207,38 @@ function lifecycleSpecDirForPlan(planDir) {
   return null;
 }
 
+// Per-phase branch identity for a stacked plan, read from the log.json header
+// and the matching phase entry. Returns null for every other plan (none
+// strategy or no header mode), so none plans take the legacy path unchanged.
+function stackedPhaseIdentity(log, phaseFile) {
+  const phaseBranches = log && log.header ? log.header.phase_branches : undefined;
+  if (!phaseBranches || phaseBranches.mode !== 'stacked') return null;
+  const phase = (log.phases || []).find((candidate) => candidate && candidate.file === phaseFile);
+  if (!phase || typeof phase.branch !== 'string' || phase.branch.length === 0) {
+    throw new CliError('LIFECYCLE_BRANCH_REQUIRED', `stacked plan records no branch for ${phaseFile} in log.json`);
+  }
+  return {
+    branch: phase.branch,
+    planPatch: {
+      phase_branches: { mode: 'stacked', root_base: phaseBranches.root_base },
+      phases: { [`phase-${phase.order}`]: { branch: phase.branch, base_branch: phase.base_branch } },
+    },
+  };
+}
+
+// log.json for a direct caller that did not pass the in-memory log. Absent
+// file means no identity (none path).
+function readOptionalLog(planDir) {
+  const logPath = path.join(planDir, 'log.json');
+  return existsSync(logPath) ? readLog(logPath) : null;
+}
+
 // Emission hook for `log update`: commits exactly one `phase-complete` event
 // when a phase-level (not task-level) update moves a phase INTO REVIEW, and
-// nothing otherwise. Called by `cli/commands/log.js` BEFORE the log.json
-// projection write — Core commits the authoritative event FIRST, then the
+// nothing otherwise. Stacked plans also record per-phase identity through a
+// planPatch, and HEAD must be on that phase's branch before anything commits.
+// Called by `cli/commands/log.js` BEFORE the log.json projection write — Core
+// commits the authoritative event FIRST, then the
 // caller projects log.json; a projection failure surfaces as
 // PROJECTION_REPAIR_REQUIRED with the commit durable, the event pending,
 // and dispatch deferred (never dispatched on a failed projection).
@@ -220,25 +249,59 @@ function lifecycleSpecDirForPlan(planDir) {
 // authoritative document.
 //
 // Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
-function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus }) {
-  if (level !== 'phase') return null;
-  if (newStatus !== 'REVIEW') return null;
-  if (oldStatus === 'REVIEW') return null;
-  // v3-only plans (no lifecycle identity or no lifecycle document) keep
-  // existing `log update` behavior untouched: no event, no error, no new
-  // file. Only plans already carrying a lifecycle document participate.
+// Fail closed before any commit for stacked plans: HEAD must be exactly this
+// phase's branch (a detached HEAD reads as null and is a mismatch too). No-op
+// when `stacked` is null, so none plans never reach git here. Runs before the
+// lifecycle-document early returns, so the guard holds with or without a doc.
+function assertStackedHeadOnPhaseBranch(planDir, phaseFile, stacked) {
+  if (!stacked) return;
+  const headBranch = worktreeCurrentBranch(planDir);
+  if (headBranch !== stacked.branch) {
+    throw new CliError(
+      'PHASE_BRANCH_MISMATCH',
+      `${phaseFile} belongs on ${stacked.branch}, but HEAD is ${headBranch === null ? 'detached' : headBranch}. ` +
+        `Run: git switch ${stacked.branch}`,
+    );
+  }
+}
+
+// Plan identity and spec dir of a plan that already carries a matching
+// lifecycle document, or null (no slug, no spec dir, no document, or another
+// plan_id). Shared guard for the emission hooks: plans without a matching
+// document keep their pre-lifecycle behavior (no event, no error, no file).
+function matchingLifecycleTarget(planDir) {
   const planId = planIdForLog(planDir);
   if (!planId) return null;
   const specDir = lifecycleSpecDirForPlan(planDir);
   if (!specDir) return null;
   const existing = readLifecycleDoc(specDir);
   if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  return { planId, specDir };
+}
+
+function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus, log }) {
+  if (level !== 'phase') return null;
+  if (newStatus !== 'REVIEW') return null;
+  if (oldStatus === 'REVIEW') return null;
+  const stacked = stackedPhaseIdentity(log === undefined ? readOptionalLog(planDir) : log, phaseFile);
+  assertStackedHeadOnPhaseBranch(planDir, phaseFile, stacked);
+  // v3-only plans (no lifecycle identity or no lifecycle document) keep
+  // existing `log update` behavior untouched: no event, no error, no new
+  // file. Only plans already carrying a lifecycle document participate.
+  const target = matchingLifecycleTarget(planDir);
+  if (!target) return null;
+  const { planId, specDir } = target;
   const artifacts = [phaseEvidenceRef(planDir, phaseFile)];
-  const branch = currentBranch(planDir);
-  if (!branch) {
-    throw new CliError('LIFECYCLE_BRANCH_REQUIRED', 'cannot commit phase-complete without a current branch');
+  let branch;
+  if (stacked) {
+    branch = stacked.branch;
+  } else {
+    branch = currentBranch(planDir);
+    if (!branch) {
+      throw new CliError('LIFECYCLE_BRANCH_REQUIRED', 'cannot commit phase-complete without a current branch');
+    }
   }
-  const res = commitTransition({
+  const transition = {
     specDir,
     planDir,
     planId,
@@ -246,7 +309,9 @@ function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newSt
     artifacts,
     branch,
     deps: { now: lifecycleNow },
-  });
+  };
+  if (stacked) transition.planPatch = stacked.planPatch;
+  const res = commitTransition(transition);
   if (!res.ok) {
     throw new CliError(res.code, res.message);
   }
@@ -282,12 +347,9 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
   // v3-only plans (no lifecycle identity or no lifecycle document) keep
   // existing `log close` behavior untouched: no event, no error, no new
   // file. Only plans already carrying a lifecycle document participate.
-  const planId = planIdForLog(planDir);
-  if (!planId) return null;
-  const specDir = lifecycleSpecDirForPlan(planDir);
-  if (!specDir) return null;
-  const existing = readLifecycleDoc(specDir);
-  if (!existing || !existing.plan || existing.plan.plan_id !== planId) return null;
+  const target = matchingLifecycleTarget(planDir);
+  if (!target) return null;
+  const { planId, specDir } = target;
   const artifacts = closureEvidenceRefs(planDir, phaseFiles);
   const res = commitTransition({
     specDir,
@@ -297,6 +359,44 @@ function emitPlanClosedIfDone({ planDir, phaseFiles }) {
     artifacts,
     deps: { now: lifecycleNow },
   });
+  if (!res.ok) {
+    throw new CliError(res.code, res.message);
+  }
+  return res.event;
+}
+
+// Emission hook for `log handoff` (stacked plans): commits one `phase-closed`
+// event for phase `order`, referencing the phase file and the immutable
+// closeout snapshot, plus the next phase's branch identity as a planPatch.
+// An identical rerun replays in the store (same payload hash), so no second
+// event is appended.
+//
+// Plans without a matching lifecycle document (no slug, no spec dir, no
+// document, or another plan_id) skip the event and return null, like the
+// sibling hooks; the caller still mirrors identity into log.json.
+//
+// Boundary: no enterprise/** imports, no `gh`, no GitHub IDs.
+function emitPhaseClosed({ planDir, phaseFile, order, snapshot, nextIdentity = null }) {
+  const target = matchingLifecycleTarget(planDir);
+  if (!target) return null;
+  const { planId, specDir } = target;
+  const artifacts = [
+    phaseEvidenceRef(planDir, phaseFile),
+    { root: 'plan', kind: 'closeout-snapshot', path: snapshot.path, sha256: snapshot.sha256, revision: 1 },
+  ];
+  const transition = {
+    specDir,
+    planDir,
+    planId,
+    type: 'phase-closed',
+    artifacts,
+    phaseKey: `phase-${order}`,
+    deps: { now: lifecycleNow },
+  };
+  if (nextIdentity) {
+    transition.planPatch = { phases: { [nextIdentity.phaseKey]: { branch: nextIdentity.branch, base_branch: nextIdentity.base_branch } } };
+  }
+  const res = commitTransition(transition);
   if (!res.ok) {
     throw new CliError(res.code, res.message);
   }
@@ -389,7 +489,7 @@ function runPhaseUpdateTransition({ planDir, logPath, log, phaseFile, level, old
     logPath,
     log,
     prepare: mutate,
-    commit: () => emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus }),
+    commit: () => emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus, log }),
     ...transitionDeps(deps),
   });
 }
@@ -410,4 +510,4 @@ function runPlanCloseTransition({ planDir, logPath, log, phaseFiles, mutate, dep
   });
 }
 
-module.exports = { parseArtifactFlag, planIdFor, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, runLifecycleTransition, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };
+module.exports = { parseArtifactFlag, planIdFor, planIdForLog, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, emitPhaseClosed, runLifecycleTransition, transitionDeps, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };

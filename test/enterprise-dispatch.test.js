@@ -178,7 +178,7 @@ const issue = {
 };
 const pr = {
   number: ${PR_NUMBER}, url: '${PR_URL}', state: 'OPEN', headRefName: 'feature/${PLAN_ID}',
-  baseRefName: 'main', headRefOid: 'abc123def456', title: 'Phase 1: ${PLAN_ID}', body: '${PLAN_ID}'
+  baseRefName: 'main', headRefOid: 'abc123def456', isCrossRepository: false, title: 'Phase 1: ${PLAN_ID}', body: '${PLAN_ID}'
 };
 const json = (value) => process.stdout.write(JSON.stringify(value));
 const field = (name) => {
@@ -422,7 +422,7 @@ test('Core invokes the packaged Enterprise runner for all concrete handlers thro
   const registration = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
   assert.deepEqual(registration.argv, [process.execPath, DISPATCH, fixture.root],
     'default argv must pin Node, the packaged dispatcher, and this explicit project root');
-  assert.deepEqual(registration.events, ['spec-approved', 'phase-complete', 'plan-closed']);
+  assert.deepEqual(registration.events, ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed']);
 
   const record = registeredAdapter(fixture.root);
   const beforeSpec = readCalls(tracePath).length;
@@ -1006,4 +1006,10 @@ test('registered phase-complete rejects a spec directory symlink escaping the ex
   assertBoundedFailure(response, fixture.phaseEvent);
   assert.deepEqual(fs.readFileSync(path.join(externalSpecDir, 'lifecycle.json')), lifecycleBefore);
   assert.deepEqual(snapshotTree(externalSpecDir), externalBefore, 'the external spec tree must not be written');
+});
+
+test('packaged dispatcher maps phase-closed to the Enterprise phase-closed handler', () => {
+  const dispatcher = require('../enterprise/dispatch');
+  assert.deepEqual(Object.keys(dispatcher.handlers).sort(), ['phase-closed', 'phase-complete', 'plan-closed', 'spec-approved']);
+  assert.equal(typeof dispatcher.handlers['phase-closed'], 'function');
 });

@@ -11,7 +11,7 @@ Pocket Enterprise is an optional, additive adapter for teams that explicitly cho
 
 ## Release and compatibility
 
-The `surfaces.json` manifest has schema `1` and defines exactly `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Enterprise roles are deltas requiring their matching Core role. Release versions are package `4.1.0`, CLI `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `1`, adapter contract `1`, and surface manifest `1`; these are independent version boundaries.
+The `surfaces.json` manifest has schema `1` and defines exactly `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Enterprise roles are deltas requiring their matching Core role. Release versions are package `4.1.0`, CLI `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `2`, adapter contract `2`, and surface manifest `1`; these are independent version boundaries.
 
 | Core | Enterprise | Result |
 |------|------------|--------|
@@ -21,7 +21,7 @@ The `surfaces.json` manifest has schema `1` and defines exactly `pi/core`, `pi/e
 | v3 | v4 | Enterprise fails closed with Core upgrade guidance; v3 Core remains usable. |
 | v4 | v3 | The adapter fails closed with Enterprise upgrade guidance; pending v4 events are retained. |
 
-The v4 preflight warns about legacy v3 installations; an unchanged v3 binary cannot warn about a future release. Never infer consent from a remote or credentials. Follow `references/onboarding.md` for setup and registration.
+The v4 preflight warns about legacy v3 installations; an unchanged v3 binary cannot warn about a future release. Never infer consent from a remote or credentials. A registration must declare adapter contract `2`; reinstall the adapter after upgrading, because a contract `1` registration fails preflight with `ENTERPRISE_ADAPTER_CONTRACT_MISMATCH`. Follow `references/onboarding.md` for setup, phase-branch options, and registration.
 
 ## Activation and preflight
 
@@ -53,10 +53,11 @@ Core emits only neutral event names and artifact references. The event journal a
 | Event | Enterprise-owned action |
 |-------|-------------------------|
 | `spec-approved` | Reconcile the approved spec with its owned issue; see `references/issue-reconciliation.md`. |
-| `phase-complete` | Reconcile an existing phase PR and its proof; see `references/phase-reconciliation.md`. A missing PR is `PR_REQUIRED`; the adapter never creates one. |
+| `phase-complete` | Reconcile an existing phase PR and its proof; see `references/phase-reconciliation.md`. A missing PR is `PR_REQUIRED`; the adapter never creates one. For stacked plans this event is deferred to `phase-closed`. |
+| `phase-closed` | Stacked plans only. Publish the closed phase PR with its stack identity, summary, findings, and stack proof, pushing its phase branch only with consent; see `references/phase-reconciliation.md`. A missing consent is retryable `PUSH_CONSENT_REQUIRED`. |
 | `plan-closed` | Reconcile the final tasklist proof on the linked issue; see `references/phase-reconciliation.md`. |
 
-The adapter owns GitHub IDs, credentials, and remote proof in Enterprise-owned metadata. Core lifecycle records contain no GitHub IDs or credentials. Enterprise issue reconciliation may create one issue for `spec-approved`; it does not create an issue for phase or closure events. `create-pr` is a separate, explicit user-triggered recorder.
+The adapter owns GitHub IDs, credentials, and remote proof in Enterprise-owned metadata. Core lifecycle records contain no GitHub IDs or credentials. Enterprise issue reconciliation may create one issue for `spec-approved`; it does not create an issue for phase or closure events. `create-pr` is a separate, explicit user-triggered recorder; for stacked plans it runs `publish-phase`, the same publisher the `phase-closed` handler uses.
 
 ## Ownership and human gates
 

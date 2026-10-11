@@ -206,6 +206,81 @@ function setPrIdentity(specDir, phase, { number, url } = {}) {
   return getPrIdentity(specDir, phase);
 }
 
+// Stack identity for a phase PR (T11). Written only after a successful publish,
+// so a blocked or failed publish never touches metadata. Merges into the phase's
+// github_pr entry and leaves every sibling key (issue, review, approval) unchanged.
+function setPrStackIdentity(specDir, phase, identity = {}, context) {
+  if (typeof phase !== 'string' || phase.length === 0) {
+    throw new Error('ENTERPRISE_META: phase must be a non-empty string');
+  }
+  const { number, url, head, base, parent_pr: parentPr, head_sha: headSha } = identity;
+  validatePositiveInteger(number, 'PR number');
+  if (url !== undefined && (typeof url !== 'string' || url.length === 0)) {
+    throw new Error('ENTERPRISE_META: PR url must be a non-empty string');
+  }
+  if (typeof head !== 'string' || head.length === 0) throw new Error('ENTERPRISE_META: PR head must be a non-empty string');
+  if (typeof base !== 'string' || base.length === 0) throw new Error('ENTERPRISE_META: PR base must be a non-empty string');
+  if (parentPr !== null && parentPr !== undefined) validatePositiveInteger(parentPr, 'parent PR number');
+  if (typeof headSha !== 'string' || !PUSH_APPROVAL_SHA.test(headSha)) {
+    throw new Error('ENTERPRISE_META: PR head_sha must be 40 lowercase hex characters');
+  }
+  const patch = { number, head, base, head_sha: headSha };
+  if (url !== undefined) patch.url = url;
+  patch.parent_pr = parentPr === undefined ? null : parentPr;
+  const meta = readMetaFor(specDir, context);
+  coreMeta.setPr(meta, phase, patch);
+  writeMetaFor(specDir, meta, context);
+  return getPrIdentity(specDir, phase);
+}
+
+// --- Per-SHA push approval (Enterprise-owned consent fallback) ---
+
+const PUSH_APPROVAL_SHA = /^[0-9a-f]{40}$/;
+const PUSH_APPROVAL_PHASE_KEY = /^phase-[1-9][0-9]*$/;
+
+function consentInvalid(message) {
+  const error = new Error(`ENTERPRISE_CONSENT: ${message}`);
+  error.code = 'ENTERPRISE_CONSENT_INVALID';
+  return error;
+}
+
+function validatePhaseKey(phase) {
+  if (typeof phase !== 'string' || !PUSH_APPROVAL_PHASE_KEY.test(phase)) {
+    throw consentInvalid('phase key must be phase-<positive integer>');
+  }
+}
+
+function validateApprovalSha(sha) {
+  if (typeof sha !== 'string' || !PUSH_APPROVAL_SHA.test(sha)) {
+    throw consentInvalid('sha must be 40 lowercase hex characters');
+  }
+}
+
+function getPushApproval(specDir, phase, context) {
+  validatePhaseKey(phase);
+  const meta = readMetaFor(specDir, context);
+  const approval = ((meta.phases || {})[phase] || {}).push_approval || {};
+  const out = {};
+  if (typeof approval.sha === 'string') out.sha = approval.sha;
+  if (typeof approval.approved_at === 'string') out.approved_at = approval.approved_at;
+  return out;
+}
+
+// Validates everything before the read-modify-write so invalid input never touches
+// .pocket-meta.json. Missing metadata fails closed instead of creating a new file.
+function setPushApproval(specDir, phase, { sha } = {}, context) {
+  validatePhaseKey(phase);
+  validateApprovalSha(sha);
+  preflightMetaFor(specDir, context);
+  const meta = readMetaFor(specDir, context);
+  coreMeta.setDotted(meta, `phases.${phase}.push_approval`, {
+    sha,
+    approved_at: new Date().toISOString(),
+  });
+  writeMetaFor(specDir, meta, context);
+  return getPushApproval(specDir, phase, context);
+}
+
 // --- Opaque Core-facing proof refs (no remote identity leaks) ---
 
 function issueProofRef() {
@@ -231,6 +306,9 @@ module.exports = {
   setIssueIdentity,
   getPrIdentity,
   setPrIdentity,
+  setPrStackIdentity,
+  getPushApproval,
+  setPushApproval,
   issueProofRef,
   phasePrProofRef,
 };

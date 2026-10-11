@@ -44,7 +44,9 @@ module.exports = {
   PIPELINE: 5,
   PIPELINE_FLOOR_CLI: '3.1.3',
   MARKERLESS_FLOOR_CLI: '2.4.4',
-  LIFECYCLE_SCHEMA: 1,
-  ADAPTER_CONTRACT: 1,
+  // Highest lifecycle.json schema Core can read. Readers accept 1..LIFECYCLE_SCHEMA;
+  // only stacked-plan planPatch writes emit 2, unpatched documents stay 1.
+  LIFECYCLE_SCHEMA: 2,
+  ADAPTER_CONTRACT: 2,
   SURFACE_MANIFEST: 1,
 };

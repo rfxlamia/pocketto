@@ -5,6 +5,7 @@ const enterpriseMeta = require('./meta');
 const { ISSUE_LABEL } = require('./issue-handler-identity');
 const { repoIdentity, validateIssueOwnership, validateIssueReference } = require('./issue-identity');
 const { PhaseHandlerError, safeMessage } = require('./phase-handler-errors');
+const { phaseBranchFor } = require('./phase-handler-context');
 
 function resolveRepository(options) {
   const data = runJson(['repo', 'view', '--json', 'owner,name,url'], options);
@@ -87,18 +88,19 @@ function resolveSearchedIssue(matches, event, repo, invalidStored) {
 }
 
 function resolvePhasePr(context, phase, repo, options) {
+  const branch = context.stacked ? phaseBranchFor(context, phase.key) : context.branch;
   const stored = enterpriseMeta.getPrIdentity(context.specDir, phase.key);
-  const metadataMatch = resolveMetadataPr(stored, context, phase, repo, options);
-  return metadataMatch || searchPhasePr(context, phase, repo, options);
+  const metadataMatch = resolveMetadataPr(stored, context, phase, repo, branch, options);
+  return metadataMatch || searchPhasePr(context, phase, repo, branch, options);
 }
 
-function resolveMetadataPr(stored, context, phase, repo, options) {
+function resolveMetadataPr(stored, context, phase, repo, branch, options) {
   if (!Number.isInteger(stored.number) || stored.number <= 0
       || (stored.url && !sameRepository(stored.url, repo))) return null;
   try {
     const pr = loadPrView(stored.number, repo, options);
     const comments = listComments(`repos/${repo.nameWithOwner}/issues/${pr.number}/comments`, options);
-    return validOpenPr(pr, context.branch, repo) && hasPhaseIdentity(comments, phase.number, true)
+    return validOpenPr(pr, branch, repo, context.stacked) && hasPhaseIdentity(comments, phase.number, true)
       ? { pr, comments }
       : null;
   } catch {
@@ -107,13 +109,19 @@ function resolveMetadataPr(stored, context, phase, repo, options) {
   }
 }
 
-function searchPhasePr(context, phase, repo, options) {
-  const candidates = runJson(['pr', 'list', '--repo', repo.nameWithOwner, '--head', context.branch, '--state', 'open',
-    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid'], options);
-  if (!Array.isArray(candidates)) {
+function searchPhasePr(context, phase, repo, branch, options) {
+  const listed = runJson(['pr', 'list', '--repo', repo.nameWithOwner, '--head', branch, '--state', 'open',
+    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid,isCrossRepository'], options);
+  if (!Array.isArray(listed)) {
     throw new PhaseHandlerError('GH_MALFORMED_OUTPUT', 'PR search response must be an array.', { status: 'retryable', retryable: true });
   }
-  const matches = candidates.map((candidate) => searchCandidate(candidate, context, phase, repo, options)).filter(Boolean);
+  // Stacked plans only: an explicit fork PR that reuses the head name is not a candidate and must
+  // not block the search. Unknown provenance is kept, and validOpenPr rejects it. Non-stacked
+  // plans keep their earlier behavior, where a fork-headed PR is accepted.
+  const candidates = context.stacked
+    ? listed.filter((candidate) => !(candidate && candidate.isCrossRepository === true))
+    : listed;
+  const matches = candidates.map((candidate) => searchCandidate(candidate, branch, phase, repo, options, context.stacked)).filter(Boolean);
   if (matches.length === 1) return matches[0];
   if (matches.length > 1 || candidates.length > 0) {
     throw new PhaseHandlerError('PR_MANUAL_RESOLUTION', 'PR search found ambiguous, foreign, closed, or mismatched phase candidates.');
@@ -121,7 +129,7 @@ function searchPhasePr(context, phase, repo, options) {
   throw requiredPr('No open PR matches the exact plan branch and phase marker; the adapter never creates PRs.');
 }
 
-function searchCandidate(candidate, context, phase, repo, options) {
+function searchCandidate(candidate, branch, phase, repo, options, stacked) {
   if (!Number.isInteger(candidate.number) || candidate.number <= 0) return null;
   let pr;
   try {
@@ -129,25 +137,28 @@ function searchCandidate(candidate, context, phase, repo, options) {
   } catch {
     return null;
   }
-  if (!validOpenPr(pr, context.branch, repo)) return null;
+  if (!validOpenPr(pr, branch, repo, stacked)) return null;
   const comments = listComments(`repos/${repo.nameWithOwner}/issues/${pr.number}/comments`, options);
   return hasPhaseIdentity(comments, phase.number, false) ? { pr, comments } : null;
 }
 
 function loadPrView(number, repo, options) {
   const pr = runJson(['pr', 'view', String(number), '--repo', repo.nameWithOwner,
-    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid'], options);
+    '--json', 'number,url,state,headRefName,baseRefName,title,body,headRefOid,isCrossRepository'], options);
   if (pr.number !== number || !sameRepository(pr.url, repo)) {
     throw new PhaseHandlerError('PR_OWNERSHIP_UNPROVEN', 'The PR does not belong to the current origin repository.');
   }
   return pr;
 }
 
-function validOpenPr(pr, branch, repo) {
+// Only a stacked plan owns its phase branch names, so only it requires the head to live in this
+// repository. A non-stacked plan reuses the user's own branch, which may come from a fork.
+function validOpenPr(pr, branch, repo, stacked) {
   return pr
     && sameRepository(pr.url, repo)
     && String(pr.state).toUpperCase() === 'OPEN'
-    && pr.headRefName === branch;
+    && pr.headRefName === branch
+    && (!stacked || pr.isCrossRepository === false);
 }
 
 function hasPhaseIdentity(comments, phaseNumber, metadataFirst) {
@@ -194,4 +205,4 @@ function requiredPr(message) {
 }
 
 
-module.exports = { resolveRepository, resolveOwnedIssue, resolvePhasePr };
+module.exports = { resolveRepository, resolveOwnedIssue, resolvePhasePr, sameRepository };

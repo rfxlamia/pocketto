@@ -1,0 +1,32 @@
+{
+  "header": {
+    "plan_dir": "<PLAN_DIR>",
+    "plan_type": "phased",
+    "status": "IN_PROGRESS",
+    "date_started": "<DATE>",
+    "date_completed": null,
+    "baseline_sha": "<SHA>",
+    "pipeline": 5,
+    "plan_file": "execution-plan/index.md"
+  },
+  "phases": [
+    {
+      "order": 1,
+      "file": "execution-plan/phase-1.md",
+      "status": "WAITING",
+      "tasks": [
+        {
+          "id": "T1",
+          "name": "Add the first behavior",
+          "status": "WAITING"
+        },
+        {
+          "id": "T2",
+          "name": "Add the second behavior",
+          "status": "WAITING",
+          "depends": "T1"
+        }
+      ]
+    }
+  ]
+}

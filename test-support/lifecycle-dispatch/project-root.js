@@ -90,7 +90,7 @@ test('Core accepts the Enterprise adapter timeout ceiling and rejects one millis
     for (const timeoutMs of [MAX_ADAPTER_TIMEOUT_MS, MAX_ADAPTER_TIMEOUT_MS + 1]) {
       writeFileSync(registrationPath, `${JSON.stringify({
         schema: 1,
-        adapter_contract: 1,
+        adapter_contract: 2,
         argv: ['/usr/bin/true'],
         events: ['spec-approved'],
         timeout_ms: timeoutMs,

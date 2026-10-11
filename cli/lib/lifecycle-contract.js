@@ -8,7 +8,7 @@
 
 const { createHash } = require('node:crypto');
 
-const EVENT_TYPES = ['spec-approved', 'phase-complete', 'plan-closed'];
+const EVENT_TYPES = ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed'];
 
 const DELIVERY_STATUSES = [
   'pending',
@@ -243,7 +243,13 @@ function validateEvent(event) {
 // writes them only to Enterprise-owned stores.
 const ADAPTER_RESPONSE_STATUSES = ['succeeded', 'retryable', 'terminal', 'reconciling'];
 
-const ADAPTER_RESPONSE_FIELDS = ['event_id', 'status', 'proof_ref', 'proof_hash', 'error'];
+const ADAPTER_RESPONSE_FIELDS = ['event_id', 'status', 'proof_ref', 'proof_hash', 'error', 'notices'];
+
+// Display-only notices (ADAPTER_CONTRACT 2). Each notice is exactly { code, message }.
+// Core renders them and never templates, executes, or acts on their text.
+const ADAPTER_NOTICE_MAX_COUNT = 10;
+const ADAPTER_NOTICE_MAX_MESSAGE_LENGTH = 500;
+const ADAPTER_NOTICE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
 
 const ADAPTER_ERROR_CODES = {
   NOT_OBJECT: 'ADAPTER_NOT_OBJECT',
@@ -252,10 +258,31 @@ const ADAPTER_ERROR_CODES = {
   BAD_STATUS: 'ADAPTER_BAD_STATUS',
   BAD_PROOF: 'ADAPTER_BAD_PROOF',
   BAD_ERROR: 'ADAPTER_BAD_ERROR',
+  BAD_NOTICE: 'ADAPTER_BAD_NOTICE',
 };
 
 function adapterFail(code, message) {
   return { ok: false, code, message };
+}
+
+function isValidAdapterNotice(notice) {
+  if (!isPlainObject(notice)) return false;
+  const keys = Object.keys(notice);
+  if (keys.length !== 2 || !keys.includes('code') || !keys.includes('message')) return false;
+  if (typeof notice.code !== 'string' || !ADAPTER_NOTICE_CODE_PATTERN.test(notice.code)) return false;
+  return typeof notice.message === 'string'
+    && notice.message.length > 0
+    && notice.message.length <= ADAPTER_NOTICE_MAX_MESSAGE_LENGTH;
+}
+
+function validateAdapterNotices(response) {
+  if (!Array.isArray(response.notices) || response.notices.length > ADAPTER_NOTICE_MAX_COUNT) {
+    return adapterFail(ADAPTER_ERROR_CODES.BAD_NOTICE, `adapter notices must be an array of at most ${ADAPTER_NOTICE_MAX_COUNT} entries`);
+  }
+  if (!response.notices.every(isValidAdapterNotice)) {
+    return adapterFail(ADAPTER_ERROR_CODES.BAD_NOTICE, 'adapter notice must be { code, message } with a valid code and a bounded message');
+  }
+  return null;
 }
 
 function validateAdapterResponse(response, expectedEventId) {
@@ -300,6 +327,10 @@ function validateAdapterResponse(response, expectedEventId) {
       return adapterFail(ADAPTER_ERROR_CODES.BAD_ERROR, 'adapter error.message must be a non-empty string');
     }
   }
+  if ('notices' in response) {
+    const noticeFailure = validateAdapterNotices(response);
+    if (noticeFailure !== null) return noticeFailure;
+  }
   return { ok: true, code: null, message: null };
 }
 
@@ -320,5 +351,8 @@ module.exports = {
   ADAPTER_RESPONSE_STATUSES,
   ADAPTER_RESPONSE_FIELDS,
   ADAPTER_ERROR_CODES,
+  ADAPTER_NOTICE_MAX_COUNT,
+  ADAPTER_NOTICE_MAX_MESSAGE_LENGTH,
+  isValidAdapterNotice,
   validateAdapterResponse,
 };

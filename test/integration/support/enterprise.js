@@ -6,9 +6,15 @@ const { ENTERPRISE_CLI, REPO_ROOT, REPOSITORY, ISSUE_NUMBER } = require('./const
 const { runProcess } = require('./process');
 const { writeFile } = require('./files');
 
-function installEnterpriseAdapter(fixture) {
-  const result = runProcess(process.execPath, [ENTERPRISE_CLI, 'install', fixture.root, '--json'], {
-    cwd: REPO_ROOT,
+// `pushConsent` (stacked scenarios) installs with the default stacked phase
+// branches plus recorded push consent. The default path keeps `none` as before.
+// The stacked path runs from the fixture root so no spawn uses the real repo as cwd.
+function installEnterpriseAdapter(fixture, { pushConsent = null } = {}) {
+  const args = pushConsent
+    ? ['install', fixture.root, '--push-consent', pushConsent, '--json']
+    : ['install', fixture.root, '--phase-branches', 'none', '--json'];
+  const result = runProcess(process.execPath, [ENTERPRISE_CLI, ...args], {
+    cwd: pushConsent ? fixture.root : REPO_ROOT,
     env: fixture.env,
   });
   const json = parseJson(result.stdout);

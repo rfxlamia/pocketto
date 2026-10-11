@@ -6,6 +6,14 @@ const path = require('node:path');
 const { writeFileAtomicSync } = require('../cli/lib/atomic-file');
 const { EVENT_TYPES } = require('../cli/lib/lifecycle-contract');
 const { MAX_ADAPTER_TIMEOUT_MS } = require('../cli/lib/lifecycle-adapter');
+const {
+  OPTIONAL_REGISTRATION_FIELDS,
+  PHASE_BRANCHES_MODES,
+  PUSH_CONSENT_PHASE_BRANCHES,
+  applyPhaseFields,
+  resolvePhaseInstall,
+  validatePhaseFields,
+} = require('./registration-phase');
 
 let CORE_VERSION = null;
 let CORE_VERSION_PATH = null;
@@ -18,12 +26,14 @@ try {
 }
 
 const REGISTRATION_SCHEMA = 1;
-const ADAPTER_CONTRACT = 1;
+const ADAPTER_CONTRACT = 2;
 const REGISTRATION_DIR = '.pocket';
 const REGISTRATION_FILE = 'lifecycle-adapter.json';
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_TIMEOUT_MS = MAX_ADAPTER_TIMEOUT_MS;
 const REGISTRATION_FIELDS = ['schema', 'adapter_contract', 'argv', 'events', 'timeout_ms'];
+// Optional phase fields (OPTIONAL_REGISTRATION_FIELDS) are owned by registration-phase.js.
+// Validation stays closed: any other key is rejected.
 
 function fail(code, message, extra = {}) {
   return { ok: false, code, message, ...extra };
@@ -37,14 +47,21 @@ function registrationPathFor(projectRoot) {
   return path.join(projectRoot, REGISTRATION_DIR, REGISTRATION_FILE);
 }
 
-function buildRegistration({ argv, events = EVENT_TYPES.slice(), timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  return {
+function buildRegistration({
+  argv,
+  events = EVENT_TYPES.slice(),
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  phaseBranches,
+  pushConsent,
+} = {}) {
+  const record = {
     schema: REGISTRATION_SCHEMA,
     adapter_contract: ADAPTER_CONTRACT,
     argv: Array.isArray(argv) ? argv.slice() : argv,
     events: Array.isArray(events) ? events.slice() : events,
     timeout_ms: timeoutMs,
   };
+  return applyPhaseFields(record, { phaseBranches, pushConsent });
 }
 
 function validateRegistrationShape(record) {
@@ -54,8 +71,9 @@ function validateRegistrationShape(record) {
       'Adapter registration must be an object. Re-run enterprise install to repair it.'
     );
   }
+  const allowedFields = [...REGISTRATION_FIELDS, ...OPTIONAL_REGISTRATION_FIELDS];
   for (const key of Object.keys(record)) {
-    if (!REGISTRATION_FIELDS.includes(key)) {
+    if (!allowedFields.includes(key)) {
       return fail(
         'ENTERPRISE_REGISTRATION_MALFORMED',
         `Adapter registration has unsupported field "${key}". Re-run enterprise install to repair it.`
@@ -140,9 +158,16 @@ function validateRegistrationTimeout(record) {
   return null;
 }
 
+function validateOptionalFields(record) {
+  const failure = validatePhaseFields(record);
+  return failure ? fail(failure.code, failure.message) : null;
+}
+
 function validateRegistration(record) {
   const shapeFailure = validateRegistrationShape(record);
   if (shapeFailure) return shapeFailure;
+  const optionalFailure = validateOptionalFields(record);
+  if (optionalFailure) return optionalFailure;
   for (const validate of [
     validateRegistrationSchema,
     validateAdapterContract,
@@ -197,7 +222,15 @@ function loadRegistration(projectRoot, deps = {}) {
 function installRegistration(projectRoot, opts = {}) {
   const writeAtomic = opts.writeAtomic || ((target, content) => writeFileAtomicSync(target, content));
   const mkdir = opts.mkdir || fs.mkdirSync;
-  const record = buildRegistration({ argv: opts.argv, events: opts.events, timeoutMs: opts.timeoutMs });
+  const phase = resolvePhaseInstall(projectRoot, opts);
+  if (phase.error) return fail(phase.error.code, phase.error.message);
+  const record = buildRegistration({
+    argv: opts.argv,
+    events: opts.events,
+    timeoutMs: opts.timeoutMs,
+    phaseBranches: phase.phaseBranches,
+    pushConsent: phase.pushConsent,
+  });
   const checked = validateRegistration(record);
   if (!checked.ok) {
     return fail(
@@ -217,7 +250,9 @@ function installRegistration(projectRoot, opts = {}) {
       `Enterprise adapter install failed with no partial state written: ${err && err.message ? err.message : String(err)}`
     );
   }
-  return { ok: true, code: null, message: null, path: target, record };
+  const result = { ok: true, code: null, message: null, path: target, record };
+  if (phase.warning) result.warning = phase.warning;
+  return result;
 }
 
 module.exports = {
@@ -226,6 +261,9 @@ module.exports = {
   CORE_VERSION_PATH,
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
+  OPTIONAL_REGISTRATION_FIELDS,
+  PHASE_BRANCHES_MODES,
+  PUSH_CONSENT_PHASE_BRANCHES,
   REGISTRATION_DIR,
   REGISTRATION_FIELDS,
   REGISTRATION_FILE,

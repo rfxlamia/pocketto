@@ -110,6 +110,7 @@ function handlerOptions(fixture) {
 test('RED cycle 3: metadata validation falls back safely and ambiguous PRs stay untouched', async (t) => {
   await runInvalidMetadataCases(t);
   await t.test('missing metadata finds one exact branch/phase PR', (t) => assertExactBranchPhasePr(t));
+  await t.test('non-stacked plan still accepts a PR whose head comes from a fork', (t) => assertForkHeadedPrAccepted(t));
   await runAmbiguousSearchCases(t);
   await t.test('github.com metadata is foreign when the current origin is GHES', (t) => {
     assertGhesOriginRejectsGitHubPullRequest(t);
@@ -176,6 +177,24 @@ function assertExactBranchPhasePr(t) {
     url: `https://github.com/${OWNER}/${REPOSITORY}/pull/${PR_NUMBER}`,
   });
   assert.ok(!fixture.remote.calls.some((args) => args[0] === 'pr' && args[1] === 'create'));
+}
+
+// Only stacked plans own their phase branch names. A non-stacked plan works from the user's own
+// branch, which a fork user legitimately pushes to their fork, so isCrossRepository must not block it.
+function assertForkHeadedPrAccepted(t) {
+  const fixture = createFixture(t);
+  fixture.remote.prs[0].isCrossRepository = true;
+  addPhaseMarker(fixture.remote.prs[0], 1, 30);
+  const meta = enterpriseMeta.readMetaFor(fixture.specDir);
+  delete meta.phases['phase-1'].github_pr;
+  enterpriseMeta.writeMetaFor(fixture.specDir, meta);
+  const handler = loadPhaseHandler();
+
+  const response = handler.handlePhaseComplete(fixture.event, handlerOptions(fixture));
+
+  assert.equal(response.status, 'succeeded', JSON.stringify(response));
+  assert.equal(enterpriseMeta.getPrIdentity(fixture.specDir, 'phase-1').number, PR_NUMBER);
+  assert.ok(!fixture.remote.calls.some((args) => args[0] === 'pr' && args[1] === 'create'), 'the adapter must never create a PR');
 }
 
 async function runAmbiguousSearchCases(t) {

@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { validateAdapterResponse } = require('./lifecycle-contract');
 const { protocolFailure } = require('./lifecycle-retry');
+const { ADAPTER_CONTRACT } = require('./version');
 
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
 // Enterprise install accepts the same ceiling (registration-record.js).
@@ -40,7 +41,7 @@ function readAdapterRegistration(projectDir) {
   if (!registration || typeof registration !== 'object' || Array.isArray(registration)) {
     return { registration: null, error: protocolFailure('ADAPTER_REGISTRATION_INVALID', 'lifecycle adapter registration is invalid') };
   }
-  if (registration.adapter_contract !== 1) {
+  if (registration.adapter_contract !== ADAPTER_CONTRACT) {
     return { registration: null, error: protocolFailure('ADAPTER_CONTRACT_MISMATCH', 'registered lifecycle adapter contract is incompatible') };
   }
   if (
@@ -115,9 +116,38 @@ function invokeAdapter(event, registration, projectRoot) {
   }
 }
 
+const PHASE_BRANCH_MODES = ['stacked', 'none'];
+
+// Neutral registration field `phase_branches` only. Any problem with the
+// registration degrades to { value: null, warning } and never throws, so a
+// bad registration can never make `log init` fail. A missing registration is
+// not a problem and produces no warning.
+function readRegisteredPhaseBranches(projectDir) {
+  const { registration, error } = readAdapterRegistration(projectDir);
+  if (error) {
+    if (error.code === 'ADAPTER_NOT_REGISTERED') return { value: null, warning: null };
+    return { value: null, warning: registrationFallbackWarning(error.code) };
+  }
+  if (registration.phase_branches === undefined) return { value: null, warning: null };
+  if (PHASE_BRANCH_MODES.includes(registration.phase_branches)) {
+    return { value: registration.phase_branches, warning: null };
+  }
+  return { value: null, warning: registrationFallbackWarning('ADAPTER_REGISTRATION_INVALID') };
+}
+
+function registrationFallbackWarning(code) {
+  return {
+    code,
+    message: `lifecycle adapter registration was not used for phase_branches (${code}); defaulting to none. Init continues.`,
+  };
+}
+
 module.exports = {
   MAX_ADAPTER_TIMEOUT_MS,
+  PHASE_BRANCH_MODES,
+  REGISTRATION_PATH,
   invokeAdapter,
   readAdapterRegistration,
+  readRegisteredPhaseBranches,
   resolveProjectRoot,
 };

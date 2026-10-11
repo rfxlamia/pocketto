@@ -9,8 +9,13 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { writeLog, todayISO, readLogChecked, withProjectionMutation } = require('../lib/logjson');
-const { runPhaseUpdateTransition, runPlanCloseTransition } = require('../lib/lifecycle-transition');
+const { runPhaseUpdateTransition, runPlanCloseTransition, lifecycleSpecDirForPlan } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
+const { currentBranch } = require('../lib/git-worktree');
+const { pendingDrainActions } = require('../lib/next-actions');
+const { planArtifactWarnings } = require('../lib/artifact-ignore');
+const phaseBranches = require('../lib/phase-branches');
+const phaseHandoff = require('../lib/phase-handoff');
 const { PIPELINE } = require('../lib/version');
 
 const VALID_STATUSES = ['BLOCKED', 'DONE', 'REVIEW', 'WAITING']; // sorted, for messages
@@ -225,14 +230,18 @@ function buildOwnerMap(planDir, phase, baselineSha) {
 
 // ─── INIT ───────────────────────────────────────────────────────────────────
 
-function init(positionals) {
+function init(positionals, { phaseBranches: requested = null } = {}) {
   if (positionals.length !== 1) {
     throw new CliError('USAGE', 'Usage: pocketto-pi log init <plan_dir>');
   }
   const planDir = resolvePlanDir(positionals[0]);
   const logPath = path.join(planDir, 'log.json');
+  const flag = phaseBranches.assertRequested(requested);
 
-  if (existsSync(logPath)) return migrateExisting(planDir, logPath);
+  if (existsSync(logPath)) {
+    phaseBranches.assertUnlocked({ logPath, requested: flag });
+    return migrateExisting(planDir, logPath);
+  }
 
   // A fresh init cannot produce duplicate done_sha values: tasks are created
   // without done_sha, which is only ever set by `log update … DONE`.
@@ -253,10 +262,21 @@ function init(positionals) {
     header.plan_file = planFile;
   }
 
+  // Stacked init creates the phase-1 branch before log.json is written; any
+  // refusal throws here, so nothing has been written yet.
+  const strategy = phaseBranches.selectInitStrategy({ planDir, requested: flag });
+  const stacked = strategy.mode === 'stacked' ? phaseBranches.prepareStackedInit(planDir) : null;
+  if (stacked) {
+    header.phase_branches = stacked.header;
+    phases[0].branch = stacked.branch;
+    phases[0].base_branch = stacked.rootBaseBranch;
+  }
+
   const log = { header, phases };
   writeLog(logPath, log);
 
   const human = [`Created ${logPath}`, `  type    : ${planType}`, `  phases  : ${phases.length}`];
+  if (stacked) human.push(`  branch  : ${stacked.branch} (${stacked.branchInfo.status})`);
   for (const p of phases) {
     const ids = (p.tasks || []).map((t) => t.id).join(', ');
     human.push(`    [${p.order}] ${p.file} → ${p.status} | tasks: ${ids || 'none'}`);
@@ -266,7 +286,10 @@ function init(positionals) {
     command: 'log init',
     exit: 0,
     human,
-    data: { planDir, logPath, planType, migrated: false, phaseCount: phases.length, phases },
+    data: {
+      planDir, logPath, planType, migrated: false, phaseCount: phases.length, phases,
+      ...phaseBranches.initEnvelope({ strategy, stacked }),
+    },
   };
 }
 
@@ -808,28 +831,37 @@ function close(positionals, { projectionWriter = null, adapterRunner = null } = 
     `  phases         : ${log.phases.length} — all DONE`,
   ];
 
+  // Additive, read-only envelope fields. `close` never creates or switches
+  // branches; `branch` only reports the current one for stacked plans.
+  const data = {
+    planDir,
+    logPath,
+    status: 'DONE',
+    dateStarted: log.header.date_started,
+    dateCompleted: log.header.date_completed,
+    phaseCount: log.phases.length,
+    event: outcome.event
+      ? {
+        event_id: outcome.event.event_id,
+        plan_id: outcome.event.plan_id,
+        type: outcome.event.type,
+        revision: outcome.event.revision,
+        status: outcome.event.delivery.status,
+      }
+      : null,
+    dispatch: outcome.dispatch,
+    next_actions: pendingDrainActions({ specDir: lifecycleSpecDirForPlan(planDir), projectDir: planDir }),
+    warnings: planArtifactWarnings(planDir),
+  };
+  if (log.header.phase_branches && log.header.phase_branches.mode === 'stacked') {
+    data.branch = { from: currentBranch(planDir), created: null, switched: false, status: 'none' };
+  }
+
   return {
     command: 'log close',
     exit: 0,
     human,
-    data: {
-      planDir,
-      logPath,
-      status: 'DONE',
-      dateStarted: log.header.date_started,
-      dateCompleted: log.header.date_completed,
-      phaseCount: log.phases.length,
-      event: outcome.event
-        ? {
-          event_id: outcome.event.event_id,
-          plan_id: outcome.event.plan_id,
-          type: outcome.event.type,
-          revision: outcome.event.revision,
-          status: outcome.event.delivery.status,
-        }
-        : null,
-      dispatch: outcome.dispatch,
-    },
+    data,
   };
 }
 
@@ -841,6 +873,7 @@ function run(input = {}) {
   let expectedCount = null;
   if (sub === 'init' || sub === 'close') expectedCount = 1;
   else if (sub === 'update') expectedCount = correction ? 2 : 3;
+  else if (sub === 'handoff') expectedCount = 2;
   if (expectedCount === null || args.length !== expectedCount) return runUnlocked(input);
 
   const planDir = resolvePlanDir(args[0]);
@@ -848,8 +881,8 @@ function run(input = {}) {
   return withProjectionMutation(logPath, () => runUnlocked(input));
 }
 
-function runUnlocked({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha, projectionWriter = null, adapterRunner = null } = {}) {
-  if (sub === 'init') return init(positionals);
+function runUnlocked({ sub, positionals, task, correction, forTask, sha, allowDuplicateSha, phaseBranches: requestedPhaseBranches = null, projectionWriter = null, adapterRunner = null } = {}) {
+  if (sub === 'init') return init(positionals, { phaseBranches: requestedPhaseBranches });
   if (sub === 'update') {
     if (correction) {
       if (sha) {
@@ -860,7 +893,10 @@ function runUnlocked({ sub, positionals, task, correction, forTask, sha, allowDu
     return update(positionals, task, { sha, allowDuplicateSha, projectionWriter, adapterRunner });
   }
   if (sub === 'close') return close(positionals, { projectionWriter, adapterRunner });
-  throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'log' subcommand: ${sub || '(none)'}. Use init | update | close.`);
+  if (sub === 'handoff') {
+    return phaseHandoff.handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter, adapterRunner });
+  }
+  throw new CliError('UNKNOWN_SUBCOMMAND', `Unknown 'log' subcommand: ${sub || '(none)'}. Use init | update | close | handoff.`);
 }
 
 module.exports = { run };

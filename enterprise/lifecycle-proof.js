@@ -119,13 +119,26 @@ function specApprovalProof(metadata, event) {
     : null;
 }
 
-function phaseCompletionProof(metadata, event) {
+// Phase identity comes from the phase-evidence artifact path. phase-closed carries phase_key only in its
+// payload hash, so the path is the one source both the T13 writer and this reader can see.
+function phaseEvidenceIdentity(event) {
   const refs = event.artifact_refs.filter((artifact) => artifact.root === 'plan' && artifact.kind === 'phase-evidence');
   const ref = refs[0];
   const match = ref && typeof ref.path === 'string' ? /phase[-_](\d+)/i.exec(ref.path) : null;
   if (!match) return null;
   const phaseNumber = Number(match[1]);
-  const phaseKey = `phase-${phaseNumber}`;
+  return { phaseNumber, phaseKey: `phase-${phaseNumber}` };
+}
+
+// phase-handler.js requires this module, so its deferred helpers are loaded lazily to avoid a require cycle.
+function phaseCompletionProof(metadata, event) {
+  const deferred = require('./phase-handler');
+  if (event.delivery && event.delivery.proof_ref === deferred.DEFERRED_PROOF_REF) {
+    return { proof_ref: deferred.DEFERRED_PROOF_REF, proof_hash: deferred.deferredProofHash(event) };
+  }
+  const identity = phaseEvidenceIdentity(event);
+  if (!identity) return null;
+  const { phaseNumber, phaseKey } = identity;
   const entry = metadata.phases && metadata.phases[phaseKey];
   const review = entry && entry.review;
   const proof = review && review.proof;
@@ -144,6 +157,39 @@ function phaseCompletionProof(metadata, event) {
       || !validFingerprintRecords(proof.fingerprints)
       || JSON.stringify(review.fingerprints) !== JSON.stringify(proof.fingerprints)
       || proof.proof_ref !== proofRef) return null;
+
+  const proofHash = canonicalProofHash(proof);
+  return proofHash ? { proof_ref: proofRef, proof_hash: proofHash } : null;
+}
+
+const PHASE_CLOSED_PROOF_KEYS = [
+  'event_id', 'plan_id', 'phase_key', 'pr_number', 'pr_url', 'head_sha', 'base', 'marker',
+  'fingerprints', 'artifact_refs', 'proof_ref', 'proof_hash',
+];
+const HEAD_SHA_PATTERN = /^[0-9a-f]{40,64}$/;
+
+// Reads the T13 stack proof written by persistStackProof. Only the full proof record is accepted:
+// a stack entry holding fingerprints alone is partial state and fails closed here.
+function phaseClosedProof(metadata, event) {
+  const identity = phaseEvidenceIdentity(event);
+  if (!identity) return null;
+  const { phaseNumber, phaseKey } = identity;
+  const proofRef = `meta:phases.${phaseKey}.stack.proof`;
+  const entry = metadata.phases && metadata.phases[phaseKey];
+  const stack = entry && entry.stack;
+  const proof = stack && stack.proof;
+  if (!stack || !hasExactKeys(stack, ['fingerprints', 'proof'])
+      || !proof || !hasExactKeys(proof, PHASE_CLOSED_PROOF_KEYS)
+      || proof.event_id !== event.event_id || proof.plan_id !== event.plan_id
+      || proof.phase_key !== phaseKey || proof.proof_ref !== proofRef
+      || !Number.isInteger(proof.pr_number) || proof.pr_number <= 0
+      || typeof proof.pr_url !== 'string' || proof.pr_url.length === 0
+      || typeof proof.head_sha !== 'string' || !HEAD_SHA_PATTERN.test(proof.head_sha)
+      || typeof proof.base !== 'string' || proof.base.length === 0
+      || proof.marker !== markerFor(phaseNumber)
+      || !validFingerprintRecords(proof.fingerprints)
+      || JSON.stringify(stack.fingerprints) !== JSON.stringify(proof.fingerprints)
+      || JSON.stringify(proof.artifact_refs) !== JSON.stringify(canonicalArtifactRefs(event))) return null;
 
   const proofHash = canonicalProofHash(proof);
   return proofHash ? { proof_ref: proofRef, proof_hash: proofHash } : null;
@@ -176,6 +222,7 @@ function lifecycleEventProofFromMetadata(metadata, event) {
   if (event.type === 'spec-approved') return specApprovalProof(metadata, event);
   if (event.type === 'phase-complete') return phaseCompletionProof(metadata, event);
   if (event.type === 'plan-closed') return planClosureProof(metadata, event);
+  if (event.type === 'phase-closed') return phaseClosedProof(metadata, event);
   return null;
 }
 
