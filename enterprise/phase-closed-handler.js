@@ -215,4 +215,4 @@ function handlePhaseClosed(event, options = {}) {
   }
 }
 
-module.exports = { handlePhaseClosed };
+module.exports = { handlePhaseClosed, phaseFor, phaseKeyOf, readCloseoutSnapshot };

@@ -16,6 +16,8 @@ const path = require('node:path');
 const enterpriseMeta = require('../enterprise/meta');
 const { stackBlock, phasePrBody, upsertStackBlock } = require('../enterprise/stack-body');
 const { publishPhase } = require('../enterprise/phase-stack');
+const { installFakeGitHub, createEnvironment } = require('./integration/support/fixture');
+const { ENTERPRISE_CLI, CORE_CLI } = require('./integration/support/constants');
 
 // Guard: any accidental real `gh` resolves to this stub, which refuses to run.
 // Tests must reach gh only through the injected fake runner.
@@ -961,4 +963,197 @@ test('harden closeout invalid: a PR body that cannot be built throws before any 
   assert.equal(pushCalls(git).length, 0, 'no push when the PR body cannot be built');
   assert.equal(remoteRef(env, 'pocket/p/phase-1'), null, 'nothing pushed to origin');
   assert.equal(callsOf(gh, 'create').length, 0, 'no pr create call');
+});
+
+// T15: the PATH-injected fake gh binary used by the publish-phase CLI tests.
+test('fake gh stacked operations: pr create, filtered pr list, and pr edit record PRs like GitHub', (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fake-gh-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fake = installFakeGitHub(root);
+  const env = createEnvironment(fake);
+  const gh = (...args) => spawnSync(fake.fakeGhPath, args, { env, encoding: 'utf8' });
+  const stateOf = () => JSON.parse(fs.readFileSync(fake.remotePath, 'utf8'));
+  const bodyFile = path.join(root, 'body.md');
+  fs.writeFileSync(bodyFile, 'first body\n');
+
+  const created = gh('pr', 'create', '--head', 'pocket/p/phase-1', '--base', 'feature/x', '--title', 't', '--body-file', bodyFile);
+  assert.equal(created.status, 0, created.stderr);
+  const url = created.stdout.trim();
+  assert.match(url, /\/pull\/\d+$/);
+  const number = Number(url.split('/').pop());
+
+  const listed = gh('pr', 'list', '--head', 'pocket/p/phase-1', '--base', 'feature/x', '--state', 'open', '--json', 'number,url,headRefName,baseRefName,body');
+  assert.equal(listed.status, 0, listed.stderr);
+  const rows = JSON.parse(listed.stdout);
+  assert.equal(rows.length, 1, 'the filtered list excludes the default feature PR');
+  assert.equal(rows[0].number, number);
+  assert.equal(rows[0].headRefName, 'pocket/p/phase-1');
+  assert.equal(rows[0].baseRefName, 'feature/x');
+  assert.equal(rows[0].body, 'first body\n');
+  assert.equal(stateOf().pullRequests.find((pr) => pr.number === number).state, 'OPEN');
+
+  const secondBody = path.join(root, 'body2.md');
+  fs.writeFileSync(secondBody, 'second body\n');
+  assert.equal(gh('pr', 'edit', String(number), '--body-file', secondBody).status, 0);
+  const after = stateOf();
+  assert.equal(after.pullRequests.find((pr) => pr.number === number).body, 'second body\n');
+  assert.equal(after.calls.length, 3, 'every invocation is recorded');
+});
+
+// T15: publish-phase CLI process tests. A real handed-off stacked plan (Core CLI), a real
+// bare origin, and the PATH-injected fake gh. No runner is injected into the CLI.
+function runNode(cwd, env, args) {
+  const result = spawnSync(process.execPath, args, { cwd, env, encoding: 'utf8' });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function okNode(cwd, env, args) {
+  const result = runNode(cwd, env, args);
+  assert.equal(result.status, 0, `${args.join(' ')} failed: ${result.stdout}${result.stderr}`);
+  return result;
+}
+
+function writeText(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+}
+
+// Plan `p` with two phases; phase 1 is DONE and handed off, so HEAD sits on pocket/p/phase-2.
+function handedOffPlan(t, { stacked = true, consent = true } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'publish-phase-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fake = installFakeGitHub(root);
+  const env = { ...createEnvironment(fake), POCKETTO_LIFECYCLE_NOW: '2026-10-10T00:00:00.000Z' };
+  const origin = path.join(root, 'origin.git');
+  const work = path.join(root, 'work');
+  git(root, 'init', '--bare', '-q', origin);
+  fs.mkdirSync(work);
+  git(work, 'init', '-q', '-b', ROOT_BASE);
+  git(work, 'config', 'user.name', 'Pocket Test');
+  git(work, 'config', 'user.email', 'pocket-test@example.com');
+  git(work, 'config', 'commit.gpgsign', 'false');
+  writeText(path.join(work, 'README.md'), 'root base\n');
+  git(work, 'add', '-A');
+  git(work, 'commit', '-q', '-m', 'root base');
+  git(work, 'remote', 'add', 'origin', origin);
+  git(work, 'push', '-q', '-u', 'origin', ROOT_BASE);
+
+  const planDir = path.join(work, 'docs', 'pocket', 'plans', PLAN_ID);
+  const specDir = path.join(work, 'docs', 'pocket', 'spec', PLAN_ID);
+  const specBody = '# Approved spec\n';
+  writeText(path.join(specDir, 'approved-spec.md'), specBody);
+  writeText(path.join(planDir, 'execution-plan', 'index.md'), '# Plan Index\n\n**Spec:** ../../spec/p/approved-spec.md\n');
+  for (const order of [1, 2]) {
+    writeText(path.join(planDir, 'execution-plan', `phase-${order}.md`), `# Phase ${order}: Fixture\n\n### Task ${order}: Behavior ${order}\n\nBody.\n`);
+  }
+  const core = (...args) => okNode(work, env, [CORE_CLI, ...args, '--json', '--contract', '3']);
+  core('log', 'init', planDir, '--phase-branches', stacked ? 'stacked' : 'none');
+  const specHash = require('node:crypto').createHash('sha256').update(specBody).digest('hex');
+  core('lifecycle', 'transition', specDir, 'spec-approved', '--artifact', `spec:spec-doc:approved-spec.md:${specHash}`);
+  core('log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW');
+  core('log', 'update', planDir, 'execution-plan/phase-1.md', 'DONE');
+  if (stacked) {
+    writeText(path.join(planDir, 'closeout.md'), [
+      '# Pocket Closeout - Fixture', '',
+      '## Phase 1 of 2 - Fixture phase 1', '<!-- pocket-closeout:phase-1 -->', '',
+      '**Status:** Complete', '', '### What was completed', '', '- T1 done', '',
+    ].join('\n'));
+    core('log', 'handoff', planDir, 'execution-plan/phase-1.md');
+  }
+  const installArgs = [ENTERPRISE_CLI, 'install', work, '--phase-branches', stacked ? 'stacked' : 'none'];
+  if (consent) installArgs.push('--push-consent', 'phase-branches');
+  okNode(work, env, [...installArgs, '--json']);
+  enterpriseMeta.setIssueIdentity(specDir, { number: 73, url: 'https://github.com/acme/pocketto/issues/73' });
+  return { root, work, origin, planDir, specDir, env, fake };
+}
+
+function publishCli(plan, phaseKey = 'phase-1') {
+  const result = runNode(plan.work, plan.env, [ENTERPRISE_CLI, 'publish-phase', plan.work, plan.specDir, phaseKey, '--json']);
+  let envelope = null;
+  try { envelope = JSON.parse(result.stdout); } catch { envelope = null; }
+  return { ...result, envelope };
+}
+
+function fakeState(plan) {
+  return JSON.parse(fs.readFileSync(plan.fake.remotePath, 'utf8'));
+}
+
+function prsForHead(plan, head) {
+  return fakeState(plan).pullRequests.filter((pr) => pr.headRefName === head);
+}
+
+function originHas(plan, branch) {
+  return execFileSync('git', ['ls-remote', '--heads', plan.origin, branch], { encoding: 'utf8' }).trim().length > 0;
+}
+
+test('publish-phase creates: a handed-off phase 1 with consent opens its PR against the root base', (t) => {
+  const plan = handedOffPlan(t);
+
+  const { envelope, stderr } = publishCli(plan);
+
+  assert.ok(envelope && envelope.ok === true, JSON.stringify(envelope) + stderr);
+  assert.equal(envelope.command, 'enterprise-publish-phase');
+  assert.equal(envelope.data.phase_key, 'phase-1');
+  assert.equal(envelope.data.created, true);
+  assert.ok(Number.isInteger(envelope.data.pr_number) && envelope.data.pr_url.endsWith(`/pull/${envelope.data.pr_number}`));
+  assert.ok(Array.isArray(envelope.data.notices) && envelope.data.notices[0].code === 'PR_CREATED');
+  const prs = prsForHead(plan, 'pocket/p/phase-1');
+  assert.equal(prs.length, 1);
+  assert.equal(prs[0].baseRefName, ROOT_BASE);
+  assert.ok(originHas(plan, 'pocket/p/phase-1'), 'the phase branch is pushed to origin');
+});
+
+test('publish-phase rerun: a second run reuses the PR instead of creating another', (t) => {
+  const plan = handedOffPlan(t);
+  assert.equal(publishCli(plan).envelope.data.created, true);
+
+  const { envelope } = publishCli(plan);
+
+  assert.ok(envelope && envelope.ok === true, JSON.stringify(envelope));
+  assert.equal(envelope.data.created, false);
+  assert.equal(prsForHead(plan, 'pocket/p/phase-1').length, 1);
+});
+
+test('publish-phase no consent: without push_consent or approval nothing is pushed', (t) => {
+  const plan = handedOffPlan(t, { consent: false });
+
+  const { envelope } = publishCli(plan);
+
+  assert.ok(envelope && envelope.ok === false, JSON.stringify(envelope));
+  assert.equal(envelope.error.code, 'PUSH_CONSENT_REQUIRED');
+  assert.equal(originHas(plan, 'pocket/p/phase-1'), false, 'origin has no phase branch');
+  assert.equal(prsForHead(plan, 'pocket/p/phase-1').length, 0);
+});
+
+test('publish-phase no lifecycle writes: lifecycle.json is byte-identical after a successful run', (t) => {
+  const plan = handedOffPlan(t);
+  const lifecycle = path.join(plan.specDir, 'lifecycle.json');
+  const before = fs.readFileSync(lifecycle);
+
+  assert.equal(publishCli(plan).envelope.ok, true);
+
+  assert.deepEqual(fs.readFileSync(lifecycle), before);
+});
+
+test('publish-phase not stacked: a non-stacked plan is refused with zero gh calls', (t) => {
+  const plan = handedOffPlan(t, { stacked: false });
+
+  const { envelope } = publishCli(plan);
+
+  assert.ok(envelope && envelope.ok === false, JSON.stringify(envelope));
+  assert.equal(envelope.error.code, 'PHASE_CLOSED_NOT_STACKED');
+  assert.equal(fakeState(plan).calls.length, 0);
+});
+
+test('publish-phase stale snapshot: a snapshot edited after its event is STALE_ARTIFACT with nothing pushed', (t) => {
+  const plan = handedOffPlan(t);
+  const snapshot = path.join(plan.planDir, 'reviews', 'closeout-phase-1.md');
+  fs.appendFileSync(snapshot, '\ntampered after the event\n');
+
+  const { envelope } = publishCli(plan);
+
+  assert.ok(envelope && envelope.ok === false, JSON.stringify(envelope));
+  assert.equal(envelope.error.code, 'STALE_ARTIFACT');
+  assert.equal(originHas(plan, 'pocket/p/phase-1'), false, 'nothing pushed');
+  assert.equal(fakeState(plan).calls.filter((args) => args[0] === 'pr').length, 0, 'zero pr calls');
 });

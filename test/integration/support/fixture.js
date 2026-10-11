@@ -52,4 +52,4 @@ function createEnvironment(fake) {
   return env;
 }
 
-module.exports = { createFixture };
+module.exports = { createFixture, installFakeGitHub, createEnvironment };

@@ -17,6 +17,7 @@ const INSTALL_VALUE_FLAGS = ['--phase-branches', '--push-consent'];
 function usage() {
   return 'Usage: enterprise/cli.js install <project-root> [--argv <executable> [--argv <arg> ...]] [--phase-branches <stacked|none>] [--push-consent phase-branches] [--json]\n'
     + '       enterprise/cli.js consent-push <project-root> <spec_dir> <phase_key> --sha <40-hex> [--json]\n'
+    + '       enterprise/cli.js publish-phase <project-root> <spec_dir> <phase_key> [--json]\n'
     + '       enterprise/cli.js preflight <project-root> [--json]';
 }
 
@@ -170,11 +171,79 @@ function runConsentPush(rest) {
   else console.log(`Recorded push approval for ${phaseKey} at ${approval.sha}`);
 }
 
+function publishPhaseFailure(json, code, message) {
+  if (json) console.log(JSON.stringify({ ok: false, command: 'enterprise-publish-phase', data: null, error: { code, message } }));
+  else console.error(`${code}: ${message}`);
+  process.exitCode = 1;
+}
+
+// Manual repair entry point: the same publisher as the phase-closed handler, with the same
+// consent rules. It never forces, rebases, or writes lifecycle events.
+function publishStackedPhase(projectRootArg, specDirArg, phaseKey) {
+  const { loadContext } = require('./phase-handler-context');
+  const { readPhaseEvidence } = require('./phase-handler-evidence');
+  const { PhaseHandlerError } = require('./phase-handler-errors');
+  const { publishPhase } = require('./phase-stack');
+  const closed = require('./phase-closed-handler');
+  const projectRoot = fs.realpathSync(path.resolve(projectRootArg));
+  const preflight = registration.preflight(projectRoot);
+  if (!preflight.ok) throw new PhaseHandlerError(preflight.code, preflight.message);
+  const specDir = fs.realpathSync(path.resolve(specDirArg));
+  const planId = path.basename(specDir);
+  const context = loadContext({ plan_id: planId }, { projectRoot, specDir });
+  if (!context.stacked) {
+    throw new PhaseHandlerError('PHASE_CLOSED_NOT_STACKED', 'publish-phase applies only to stacked plans; no phase PR was published.');
+  }
+  const events = Array.isArray(context.lifecycle.events) ? context.lifecycle.events : [];
+  const event = events.find((candidate) => candidate.type === 'phase-closed' && closed.phaseKeyOf(candidate) === phaseKey);
+  if (!event) {
+    throw new PhaseHandlerError('PHASE_CLOSED_EVENT_REQUIRED', `No phase-closed event exists for ${phaseKey}; run log handoff first.`);
+  }
+  // Reading the evidence verifies every artifact ref (snapshot included) against its recorded hash.
+  const phase = closed.phaseFor(context, readPhaseEvidence(event, context));
+  const published = publishPhase({
+    projectRoot: context.root,
+    specDir: context.specDir,
+    planId,
+    phase,
+    closeoutSnapshot: closed.readCloseoutSnapshot(event, context),
+    registration: preflight.record,
+    options: {},
+  });
+  return {
+    phase_key: phase.key,
+    pr_number: published.pr.number,
+    pr_url: published.pr.url,
+    created: published.created,
+    notices: [published.notice],
+  };
+}
+
+function runPublishPhase(rest) {
+  const parsed = parseCommandArgs(rest);
+  const json = parsed.json;
+  const [projectRoot, specDir, phaseKey] = parsed.positionals;
+  let reason = parsed.error;
+  if (!reason && parsed.positionals.length !== 3) reason = 'publish-phase requires <project-root> <spec_dir> <phase_key>.';
+  if (!reason && !/^phase-[1-9]\d*$/.test(phaseKey)) reason = 'phase_key must look like phase-1.';
+  if (reason) return publishPhaseFailure(json, 'ENTERPRISE_PUBLISH_INVALID', `${reason}\n${usage()}`);
+  let data;
+  try {
+    data = publishStackedPhase(projectRoot, specDir, phaseKey);
+  } catch (err) {
+    const code = err && typeof err.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(err.code) ? err.code : 'PUBLISH_PHASE_FAILED';
+    return publishPhaseFailure(json, code, err && err.message ? err.message : String(err));
+  }
+  if (json) console.log(JSON.stringify({ ok: true, command: 'enterprise-publish-phase', data, error: null }));
+  else console.log(`${data.created ? 'Created' : 'Reused'} PR #${data.pr_number} for ${data.phase_key}: ${data.pr_url}`);
+}
+
 function main(argv) {
   const [command, ...rest] = argv;
   if (command === 'install') return runInstall(rest);
   if (command === 'preflight') return runPreflight(rest);
   if (command === 'consent-push') return runConsentPush(rest);
+  if (command === 'publish-phase') return runPublishPhase(rest);
 
   const json = argv.includes('--json');
   const message = usage();
