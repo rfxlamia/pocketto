@@ -286,3 +286,16 @@ test("stacked skill contract: Core development and closing route handoff and dra
 		assert.ok(!text.includes("Pocket Enterprise"), `${name} must stay neutral`);
 	}
 });
+
+test("stacked skill contract: pocket-closing runs last-phase handoff before log close", () => {
+	const closing = readFileSync(path.join(__dirname, "..", "skills/pocket-closing/SKILL.md"), "utf8");
+	const start = closing.indexOf("## Stacked Handoff");
+	assert.ok(start >= 0, "Stacked Handoff section must exist");
+	const next = closing.indexOf("\n## ", start + 1);
+	const section = closing.slice(start, next < 0 ? undefined : next);
+
+	assert.match(section, /`log handoff`[^.\n]*before `log close`/, "handoff must be stated to run before `log close`");
+	assert.match(section, /LIFECYCLE_BAD_STATE/, "section must warn that handoff after close fails");
+	assert.doesNotMatch(closing, /and `log close`, when it applies\)/, "must not order handoff after `log close`");
+	assert.match(closing, /Close[\s\S]*?Stacked plans: .*Stacked Handoff/, "Close section must point final-phase handoff to Stacked Handoff");
+});
