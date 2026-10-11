@@ -168,6 +168,13 @@ const PHASE_CLOSED_PROOF_KEYS = [
 ];
 const HEAD_SHA_PATTERN = /^[0-9a-f]{40,64}$/;
 
+// The proof must agree with the PR identity recorded for the same phase (T11 recordIdentity).
+// Without this check, a re-hashed proof could name a different PR, head, or base and still verify.
+function recordedPrMatches(recordedPr, proof) {
+  return Boolean(recordedPr) && recordedPr.number === proof.pr_number && recordedPr.url === proof.pr_url
+    && recordedPr.head_sha === proof.head_sha && recordedPr.base === proof.base;
+}
+
 // Reads the T13 stack proof written by persistStackProof. Only the full proof record is accepted:
 // a stack entry holding fingerprints alone is partial state and fails closed here.
 function phaseClosedProof(metadata, event) {
@@ -188,6 +195,7 @@ function phaseClosedProof(metadata, event) {
       || typeof proof.base !== 'string' || proof.base.length === 0
       || proof.marker !== markerFor(phaseNumber)
       || !validFingerprintRecords(proof.fingerprints)
+      || !recordedPrMatches(entry.github_pr, proof)
       || JSON.stringify(stack.fingerprints) !== JSON.stringify(proof.fingerprints)
       || JSON.stringify(proof.artifact_refs) !== JSON.stringify(canonicalArtifactRefs(event))) return null;
 

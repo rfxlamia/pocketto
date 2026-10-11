@@ -68,11 +68,23 @@ function storedStackProof(event) {
   return { ...record, proof_hash: sha256(JSON.stringify(record)) };
 }
 
+// The PR identity T13 records through recordIdentity (phase-stack.js), built from the untampered record.
+function recordedPrFor(stored) {
+  return {
+    number: stored.pr_number,
+    url: stored.pr_url,
+    head: `pocket/${PLAN_ID}/phase-1`,
+    base: stored.base,
+    parent_pr: null,
+    head_sha: stored.head_sha,
+  };
+}
+
 // Round-trips through JSON so the metadata matches what meta.json would hold on disk.
-function metadataWith(proof) {
+function metadataWith(proof, recordedPr = recordedPrFor(proof)) {
   return JSON.parse(JSON.stringify({
     phases: {
-      'phase-1': { stack: { fingerprints: proof.fingerprints, proof } },
+      'phase-1': { github_pr: recordedPr, stack: { fingerprints: proof.fingerprints, proof } },
     },
   }));
 }
@@ -110,10 +122,11 @@ test('phase-closed proof accepted: T13 stack proof resolves to its proof_ref and
 // field check under test can make the reader reject it.
 function tamperedCase(mutate, { rehash = true } = {}) {
   const event = phaseClosedEvent();
-  const { proof_hash: storedHash, ...record } = storedStackProof(event);
+  const original = storedStackProof(event);
+  const { proof_hash: storedHash, ...record } = original;
   mutate(record);
   const proof = { ...record, proof_hash: rehash ? sha256(JSON.stringify(record)) : storedHash };
-  return { event, metadata: metadataWith(proof) };
+  return { event, metadata: metadataWith(proof, recordedPrFor(original)) };
 }
 
 function rejectionCases() {
@@ -126,7 +139,30 @@ function rejectionCases() {
     { name: 'extra key present', build: () => tamperedCase((r) => { r.extra = 'unexpected'; }) },
     { name: 'pr_url missing', build: () => tamperedCase((r) => { delete r.pr_url; }) },
     { name: 'marker from another phase', build: () => tamperedCase((r) => { r.marker = markerFor(2); }) },
-    { name: 'proof_hash altered without re-hash', build: () => tamperedCase((r) => { r.pr_number = 43; }, { rehash: false }) },
+    { name: 'pr_number altered without re-hash', build: () => tamperedCase((r) => { r.pr_number = 43; }, { rehash: false }) },
+    { name: 'pr_number altered and re-hashed', build: () => tamperedCase((r) => { r.pr_number = 43; }) },
+    {
+      name: 'pr_url altered and re-hashed',
+      build: () => tamperedCase((r) => { r.pr_url = 'https://github.com/pocketto-test/phase-closed/pull/43'; }),
+    },
+    { name: 'head_sha altered and re-hashed', build: () => tamperedCase((r) => { r.head_sha = 'c'.repeat(40); }) },
+    { name: 'base altered and re-hashed', build: () => tamperedCase((r) => { r.base = 'develop'; }) },
+    {
+      name: 'stack object carries an extra key',
+      build: () => {
+        const c = tamperedCase(() => {});
+        c.metadata.phases['phase-1'].stack.extra = 'unexpected';
+        return c;
+      },
+    },
+    {
+      name: 'fingerprint record has a malformed fingerprint and is re-hashed',
+      build: () => tamperedCase((r) => { r.fingerprints = [{ fingerprint: 'NOT-HEX-VALUE!' }]; }),
+    },
+    {
+      name: 'fingerprint record carries an extra key and is re-hashed',
+      build: () => tamperedCase((r) => { r.fingerprints = [{ fingerprint: '0123456789abcdef', extra: 'unexpected' }]; }),
+    },
     {
       name: 'proof_hash altered (one character)',
       build: () => {
@@ -217,7 +253,9 @@ function storeStackProof(fixture, event) {
   const context = { projectRoot: fixture.root, specDir: fixture.specDir };
   const stored = storedStackProof(event);
   const meta = enterpriseMeta.readMetaFor(fixture.specDir, context);
-  meta.phases = { 'phase-1': { stack: { fingerprints: stored.fingerprints, proof: stored } } };
+  meta.phases = {
+    'phase-1': { github_pr: recordedPrFor(stored), stack: { fingerprints: stored.fingerprints, proof: stored } },
+  };
   enterpriseMeta.writeMetaFor(fixture.specDir, meta, context);
   return stored;
 }
