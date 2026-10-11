@@ -180,6 +180,12 @@ function deliverPhase(fixture, order) {
   return { review, handoff, drained };
 }
 
+// REVIEW then handoff with no drain in between; returns the handoff data.
+function reviewAndHandOff(fixture, order) {
+  reviewPhase(fixture, order);
+  return handOffPhase(fixture, order);
+}
+
 test('stacked end to end: bases', (t) => {
   const fixture = createStackedFixture(t);
   setUpPlan(fixture);
@@ -209,8 +215,7 @@ test('stacked end to end: core no gh', (t) => {
   const baseline = ghCallCount(fixture);
   setUpPlan(fixture);
   deliverPhase(fixture, 1);
-  reviewPhase(fixture, 2);
-  handOffPhase(fixture, 2);
+  reviewAndHandOff(fixture, 2);
   coreCommand(fixture, 'log close', ['log', 'close', fixture.planDir]);
   drain(fixture);
 
@@ -231,8 +236,7 @@ test('stacked end to end: core no gh', (t) => {
 test('stacked end to end: plan.phases identity', (t) => {
   const fixture = createStackedFixture(t);
   setUpPlan(fixture);
-  reviewPhase(fixture, 1);
-  handOffPhase(fixture, 1);
+  reviewAndHandOff(fixture, 1);
 
   const before = readLifecycle(fixture);
   assert.equal(before.plan.phases['phase-1'].branch, phaseBranch(1), 'handoff must record phase-1 identity in plan.phases');
@@ -304,8 +308,7 @@ test('stacked end to end: close ordering', (t) => {
   const fixture = createStackedFixture(t);
   setUpPlan(fixture);
   deliverPhase(fixture, 1);
-  reviewPhase(fixture, 2);
-  handOffPhase(fixture, 2);
+  reviewAndHandOff(fixture, 2);
   // The last phase is handed off before close: phase-closed after plan-closed is rejected (LIFECYCLE_BAD_STATE).
   coreCommand(fixture, 'log close', ['log', 'close', fixture.planDir]);
 
