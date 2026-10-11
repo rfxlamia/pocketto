@@ -9,8 +9,8 @@ This reference defines the Enterprise consumer of Core's neutral lifecycle journ
 | Package distribution | `4.1.0` |
 | CLI JSON contract | `CONTRACT=3` |
 | Execution pipeline | `PIPELINE=5` |
-| Lifecycle document schema | `LIFECYCLE_SCHEMA=1` |
-| Registered adapter protocol | `ADAPTER_CONTRACT=1` |
+| Lifecycle document schema | `LIFECYCLE_SCHEMA=2` (Core reads schema 1 and 2) |
+| Registered adapter protocol | `ADAPTER_CONTRACT=2` |
 | Release surface manifest | `SURFACE_MANIFEST=1` |
 
 The version numbers are independent. The manifest schema is `1` and declares exactly `pi/core`, `pi/enterprise`, `claude/core`, and `claude/enterprise`. Each Enterprise role is an additive delta that requires its matching Core role. Core alone is supported and remains local-first.
@@ -19,7 +19,7 @@ The version numbers are independent. The manifest schema is `1` and declares exa
 
 `<spec_dir>/lifecycle.json` is authoritative for lifecycle state, the event journal, and delivery state. `log.json` remains the detailed task-execution projection. Core replaces the lifecycle document atomically; a successful transition commits state and its event together before updating the projection.
 
-The lifecycle document root uses `schema: 1`. Its plan state includes the normalized `plan_id`, required `spec_dir`, optional `plan_dir` (null for `spec-approved`), state snapshot, and revision. Events are allowlisted to `spec-approved`, `phase-complete`, and `plan-closed`; each has a deterministic ID `<plan_id>:<type>:r<revision>`, increasing revision, artifact references, canonical payload hash, opaque proof references, and delivery state. Core does not put GitHub IDs, credentials, Enterprise policy, or remote commands in lifecycle records.
+The lifecycle document root uses `schema: 2`. Core reads schema 1 and schema 2 documents. A schema above 2 fails closed with `LIFECYCLE_SCHEMA_UNSUPPORTED` and no mutation. Its plan state includes the normalized `plan_id`, required `spec_dir`, optional `plan_dir` (null for `spec-approved`), state snapshot, and revision. Events are allowlisted to `spec-approved`, `phase-complete`, `plan-closed`, and `phase-closed`; each has a deterministic ID `<plan_id>:<type>:r<revision>`, increasing revision, artifact references, canonical payload hash, opaque proof references, and delivery state. Core does not put GitHub IDs, credentials, Enterprise policy, or remote commands in lifecycle records.
 
 Artifact references contain only `{ root, kind, path, sha256, revision }`, where root is `spec` or `plan`. Paths are relative to the selected root. The Core commit boundary rejects absolute or escaping paths, missing roots, invalid event/root combinations, and hash mismatches before creating an event. Contents are not embedded. A valid artifact that later disappears or changes is terminal `STALE_ARTIFACT`; temporary read failures may be retried.
 
@@ -27,6 +27,7 @@ Event timing is fixed:
 
 - `spec-approved` is emitted at the approved-spec handoff before planning and may reference only `spec` artifacts.
 - `phase-complete` is emitted when a phase reaches `REVIEW` after a terminal phase-level pass; it requires a non-null `plan_dir` and may reference plan evidence.
+- `phase-closed` is emitted by `log handoff` for one stacked phase after it is `DONE`. It carries the phase key in its payload, references that phase's closeout snapshot and evidence, and is legal once per phase while the phase is `COMPLETE` and the plan is not yet closed. A `phase-closed` after `plan-closed` is rejected with `LIFECYCLE_BAD_STATE`, so the last phase is handed off before `log close`.
 - `plan-closed` is emitted atomically with the successful local transition that closes the plan.
 
 An identical transition is an idempotent no-op using the original event ID. Reusing an event ID with a different canonical payload is an integrity conflict. The event journal is append-ordered and limited to 64 KiB per serialized event.
@@ -50,7 +51,9 @@ A projection write failure after the authoritative lifecycle commit returns `PRO
 
 ## Enterprise registration and delivery
 
-Enterprise atomically registers `<project-root>/.pocket/lifecycle-adapter.json` with schema `1`, `adapter_contract: 1`, executable `argv`, an event allowlist, and a timeout. Core invokes the registered executable with the event file and `--json --contract 3`. Responses are limited to the matching event ID, a supported delivery status, opaque proof references, and a bounded error object. A missing registration, or a fail-closed major mismatch, leaves the event pending with no delivery mutation and no remote call. A malformed registration, timeout, malformed response, or non-zero exit is retryable within the configured bound; no fallback writer is permitted.
+Enterprise atomically registers `<project-root>/.pocket/lifecycle-adapter.json` with schema `1`, `adapter_contract: 2`, executable `argv`, an event allowlist, and a timeout. Core invokes the registered executable with the event file and `--json --contract 3`. Responses are limited to the matching event ID, a supported delivery status, opaque proof references, a bounded error object, and display-only notices (see below). A missing registration, or a fail-closed major mismatch, leaves the event pending with no delivery mutation and no remote call. A malformed registration, timeout, malformed response, or non-zero exit is retryable within the configured bound; no fallback writer is permitted.
+
+A registration written under adapter contract 1 is incompatible with this release and fails closed with `ENTERPRISE_ADAPTER_CONTRACT_MISMATCH`. Reinstall the adapter after upgrading; see `references/onboarding.md`.
 
 Run the Enterprise preflight before any issue, PR, or comment operation:
 
@@ -60,9 +63,21 @@ node enterprise/cli.js preflight <project-root> --json
 
 `enterprise/cli.js` is in the pocketto-pi package root, not in the project being checked. The command above is a checkout of this repository. A project that depends on the npm package runs `node node_modules/pocketto-pi/enterprise/cli.js preflight <project-root> --json`.
 
-Proceed only when it confirms compatible Core, lifecycle schema, registration, adapter contract, and executable. Preflight is read-only. Enterprise retains remote IDs in `.pocket-meta.json`; the Core journal contains only opaque proof references. Events are claimed one at a time. An idle claim expires after 60 seconds. Before an adapter invocation, Core extends that claim through the granted timeout plus a release margin, so a second drain cannot reclaim an event while the invocation can still be running. A crashed owner is reclaimed only after its lease expires. Retries are bounded to one initial invocation plus at most five retries (delays: 1, 5, 30, 120, and 600 seconds). Authentication, permission, validation, integrity, and ownership conflicts require manual resolution.
+Proceed only when it confirms compatible Core, lifecycle schema, registration, adapter contract 2, and executable. Preflight is read-only. Enterprise retains remote IDs in `.pocket-meta.json`; the Core journal contains only opaque proof references. Events are claimed one at a time. An idle claim expires after 60 seconds. Before an adapter invocation, Core extends that claim through the granted timeout plus a release margin, so a second drain cannot reclaim an event while the invocation can still be running. A crashed owner is reclaimed only after its lease expires. Retries are bounded to one initial invocation plus at most five retries (delays: 1, 5, 30, 120, and 600 seconds). Authentication, permission, validation, integrity, and ownership conflicts require manual resolution.
 
-The adapter is the sole v4 remote writer for issue reconciliation, phase reporting, and final tasklist sync. It may create/reconcile one issue for `spec-approved`; phase completion requires an existing PR, and the adapter never auto-creates a PR. Plan closure upserts the `<!-- pocket-tasklist -->` proof only. No operation automatically merges a PR or closes an issue.
+The adapter is the sole v4 remote writer for issue reconciliation, phase reporting, stacked phase publication, and final tasklist sync. It may create/reconcile one issue for `spec-approved`. For `phase-complete` it reconciles an existing PR; for stacked plans that event is deferred and the phase PR is published on `phase-closed`. The adapter never auto-creates a PR outside the stacked `phase-closed` publication, which creates the phase PR only with the consent described in `references/phase-reconciliation.md`. Plan closure upserts the `<!-- pocket-tasklist -->` proof only. No operation automatically merges a PR or closes an issue.
+
+## Adapter notices (ADAPTER_CONTRACT 2)
+
+An adapter response may include a `notices` array. Each notice is exactly `{ code, message }`:
+
+- At most 10 notices per response.
+- `code` matches `^[A-Z][A-Z0-9_]{2,63}$`.
+- `message` is a non-empty string of at most 500 characters.
+
+Notices are display-only. Core renders them to the user and never templates, executes, or acts on their text. An invalid notice makes the whole response malformed (`ADAPTER_BAD_NOTICE`), and the event stays retryable. Notices never change a delivery status, a proof reference, or an event's terminal state.
+
+Enterprise uses notices for non-blocking information such as `PR_CREATED`, `PR_REUSED`, and ignored-artifact warnings. Warnings from preflight are reported verbatim by the consuming skill; they are not a gate.
 
 ## Compatibility and migration
 

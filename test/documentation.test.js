@@ -299,3 +299,22 @@ test("stacked skill contract: pocket-closing runs last-phase handoff before log 
 	assert.doesNotMatch(closing, /and `log close`, when it applies\)/, "must not order handoff after `log close`");
 	assert.match(closing, /Close[\s\S]*?Stacked plans: .*Stacked Handoff/, "Close section must point final-phase handoff to Stacked Handoff");
 });
+
+test("stacked enterprise skill contract", () => {
+	const read = (rel) => readFileSync(path.join(__dirname, "..", rel), "utf8");
+	const createPr = read("skills/create-pr/SKILL.md");
+	const onboarding = read("skills/pocket-enterprise/references/onboarding.md");
+	const lifecycleContract = read("skills/pocket-enterprise/references/lifecycle-contract.md");
+
+	assert.ok(createPr.includes("publish-phase"), "create-pr must route stacked plans through publish-phase");
+	assert.ok(createPr.includes("Warnings:"), "create-pr must report preflight Warnings verbatim");
+	assert.ok(!createPr.includes("--force"), "create-pr must never reference --force");
+
+	for (const needle of ["--phase-branches", "--push-consent", "adapter contract 2"]) {
+		assert.ok(onboarding.includes(needle), `onboarding must contain ${needle}`);
+	}
+
+	for (const needle of ["phase-closed", "notices"]) {
+		assert.ok(lifecycleContract.includes(needle), `lifecycle-contract must contain ${needle}`);
+	}
+});

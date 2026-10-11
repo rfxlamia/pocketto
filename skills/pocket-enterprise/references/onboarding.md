@@ -7,9 +7,10 @@ This reference owns optional Enterprise setup. Core onboarding remains local-onl
 Before setup, explain the effects of enabling Enterprise:
 
 - `spec-approved` may create or reconcile one issue for the approved spec.
-- `phase-complete` updates the phase summary and reconciles review findings on an existing PR.
+- `phase-complete` updates the phase summary and reconciles review findings on an existing PR. For stacked plans it is deferred to `phase-closed`.
+- `phase-closed` publishes a stacked phase PR and, only with consent, pushes that phase branch as a fast-forward. It never forces.
 - `plan-closed` upserts the final tasklist proof on the linked issue.
-- The adapter never creates a PR automatically, merges a PR, or closes an issue. `create-pr`, scaffolding, label creation, and selecting a custom runner are separate choices.
+- The adapter never merges a PR or closes an issue. `create-pr`, scaffolding, label creation, and selecting a custom runner are separate choices.
 - Enabling the adapter does not itself drain pending events. Remote reconciliation occurs when a lifecycle drain is run.
 
 Then:
@@ -52,13 +53,44 @@ Existing user files are not overwritten. Create the `pocket-plan` label only whe
 
 ## Register and verify the lifecycle adapter
 
-The Enterprise distribution bundles `enterprise/dispatch.js`, which composes the `spec-approved`, `phase-complete`, and `plan-closed` handlers behind the Core adapter protocol. The default registration uses the exact fixed argv `[process.execPath, <absolute enterprise/dispatch.js>, <absolute project-root>]`; Core appends the event-file path and `--json --contract 3`. A registered custom runner receives lifecycle event files on future drains and can perform remote operations, so use one only when the user explicitly selects a runner they trust.
+The Enterprise distribution bundles `enterprise/dispatch.js`, which composes the `spec-approved`, `phase-complete`, `phase-closed`, and `plan-closed` handlers behind the Core adapter protocol. The default registration uses the exact fixed argv `[process.execPath, <absolute enterprise/dispatch.js>, <absolute project-root>]`; Core appends the event-file path and `--json --contract 3`. A registered custom runner receives lifecycle event files on future drains and can perform remote operations, so use one only when the user explicitly selects a runner they trust.
 
 `enterprise/cli.js` is in the pocketto-pi package root, not in the project being registered. The commands below are a checkout of this repository. A project that depends on the npm package replaces `node enterprise/cli.js` with `node node_modules/pocketto-pi/enterprise/cli.js`.
 
-Inspect `<project-root>/.pocket/lifecycle-adapter.json` before installation. `install` atomically replaces this file, including a valid custom registration. If a compatible default registration already exists, keep it and run preflight. If a custom registration exists, preserve it and preflight it; do not replace it without explicit user authorization. If the registration is malformed or incompatible, report the exact finding and proposed repair before replacing it.
+### Phase branches and push consent
 
-Install the bundled runner only when no registration exists or the user explicitly authorizes replacing the existing registration:
+Choose these install options before registration. Ask the user for each choice; do not assume a value.
+
+| Option | Values | Effect |
+|--------|--------|--------|
+| `--phase-branches` | `stacked` (default), `none` | `stacked` publishes each phase as a PR against its explicit base: phase 1 against the recorded root base, phase N against the phase N-1 branch. Under `branch_strategy: main-local` a requested `stacked` is overridden to `none`, and the install reports a warning. |
+| `--push-consent` | `phase-branches` | Durable consent for non-force pushes of Pocket phase branches only (`pocket/<plan>/phase-<N>`). Omit it to approve each pushed commit separately with `consent-push --sha`. |
+
+What `--push-consent phase-branches` does and does not allow:
+
+- It allows fast-forward pushes of Pocket phase branches, so `publish-phase` and `phase-closed` delivery can publish a phase without a per-commit approval.
+- It never allows a forced push, a rebase, or a PR base retarget. Divergence from the remote is blocked for manual resolution.
+- It does not cover any other branch, including `main`, the root base, or a user's own branches.
+
+Install examples:
+
+```bash
+node enterprise/cli.js install <project-root> --phase-branches stacked --json
+node enterprise/cli.js install <project-root> --phase-branches stacked --push-consent phase-branches --json
+node enterprise/cli.js install <project-root> --phase-branches none --json
+```
+
+### Reinstall after upgrading
+
+A reinstall is required after upgrading to an Enterprise release that declares adapter contract 2. A registration written under adapter contract 1 is incompatible: preflight reports `ENTERPRISE_ADAPTER_CONTRACT_MISMATCH`, and the lifecycle adapter fails closed with no remote call. A registration is compatible only when it declares adapter contract 2 and matches the installed Core.
+
+Inspect `<project-root>/.pocket/lifecycle-adapter.json` before reinstalling. `install` atomically replaces this file. Then decide by its contents:
+
+- A bundled default registration (default argv) is replaced by reinstalling with the options above. This is the normal upgrade step.
+- A custom registration (non-default `argv`) is replaced only after the user explicitly authorizes replacing it. Reinstall with the same `--argv` entries so the fixed prefix is preserved; for a custom runner, do not change the runner without the user's choice.
+- A malformed registration is reported with the exact finding and the proposed repair before it is replaced.
+
+Install the bundled runner only when no registration exists, when a registration is incompatible, or when the user explicitly authorizes replacing an existing registration:
 
 ```bash
 node enterprise/cli.js install <project-root> --json
@@ -76,7 +108,7 @@ Then run the read-only compatibility preflight:
 node enterprise/cli.js preflight <project-root> --json
 ```
 
-Proceed only when it reports success with compatible Core, registration, adapter contract, and executable. On any failure, stop before issue, PR, or comment operations; give the actionable install/upgrade guidance and leave local Core state untouched. Preflight is read-only. Do not automatically run a drain as the final onboarding step.
+Proceed only when it reports success with compatible Core, registration, adapter contract 2, and executable. Preflight also returns `data.warnings`, which lists ignored-artifact warnings to surface to the user. On any failure, stop before issue, PR, or comment operations; give the actionable install/upgrade guidance and leave local Core state untouched. Preflight is read-only. Do not automatically run a drain as the final onboarding step.
 
 ## After onboarding
 

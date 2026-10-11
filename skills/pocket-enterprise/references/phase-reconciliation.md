@@ -1,10 +1,10 @@
 # Phase and Closure Reconciliation
 
-This reference owns Enterprise proof for `phase-complete` and `plan-closed`. It does not redefine Core transitions or the local close gate. Core commits neutral lifecycle state and events locally. Core does not call `gh`, does not merge a pull request, and does not close an issue.
+This reference owns Enterprise proof for `phase-complete`, `phase-closed`, and `plan-closed`. It does not redefine Core transitions or the local close gate. Core commits neutral lifecycle state and events locally. Core does not call `gh`, does not merge a pull request, and does not close an issue.
 
-## Phase-complete PR proof
+## Phase-complete PR proof (non-stacked)
 
-Run the Enterprise preflight before remote work. Continue only with matching v4 Core, lifecycle schema `1`, and adapter contract `1`; mixed-major or missing installations fail closed and preserve pending events.
+Run the Enterprise preflight before remote work. Continue only with matching v4 Core, lifecycle schema `2`, and adapter contract `2`; mixed-major or missing installations fail closed and preserve pending events.
 
 Resolve the phase PR from `phases.<phase_key>.github_pr.number/url` in Enterprise-owned `.pocket-meta.json` first. Validate that it belongs to the current `origin`, is open, matches the plan's captured branch, and has the expected phase identity.
 
@@ -15,6 +15,42 @@ If metadata is absent, search the current repository for the exact branch and ph
 - Multiple, foreign-owned, closed, branch-mismatched, or phase-mismatched matches → stop for manual resolution without mutation.
 
 The explicit `create-pr` recorder may create or discover the PR only after the user invokes it. It records the PR identity only. The registered lifecycle adapter is the sole phase-reporting writer: it upserts the summary and reconciles inline findings when a `phase-complete` event is drained. The adapter never auto-creates a PR.
+
+## Stacked phase-complete deferral
+
+For a stacked plan, `phase-complete` does no remote work. The handler validates the event and its lifecycle context, then answers `succeeded` with the deferred proof reference `deferred:phase-closed`. The deferred proof hash is a SHA-256 over the event ID, the plan ID, and the fixed deferred marker. This also applies to a reconcilable `phase-complete` retry, so the drain never reconciles a stacked PR from `phase-complete`.
+
+Replay of a succeeded deferred event recomputes that hash. A mismatch is terminal `PHASE_PROOF_MISMATCH`, which must be resolved manually before replay.
+
+The phase summary and inline findings for a stacked phase are written when its `phase-closed` event is delivered, not at `phase-complete`.
+
+## Phase-closed publication (stacked)
+
+`log handoff`, run through pocket-closing's Stacked Handoff after the phase is `DONE`, commits one `phase-closed` event for that phase with its closeout snapshot. The drain delivers it to the `phase-closed` handler only after successful Enterprise preflight. The handler then does the following, in order:
+
+1. Verifies every artifact reference, including the closeout snapshot and the phase evidence, against its recorded hash. An edited snapshot or evidence file is terminal `STALE_ARTIFACT`; nothing is pushed or published.
+2. Checks consent: either durable `push_consent` from install, or a per-SHA approval that matches the local phase head. Without either it answers retryable `PUSH_CONSENT_REQUIRED` and waits for the user to approve that exact commit with `consent-push`.
+3. Pushes the phase branch only when the remote branch is absent or an ancestor of the local head. A divergent remote is terminal and blocked. The handler never forces, rebases, or merges.
+4. Creates the PR for the exact head and base, or reuses the PR already recorded for that identity. It records the PR identity under `phases.<phase_key>.github_pr` (number, URL, head, base, parent PR, and head SHA) in `.pocket-meta.json`.
+5. Upserts the stack-context block in the PR body, reconciles the phase summary and inline findings through the shared seam, and stores the stack proof at `phases.<phase_key>.stack.proof` for local replay.
+
+Replay of a succeeded `phase-closed` event answers from the stored stack proof and makes no GitHub call. A later repair that overwrites the PR identity does not invalidate that proof.
+
+`publish-phase` is the explicit manual repair entry point for the same publisher. It follows the same consent rules, applies the same base checks, writes no lifecycle event, and never forces. `create-pr` runs it for stacked plans.
+
+## Explicit bases
+
+- Phase 1 targets the root base recorded at `log init --phase-branches stacked`, at `lifecycle.plan.phase_branches.root_base.branch`. Its PR is created with that base passed explicitly.
+- Phase N targets the phase N-1 branch. Its PR body links the parent PR number recorded in its stack identity.
+- Every PR lookup filters on both the exact phase head and the expected base.
+- A missing root base or an unpublished parent branch blocks publication with `PR_BLOCKED` until the user publishes it and reruns. Pocket does not publish a parent phase on the user's behalf.
+
+## Retarget detection
+
+- A recorded PR for the exact head whose base differs from the expected base is blocked as `base retargeted` (terminal). Pocket does not retarget it. Fix the base on GitHub, then rerun.
+- A phase-1 base that differs from the recorded root base is blocked as `base mismatch` (terminal). A missing recorded root base is blocked as `root base unrecorded` (terminal).
+- A recorded PR that is closed, or not open for the exact head and base, is not reused.
+- More than one open PR for the same head and base is blocked as `PR_BLOCKED`. The user closes the duplicate by hand, then reruns.
 
 ## Summary and findings proof
 
@@ -30,4 +66,4 @@ The local `closeout.md` and the unmarked closeout body are informational, not ca
 
 ## Recovery
 
-A remote marker written before a local proof update must be found and reconciled before retrying a mutation. Use bounded retries for transient transport failures. Authentication, permission, integrity, or ownership conflicts stop for an actionable manual fix. Never advance proof to a later lifecycle revision while an earlier revision is unresolved. Disabling or removing Enterprise leaves Core and the lifecycle journal intact; pending event IDs remain available for replay after a compatible adapter is restored.
+A remote marker written before a local proof update must be found and reconciled before retrying a mutation. Use bounded retries for transient transport failures. Authentication, permission, integrity, or ownership conflicts stop for an actionable manual fix. Never advance proof to a later lifecycle revision while an earlier revision is unresolved. A stacked `phase-closed` blocked by `PR_BLOCKED` or `PUSH_CONSENT_REQUIRED` stays retryable; the user resolves the blocker and drains again. Disabling or removing Enterprise leaves Core and the lifecycle journal intact; pending event IDs remain available for replay after a compatible adapter is restored.
