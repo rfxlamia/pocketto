@@ -11,6 +11,7 @@ const { serializeResponse } = require('../enterprise/adapter');
 const enterpriseMeta = require('../enterprise/meta');
 const { lifecycleEventProofFromMetadata } = require('../enterprise/lifecycle-proof');
 const { createLifecycleDelivery } = require('../enterprise/lifecycle-delivery');
+const { handlePhaseClosed } = require('../enterprise/phase-closed-handler');
 
 const PLAN_ID = 'demo-plan';
 const EVENT_ID = `${PLAN_ID}:phase-closed:r1`;
@@ -140,13 +141,10 @@ function rejectionCases() {
     { name: 'pr_url missing', build: () => tamperedCase((r) => { delete r.pr_url; }) },
     { name: 'marker from another phase', build: () => tamperedCase((r) => { r.marker = markerFor(2); }) },
     { name: 'pr_number altered without re-hash', build: () => tamperedCase((r) => { r.pr_number = 43; }, { rehash: false }) },
-    { name: 'pr_number altered and re-hashed', build: () => tamperedCase((r) => { r.pr_number = 43; }) },
-    {
-      name: 'pr_url altered and re-hashed',
-      build: () => tamperedCase((r) => { r.pr_url = 'https://github.com/pocketto-test/phase-closed/pull/43'; }),
-    },
-    { name: 'head_sha altered and re-hashed', build: () => tamperedCase((r) => { r.head_sha = 'c'.repeat(40); }) },
-    { name: 'base altered and re-hashed', build: () => tamperedCase((r) => { r.base = 'develop'; }) },
+    { name: 'pr_number zero and re-hashed (format)', build: () => tamperedCase((r) => { r.pr_number = 0; }) },
+    { name: 'pr_url empty and re-hashed (format)', build: () => tamperedCase((r) => { r.pr_url = ''; }) },
+    { name: 'head_sha malformed and re-hashed (format)', build: () => tamperedCase((r) => { r.head_sha = 'NOT-A-SHA'; }) },
+    { name: 'base empty and re-hashed (format)', build: () => tamperedCase((r) => { r.base = ''; }) },
     {
       name: 'stack object carries an extra key',
       build: () => {
@@ -410,6 +408,55 @@ test('phase-closed reconciling: a tampered closeout snapshot is terminal STALE_A
   assert.equal(prepared.response.error.code, 'STALE_ARTIFACT', JSON.stringify(prepared.response));
   assert.equal(prepared.response.error.retryable, false);
   assert.equal(watermarkOf(fixture), 0, 'a stale reconciling event must not advance the watermark');
+});
+
+// Repair overwrite: a later publish-phase repair re-records github_pr through setPrStackIdentity (recordIdentity).
+// The stored stack proof is the durable record, so an already-succeeded event must still replay.
+// Test file: `test/enterprise-lifecycle-proof-phase-closed.test.js`
+// Level: integration (delivery entry plus the real handlePhaseClosed replay branch, real files on disk)
+// Test intent: Given a phase-closed drain that succeeded, When the phase PR identity is overwritten with a new head_sha, Then delivery prepare and handlePhaseClosed replay both report succeeded with the original proof hash and make no GitHub call.
+// Exercise through: createLifecycleDelivery(projectRoot).prepare and handlePhaseClosed
+// Test doubles: a handler stub that stores the proof; a gh runner that fails the test if called
+// Exact command: `node --test --test-name-pattern="phase-closed repair overwrite" test/enterprise-lifecycle-proof-phase-closed.test.js`
+
+test('phase-closed repair overwrite: a succeeded drain still replays after its PR identity is overwritten', (t) => {
+  const event = phaseClosedEvent();
+  const fixture = deliveryFixture(t, event);
+  const delivery = createLifecycleDelivery(fixture.root);
+  const expected = storedStackProof(event);
+  const handler = (handlerEvent) => {
+    const stored = storeStackProof(fixture, handlerEvent);
+    return { event_id: handlerEvent.event_id, status: 'succeeded', proof_ref: stored.proof_ref, proof_hash: stored.proof_hash };
+  };
+
+  const first = drain(delivery, event, handler);
+  assert.equal(first.response.status, 'succeeded', JSON.stringify(first.response));
+
+  enterpriseMeta.setPrStackIdentity(fixture.specDir, 'phase-1', {
+    number: 42,
+    url: 'https://github.com/pocketto-test/phase-closed/pull/42',
+    head: `pocket/${PLAN_ID}/phase-1`,
+    base: 'main',
+    parent_pr: null,
+    head_sha: 'd'.repeat(40),
+  }, { projectRoot: fixture.root, specDir: fixture.specDir });
+
+  const succeeded = {
+    ...event,
+    delivery: { status: 'succeeded', attempts: 1, proof_ref: PROOF_REF, proof_hash: expected.proof_hash },
+  };
+  const replay = delivery.prepare(succeeded);
+  assert.equal(replay.response, undefined, `delivery replay must not fail after the overwrite: ${JSON.stringify(replay.response)}`);
+  assert.equal(replay.event.delivery.status, 'succeeded');
+  assert.equal(replay.event.delivery.proof_hash, expected.proof_hash);
+
+  const replayed = handlePhaseClosed(succeeded, {
+    projectRoot: fixture.root,
+    ghRunner: () => assert.fail('a succeeded replay must make no GitHub call'),
+  });
+  assert.equal(replayed.status, 'succeeded', JSON.stringify(replayed));
+  assert.equal(replayed.proof_ref, PROOF_REF);
+  assert.equal(replayed.proof_hash, expected.proof_hash);
 });
 
 // Unsafe metadata is the reachable metadata failure. A missing .pocket-meta.json is read as empty
