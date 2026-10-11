@@ -286,7 +286,8 @@ function dispatchEvent(event, opts = {}) {
 
   const lifecycleDelivery = opts.lifecycleDelivery;
   const prepared = prepareLifecycleEvent(event, lifecycleDelivery);
-  if (prepared.response) return prepared.response;
+  // Prepare-stage responses pass the same response boundary as handler responses (notices included).
+  if (prepared.response) return serializeResponse(prepared.response, eventId === 'unknown-event' ? undefined : eventId);
   const invocation = invokeHandler(selected.handler, prepared.handlerEvent, projectRoot,
     registration.record, opts.ghRunner, eventId, protocolError);
   if (invocation.response) return invocation.response;

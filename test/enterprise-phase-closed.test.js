@@ -20,6 +20,7 @@ const { ignoredArtifactWarning } = require('../cli/lib/artifact-ignore');
 const { ignoredArtifactNotice } = require('../enterprise/phase-closed-handler');
 const { redactSecrets } = require('../enterprise/retry');
 const { handlePlanClosed } = require('../enterprise/closure-handler');
+const { handlers: dispatchHandlers } = require('../enterprise/dispatch');
 const { makeEvent: makePlanClosedEvent, makeFakeGh: makePlanClosedGh, ISSUE } = require('../test-support/enterprise-closeout/fixtures');
 const { buildRegistration, REGISTRATION_DIR, REGISTRATION_FILE } = require('../enterprise/registration-record');
 
@@ -691,7 +692,7 @@ test('phase-closed ignored notice: a failed publish keeps its status and error c
 
 // plan-closed fixture (T14): a real git repo with docs/pocket spec and plan directories. The
 // handler is wired the way enterprise/dispatch.js wires it, with the fake gh closeout runner.
-function planClosedFixture(t, { ignoreArtifacts = false, issueRecorded = true } = {}) {
+function planClosedFixture(t, { ignoreArtifacts = false, ignoreAll = false, issueRecorded = true, phaseCount = 1 } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'plan-closed-ignored-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   gitIn(root, 'init', '-q');
@@ -701,7 +702,7 @@ function planClosedFixture(t, { ignoreArtifacts = false, issueRecorded = true } 
   fs.mkdirSync(planDir, { recursive: true });
   fs.writeFileSync(path.join(planDir, 'log.json'), JSON.stringify({
     header: { plan_dir: planDir, plan_type: 'phased', status: 'DONE', date_started: '2026-09-19', date_completed: '2026-09-20' },
-    phases: [{ order: 1, file: 'execution-plan/phase-1.md', status: 'DONE', tasks: [{ id: 'T1', name: 'Closeout proof', status: 'DONE', done_sha: '1234567890abcdef' }] }],
+    phases: Array.from({ length: phaseCount }, (_, index) => ({ order: index + 1, file: `execution-plan/phase-${index + 1}.md`, status: 'DONE', tasks: [{ id: `T${index + 1}`, name: 'Closeout proof', status: 'DONE', done_sha: '1234567890abcdef' }] })),
   }, null, 2) + '\n');
   fs.writeFileSync(path.join(planDir, 'execution-plan.md'), '# Final plan\n');
   fs.writeFileSync(path.join(specDir, 'lifecycle.json'), JSON.stringify({
@@ -714,7 +715,8 @@ function planClosedFixture(t, { ignoreArtifacts = false, issueRecorded = true } 
   fs.writeFileSync(path.join(root, REGISTRATION_DIR, REGISTRATION_FILE), `${JSON.stringify(buildRegistration({
     argv: [process.execPath, '-e', '0'],
   }), null, 2)}\n`);
-  if (ignoreArtifacts) fs.writeFileSync(path.join(root, '.gitignore'), 'lifecycle.json\n.pocket-meta.json\n');
+  if (ignoreAll) fs.writeFileSync(path.join(root, '.gitignore'), 'docs/pocket/\n');
+  else if (ignoreArtifacts) fs.writeFileSync(path.join(root, '.gitignore'), 'lifecycle.json\n.pocket-meta.json\n');
   return { root, specDir, planDir, gh: makePlanClosedGh() };
 }
 
@@ -809,4 +811,173 @@ test('ignored notice bound: 40 ignored paths give a message within 500 character
   assert.equal(listed + Number(remaining[1]), 40, 'listed paths plus the remaining count must cover all 40 paths');
   assert.ok(listed > 0, 'at least one path must be listed');
   assert.ok(notice.message.includes('plan-with-a-long-name-00/closeout.md'), 'the first path must be listed first');
+});
+
+// T14 correction round 1 (I-1). The phase-closed handler runs through the real lifecycle delivery.
+// The forged proof_hash is the handler double that makes completion rewrite the response.
+function dispatchPhaseClosedWithDelivery(fixture, event, { forgeProof = false } = {}) {
+  return dispatchEvent(event, {
+    projectRoot: fixture.work,
+    ghRunner: phaseClosedGh(fixture),
+    lifecycleDelivery: createLifecycleDelivery(fixture.work),
+    handlers: {
+      'phase-closed': (phaseEvent, options) => {
+        const response = require('../enterprise/phase-closed-handler').handlePhaseClosed(phaseEvent, options);
+        return forgeProof ? { ...response, proof_hash: '0'.repeat(64) } : response;
+      },
+    },
+  });
+}
+
+function noticeCodes(response) {
+  return (response.notices || []).map((notice) => notice.code);
+}
+
+// RED (I-1, drain-rewritten path)
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration
+// Test intent: Given the handler succeeds with a proof the durable store does not hold, When dispatched through dispatchEvent with lifecycleDelivery, Then the reconciling ADAPTER_PROOF_NOT_DURABLE response keeps POCKET_ARTIFACTS_IGNORED, and its status, code, and retryable value match the no-warning case.
+// Exercise through: dispatchEvent with createLifecycleDelivery
+// Test doubles: fake gh; real git with bare origin; handler double with a non-durable proof_hash
+// Expected RED: the notice is absent on the rewritten response
+// Exact command: `node --test --test-name-pattern="ignored notice drain" test/enterprise-phase-closed.test.js`
+
+test('ignored notice drain: a drain-rewritten reconciling response keeps the notice with its status and code', (t) => {
+  const baseline = dispatchPhaseClosedWithDelivery(phaseClosedFixture(t), phaseClosedEvent(), { forgeProof: true });
+  const fixture = phaseClosedFixture(t, { ignoreArtifacts: true });
+  const event = phaseClosedEvent();
+
+  const response = dispatchPhaseClosedWithDelivery(fixture, event, { forgeProof: true });
+
+  assert.equal(baseline.status, 'reconciling', JSON.stringify(baseline));
+  assert.equal(baseline.error.code, 'ADAPTER_PROOF_NOT_DURABLE', JSON.stringify(baseline));
+  assert.equal(validateAdapterResponse(response, event.event_id).ok, true, JSON.stringify(response));
+  assert.equal(response.status, baseline.status, 'the warning must not change the status');
+  assert.equal(response.error.code, baseline.error.code, 'the warning must not change the error code');
+  assert.equal(response.error.retryable, baseline.error.retryable, 'the warning must not change retryable');
+  assert.deepEqual(noticeCodes(response), ['PR_CREATED', 'POCKET_ARTIFACTS_IGNORED'], 'the handler notices and the warning must both survive the rewrite');
+});
+
+// RED (I-1, prepare-stage path)
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration
+// Test intent: Given a phase-closed revision 2 with no prior delivery, When dispatched through dispatchEvent with lifecycleDelivery, Then the terminal-free REVISION_GAP response keeps its status and code and carries POCKET_ARTIFACTS_IGNORED, and no handler or gh call runs.
+// Exercise through: dispatchEvent with createLifecycleDelivery
+// Test doubles: fake gh counting calls; real git with bare origin
+// Expected RED: the notice is absent on the prepare-stage response
+// Exact command: `node --test --test-name-pattern="ignored notice prepare" test/enterprise-phase-closed.test.js`
+
+test('ignored notice prepare: a revision-gap phase-closed response keeps its status and code and carries the notice', (t) => {
+  const gapEvent = { ...phaseClosedEvent(), event_id: `${PLAN_ID}:phase-closed:r2`, revision: 2 };
+  const baseline = dispatchPhaseClosedWithDelivery(phaseClosedFixture(t), gapEvent);
+  const fixture = phaseClosedFixture(t, { ignoreArtifacts: true });
+
+  const response = dispatchPhaseClosedWithDelivery(fixture, gapEvent);
+
+  assert.equal(baseline.status, 'retryable', JSON.stringify(baseline));
+  assert.equal(baseline.error.code, 'REVISION_GAP', JSON.stringify(baseline));
+  assert.equal(validateAdapterResponse(response, gapEvent.event_id).ok, true, JSON.stringify(response));
+  assert.equal(response.status, baseline.status, 'the warning must not change the status');
+  assert.equal(response.error.code, baseline.error.code, 'the warning must not change the error code');
+  assert.equal(response.error.retryable, baseline.error.retryable, 'the warning must not change retryable');
+  assert.deepEqual(noticeCodes(response), ['POCKET_ARTIFACTS_IGNORED'], JSON.stringify(response));
+  assert.equal(fixture.remote.calls.length, 0, 'a prepare-stage gap must make no GitHub call');
+});
+
+// RED (I-1, prepare-stage path, plan-closed)
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration
+// Test intent: Given a plan-closed revision 9 with no prior delivery, When dispatched through the real dispatch wiring with lifecycleDelivery, Then the REVISION_GAP response keeps its status and code and carries POCKET_ARTIFACTS_IGNORED.
+// Exercise through: dispatchEvent with the enterprise/dispatch.js handlers and createLifecycleDelivery
+// Test doubles: fake gh counting calls
+// Expected RED: the notice is absent on the prepare-stage response
+// Exact command: `node --test --test-name-pattern="ignored notice prepare" test/enterprise-phase-closed.test.js`
+
+test('ignored notice prepare: a revision-gap plan-closed response keeps its status and code and carries the notice', (t) => {
+  const dispatchGap = (fixture) => dispatchEvent(makePlanClosedEvent(fixture.planDir), {
+    projectRoot: fixture.root,
+    ghRunner: fixture.gh.runner,
+    lifecycleDelivery: createLifecycleDelivery(fixture.root),
+    handlers: dispatchHandlers,
+  });
+  const baselineFixture = planClosedFixture(t);
+  const baseline = dispatchGap(baselineFixture);
+  const fixture = planClosedFixture(t, { ignoreArtifacts: true });
+
+  const response = dispatchGap(fixture);
+
+  assert.equal(baseline.status, 'retryable', JSON.stringify(baseline));
+  assert.equal(baseline.error.code, 'REVISION_GAP', JSON.stringify(baseline));
+  assert.equal(response.status, baseline.status, 'the warning must not change the status');
+  assert.equal(response.error.code, baseline.error.code, 'the warning must not change the error code');
+  assert.deepEqual(noticeCodes(response), ['POCKET_ARTIFACTS_IGNORED'], JSON.stringify(response));
+  assert.equal(fixture.gh.calls.length, 0, 'a prepare-stage gap must make no GitHub call');
+});
+
+// M1 guard (route a plan-closed notice test through the real dispatch wrapper, success path)
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration
+// Test intent: Given ignored lifecycle and meta, When a plan-closed event succeeds through the enterprise/dispatch.js handlers, Then the response is succeeded and carries POCKET_ARTIFACTS_IGNORED.
+// Exercise through: dispatchEvent with the enterprise/dispatch.js handlers
+// Test doubles: fake gh
+// Expected RED: none (guard: the plan-closed notice already exists; this proves the real wrapper path)
+// Exact command: `node --test --test-name-pattern="ignored notice dispatch" test/enterprise-phase-closed.test.js`
+
+test('ignored notice dispatch: a plan-closed success through the real dispatch wrapper carries the notice', (t) => {
+  const fixture = planClosedFixture(t, { ignoreArtifacts: true });
+  const response = dispatchEvent(makePlanClosedEvent(fixture.planDir), {
+    projectRoot: fixture.root,
+    ghRunner: fixture.gh.runner,
+    handlers: dispatchHandlers,
+  });
+
+  assert.equal(response.status, 'succeeded', JSON.stringify(response));
+  assert.deepEqual(noticeCodes(response), ['POCKET_ARTIFACTS_IGNORED'], JSON.stringify(response));
+});
+
+// RED (I-2, dedupe)
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration
+// Test intent: Given a three-phase plan under an ignored docs/pocket/, When plan-closed succeeds, Then the notice lists each of the 7 unique ignored paths at most once and its "…and N more" equals 7 minus the listed count.
+// Exercise through: dispatchEvent with the handler wiring used by the plan-closed tests
+// Test doubles: fake gh
+// Expected RED: the count is inflated by per-phase duplicate paths (15 instead of 7)
+// Exact command: `node --test --test-name-pattern="ignored notice dedupe" test/enterprise-phase-closed.test.js`
+
+test('ignored notice dedupe: a three-phase plan-closed lists each ignored path once and counts the remainder', (t) => {
+  const fixture = planClosedFixture(t, { ignoreAll: true, phaseCount: 3 });
+  const event = makePlanClosedEvent(fixture.planDir);
+
+  const response = dispatchPlanClosed(fixture, event);
+
+  assert.equal(response.status, 'succeeded', JSON.stringify(response));
+  const message = (response.notices || [])[0] && response.notices[0].message;
+  assert.ok(message, JSON.stringify(response));
+  const unique = 7;
+  const remaining = /…and (\d+) more$/.exec(message);
+  assert.ok(remaining, `message must end with "…and N more": ${message}`);
+  const listed = (message.match(/docs\/pocket\/(plans|spec)\//g) || []).length;
+  assert.equal(listed + Number(remaining[1]), unique, `listed ${listed} plus remaining ${remaining[1]} must equal the ${unique} unique paths: ${message}`);
+  assert.equal((message.match(/plans\/demo-plan\/log\.json/g) || []).length, 1, 'log.json must be listed at most once');
+});
+
+// Guard (I-1 skip rule): a prepare-stage response produced before the plan directory resolves carries no notice.
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration
+// Test intent: Given a phase-closed event for a plan with no spec directory, When dispatched through dispatchEvent with lifecycleDelivery, Then the terminal STALE_ARTIFACT response keeps its status and code and carries no notice.
+// Exercise through: dispatchEvent with createLifecycleDelivery
+// Test doubles: fake gh counting calls
+// Expected RED: none (guard: the skip rule must keep this response notice-free)
+// Exact command: `node --test --test-name-pattern="ignored notice prepare" test/enterprise-phase-closed.test.js`
+
+test('ignored notice prepare: a response produced before the plan directory resolves carries no notice', (t) => {
+  const fixture = phaseClosedFixture(t, { ignoreArtifacts: true });
+  const missing = { ...phaseClosedEvent(), plan_id: 'missing-plan', event_id: 'missing-plan:phase-closed:r1' };
+
+  const response = dispatchPhaseClosedWithDelivery(fixture, missing);
+
+  assert.equal(response.status, 'terminal', JSON.stringify(response));
+  assert.equal(response.error.code, 'STALE_ARTIFACT', JSON.stringify(response));
+  assert.deepEqual(noticeCodes(response), [], 'no notice when the plan directory cannot be resolved');
+  assert.equal(fixture.remote.calls.length, 0, 'no GitHub call before the plan context resolves');
 });

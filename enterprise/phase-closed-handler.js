@@ -204,7 +204,7 @@ function publishStackedPhase(event, context, options) {
 // repo-relative paths as fit, then "…and N more". It must pass the Core notice bound both as built
 // and after adapter redaction; serializeNotices drops a notice that fails either check.
 function ignoredArtifactNotice(warning, root) {
-  const paths = warning.paths.map((p) => path.relative(root, p).split(path.sep).join('/'));
+  const paths = [...new Set(warning.paths.map((p) => path.relative(root, p).split(path.sep).join('/')))];
   const head = `${warning.consequence} Fix: git add -f each listed path, or remove its rule from .gitignore. `
     + `Pocket never edits .gitignore. Ignored: `;
   const fits = (message) => message.length <= ADAPTER_NOTICE_MAX_MESSAGE_LENGTH
@@ -227,11 +227,12 @@ function ignoredNoticeFor({ root, planDir, specDir, phaseOrders }) {
     const physicalRoot = fs.realpathSync(root);
     const physicalPlanDir = fs.realpathSync(planDir);
     const physicalSpecDir = fs.realpathSync(specDir);
-    const probes = phaseOrders.flatMap((phaseOrder) => pocketArtifactProbePaths({
+    // Each phase repeats the plan-level and spec-level paths, so the probe list is deduplicated.
+    const probes = [...new Set(phaseOrders.flatMap((phaseOrder) => pocketArtifactProbePaths({
       planDir: physicalPlanDir,
       specDir: physicalSpecDir,
       phaseOrder,
-    }));
+    })))];
     const warning = ignoredArtifactWarning(physicalRoot, probes, { audience: 'enterprise' });
     return warning ? ignoredArtifactNotice(warning, physicalRoot) : null;
   } catch {
@@ -247,14 +248,35 @@ function withIgnoredArtifactNotice(response, notice) {
   return { ...response, notices: [...existing, notice] };
 }
 
-function phaseClosedNotice(event, context) {
-  if (!context) return null;
+// Phase orders a plan closure covers: every phase in log.json, or phase 1 when log.json cannot be read.
+function planPhaseOrders(planDir) {
   try {
-    const phaseOrder = Number(phaseKeyOf(event).slice('phase-'.length));
-    return ignoredNoticeFor({ root: context.root, planDir: context.planDir, specDir: context.specDir, phaseOrders: [phaseOrder] });
+    const log = JSON.parse(fs.readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    const count = log && Array.isArray(log.phases) ? log.phases.length : 0;
+    return count > 0 ? Array.from({ length: count }, (_, index) => index + 1) : [1];
+  } catch {
+    return [1];
+  }
+}
+
+// Notice for a phase-closed or plan-closed event from directories the caller has resolved.
+// Returns null for any other event type, when nothing is ignored, or when the directories do not resolve.
+function ignoredNoticeForEvent(event, { projectRoot, planDir, specDir }) {
+  try {
+    if (!event) return null;
+    let phaseOrders;
+    if (event.type === 'phase-closed') phaseOrders = [Number(phaseKeyOf(event).slice('phase-'.length))];
+    else if (event.type === 'plan-closed') phaseOrders = planPhaseOrders(planDir);
+    else return null;
+    return ignoredNoticeFor({ root: projectRoot, planDir, specDir, phaseOrders });
   } catch {
     return null;
   }
+}
+
+function phaseClosedNotice(event, context) {
+  if (!context) return null;
+  return ignoredNoticeForEvent(event, { projectRoot: context.root, planDir: context.planDir, specDir: context.specDir });
 }
 
 function handlePhaseClosed(event, options = {}) {
@@ -293,5 +315,6 @@ module.exports = {
   readCloseoutSnapshot,
   ignoredArtifactNotice,
   ignoredNoticeFor,
+  ignoredNoticeForEvent,
   withIgnoredArtifactNotice,
 };
