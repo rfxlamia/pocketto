@@ -321,6 +321,59 @@ test('phase-closed stale artifact: an edited phase-evidence file is terminal STA
   assert.equal(response.error.retryable, false);
 });
 
+// Reconciling recovery: the handler already stored its proof, but the watermark write did not land.
+// recoverReconcilingEvent must validate the committed artifacts through loadContext before it recovers.
+// Test file: `test/enterprise-lifecycle-proof-phase-closed.test.js`
+// Level: integration (delivery function with real files on disk)
+// Test intent: Given a reconciling phase-closed event whose stack proof is stored and whose artifacts are valid, When prepare runs, Then it recovers succeeded with the stored proof_ref and hash and advances the watermark without calling a handler. Given the same state with a tampered closeout snapshot, Then terminal STALE_ARTIFACT and no watermark advance.
+// Exercise through: createLifecycleDelivery(projectRoot).prepare
+// Test doubles: none beyond the stored proof written to meta on disk
+// Exact command: `node --test --test-name-pattern="phase-closed reconciling" test/enterprise-lifecycle-proof-phase-closed.test.js`
+
+function reconcilingEvent(event, expected) {
+  return {
+    ...event,
+    delivery: { status: 'reconciling', attempts: 1, proof_ref: PROOF_REF, proof_hash: expected.proof_hash },
+  };
+}
+
+function watermarkOf(fixture) {
+  return enterpriseMeta.readLifecycleDelivery(fixture.specDir, PLAN_ID, { projectRoot: fixture.root, specDir: fixture.specDir })
+    .last_applied_revision;
+}
+
+test('phase-closed reconciling: valid artifacts recover the stored proof and advance the watermark', (t) => {
+  const event = phaseClosedEvent();
+  const fixture = deliveryFixture(t, event);
+  const expected = storedStackProof(event);
+  storeStackProof(fixture, event);
+  const delivery = createLifecycleDelivery(fixture.root);
+
+  const prepared = delivery.prepare(reconcilingEvent(event, expected));
+
+  assert.equal(prepared.response && prepared.response.status, 'succeeded', JSON.stringify(prepared.response));
+  assert.equal(prepared.response.error, undefined, JSON.stringify(prepared.response));
+  assert.equal(prepared.response.proof_ref, PROOF_REF);
+  assert.equal(prepared.response.proof_hash, expected.proof_hash);
+  assert.equal(watermarkOf(fixture), 1, 'recovery must advance the watermark to the reconciled revision');
+});
+
+test('phase-closed reconciling: a tampered closeout snapshot is terminal STALE_ARTIFACT and does not advance the watermark', (t) => {
+  const event = phaseClosedEvent();
+  const fixture = deliveryFixture(t, event);
+  const expected = storedStackProof(event);
+  storeStackProof(fixture, event);
+  fs.writeFileSync(path.join(fixture.planDir, SNAPSHOT_PATH), 'Closeout rewritten before recovery.\n');
+  const delivery = createLifecycleDelivery(fixture.root);
+
+  const prepared = delivery.prepare(reconcilingEvent(event, expected));
+
+  assert.equal(prepared.response && prepared.response.status, 'terminal', JSON.stringify(prepared.response));
+  assert.equal(prepared.response.error.code, 'STALE_ARTIFACT', JSON.stringify(prepared.response));
+  assert.equal(prepared.response.error.retryable, false);
+  assert.equal(watermarkOf(fixture), 0, 'a stale reconciling event must not advance the watermark');
+});
+
 // Unsafe metadata is the reachable metadata failure. A missing .pocket-meta.json is read as empty
 // metadata on the delivery path, so it never reaches the metadata error mapping.
 test('phase-closed stale artifact: unsafe enterprise metadata answers PHASE_CLOSED_METADATA_PATH_INVALID before any handler call', (t) => {

@@ -292,6 +292,7 @@ test('npm test command includes every v4 runtime suite and the T13 documentation
     'test/enterprise-phase-closed.test.js',
     'test/phase-handoff.test.js',
     'test/enterprise-phase-stack.test.js',
+    'test/enterprise-lifecycle-proof-phase-closed.test.js',
   ];
   const actualSuites = match[1].trim().split(/\s+/);
   assert.deepEqual(actualSuites, expectedSuites, 'scripts.test must name every v4 runtime suite and the merged T13 documentation gate, without omissions or unapproved extras');
