@@ -90,13 +90,13 @@ Inspect `<project-root>/.pocket/lifecycle-adapter.json` before reinstalling. `in
 - A custom registration (non-default `argv`) is replaced only after the user explicitly authorizes replacing it. Reinstall with the same `--argv` entries so the fixed prefix is preserved; for a custom runner, do not change the runner without the user's choice.
 - A malformed registration is reported with the exact finding and the proposed repair before it is replaced.
 
-Install the bundled runner only when no registration exists, when the existing registration is a bundled default registration, or when the user explicitly authorizes replacing a custom registration:
+Install the bundled runner only when no registration exists or when the existing registration is a bundled default registration:
 
 ```bash
 node enterprise/cli.js install <project-root> --json
 ```
 
-For an incompatible custom registration, do not run bare `install` over it, because that writes the bundled default runner and drops the custom one. Reinstall only after the user authorizes the replacement, with the same `--argv` entries so the fixed prefix and the custom runner are preserved.
+For any custom registration, whether compatible or incompatible, never run bare `install` over it, because that writes the bundled default runner and drops the custom one. An authorized replacement of a custom registration is done with `install` plus the same `--argv` entries, so the fixed prefix and the custom runner are preserved, as the custom-registration bullet above describes.
 
 For a compatible custom runner, `--argv` is an explicit override and requires the user's choice. The supplied argv entries are the complete fixed prefix; Core still appends the event file and the exact protocol flags:
 
