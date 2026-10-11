@@ -268,3 +268,21 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 	assertRollbackGuidance(allDocs, documentation);
 	assertNoUnnegatedCoreRemoteClaims(allDocs);
 });
+
+test("stacked skill contract: Core development and closing route handoff and drain", () => {
+	const read = (rel) => readFileSync(path.join(__dirname, "..", rel), "utf8");
+	const closing = read("skills/pocket-closing/SKILL.md");
+	const development = read("skills/pocket-development/SKILL.md");
+	const entryGate = read("skills/pocket-development/references/entry-gate.md");
+
+	for (const needle of ["log handoff", "next_actions", "Lifecycle delivery:", "Branch:", "Notices:", "Warnings:"]) {
+		assert.ok(closing.includes(needle), `pocket-closing must contain ${needle}`);
+	}
+	const gate = `${development}\n${entryGate}`;
+	for (const needle of ["phases[N].branch", "git switch", "lifecycle drain", "data.phase_branches", "data.branch"]) {
+		assert.ok(gate.includes(needle), `pocket-development must contain ${needle}`);
+	}
+	for (const [name, text] of [["pocket-closing", closing], ["pocket-development", development], ["entry-gate", entryGate]]) {
+		assert.ok(!text.includes("Pocket Enterprise"), `${name} must stay neutral`);
+	}
+});
