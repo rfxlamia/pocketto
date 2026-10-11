@@ -6,7 +6,14 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const { validateEvent } = require('../cli/lib/lifecycle-contract');
+const path = require('node:path');
+const {
+  validateEvent,
+  ADAPTER_NOTICE_MAX_COUNT,
+  ADAPTER_NOTICE_MAX_MESSAGE_LENGTH,
+} = require('../cli/lib/lifecycle-contract');
+const { pocketArtifactProbePaths, ignoredArtifactWarning } = require('../cli/lib/artifact-ignore');
+const { redactSecrets } = require('./retry');
 const { canonicalArtifactRefs } = require('./lifecycle-proof');
 const enterpriseMeta = require('./meta');
 const { loadContext, phaseBranchFor, resolvePlanArtifactPath } = require('./phase-handler-context');
@@ -193,7 +200,70 @@ function publishStackedPhase(event, context, options) {
   };
 }
 
+// Display-only ignored-artifact notice. The message is the consequence and the fix, then as many
+// repo-relative paths as fit, then "…and N more". It must pass the Core notice bound both as built
+// and after adapter redaction; serializeNotices drops a notice that fails either check.
+function ignoredArtifactNotice(warning, root) {
+  const paths = warning.paths.map((p) => path.relative(root, p).split(path.sep).join('/'));
+  const head = `${warning.consequence} Fix: git add -f each listed path, or remove its rule from .gitignore. `
+    + `Pocket never edits .gitignore. Ignored: `;
+  const fits = (message) => message.length <= ADAPTER_NOTICE_MAX_MESSAGE_LENGTH
+    && redactSecrets(message).length <= ADAPTER_NOTICE_MAX_MESSAGE_LENGTH;
+  for (let shown = paths.length; shown >= 0; shown -= 1) {
+    const remaining = paths.length - shown;
+    const list = paths.slice(0, shown).join(', ');
+    const more = remaining === 0 ? '' : `…and ${remaining} more`;
+    const tail = shown === 0 ? more : (remaining === 0 ? list : `${list}, ${more}`);
+    const message = `${head}${tail}`;
+    if (fits(message)) return { code: 'POCKET_ARTIFACTS_IGNORED', message };
+  }
+  return { code: 'POCKET_ARTIFACTS_IGNORED', message: `Ignored Pocket artifacts: …and ${paths.length} more` };
+}
+
+// Probes the artifacts of the given phase orders from already-resolved directories.
+// Returns null when nothing is ignored or the directories cannot be resolved; never throws.
+function ignoredNoticeFor({ root, planDir, specDir, phaseOrders }) {
+  try {
+    const physicalRoot = fs.realpathSync(root);
+    const physicalPlanDir = fs.realpathSync(planDir);
+    const physicalSpecDir = fs.realpathSync(specDir);
+    const probes = phaseOrders.flatMap((phaseOrder) => pocketArtifactProbePaths({
+      planDir: physicalPlanDir,
+      specDir: physicalSpecDir,
+      phaseOrder,
+    }));
+    const warning = ignoredArtifactWarning(physicalRoot, probes, { audience: 'enterprise' });
+    return warning ? ignoredArtifactNotice(warning, physicalRoot) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Appends the notice after the existing notices, keeping status and every other field unchanged.
+function withIgnoredArtifactNotice(response, notice) {
+  if (!notice || !response) return response;
+  const existing = Array.isArray(response.notices) ? response.notices : [];
+  if (existing.length >= ADAPTER_NOTICE_MAX_COUNT) return response;
+  return { ...response, notices: [...existing, notice] };
+}
+
+function phaseClosedNotice(event, context) {
+  if (!context) return null;
+  try {
+    const phaseOrder = Number(phaseKeyOf(event).slice('phase-'.length));
+    return ignoredNoticeFor({ root: context.root, planDir: context.planDir, specDir: context.specDir, phaseOrders: [phaseOrder] });
+  } catch {
+    return null;
+  }
+}
+
 function handlePhaseClosed(event, options = {}) {
+  const scope = { context: null };
+  const response = phaseClosedResponse(event, options, scope);
+  return withIgnoredArtifactNotice(response, phaseClosedNotice(event, scope.context));
+}
+
+function phaseClosedResponse(event, options, scope) {
   const eventId = event && typeof event.event_id === 'string' ? event.event_id : 'unknown-event';
   try {
     const checked = validateEvent(event);
@@ -201,6 +271,7 @@ function handlePhaseClosed(event, options = {}) {
       throw new PhaseHandlerError('PHASE_EVENT_INVALID', 'Expected a valid phase-closed lifecycle event.');
     }
     const context = loadContext(event, options);
+    scope.context = context;
     if (!context.stacked) {
       throw new PhaseHandlerError('PHASE_CLOSED_NOT_STACKED', 'phase-closed applies only to stacked plans; no phase PR was published.');
     }
@@ -215,4 +286,12 @@ function handlePhaseClosed(event, options = {}) {
   }
 }
 
-module.exports = { handlePhaseClosed, phaseFor, phaseKeyOf, readCloseoutSnapshot };
+module.exports = {
+  handlePhaseClosed,
+  phaseFor,
+  phaseKeyOf,
+  readCloseoutSnapshot,
+  ignoredArtifactNotice,
+  ignoredNoticeFor,
+  withIgnoredArtifactNotice,
+};

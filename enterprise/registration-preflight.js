@@ -5,6 +5,29 @@ const fs = require('node:fs');
 const path = require('node:path');
 const registration = require('./registration-record');
 const versions = require('./registration-version');
+const { pocketArtifactProbePaths, ignoredArtifactWarning } = require('../cli/lib/artifact-ignore');
+
+// Preflight has no plan in scope, so it probes every plan that has a spec directory
+// under docs/pocket/spec/. Real artifact names keep force-tracked files out of the warning.
+// Warnings are display-only: any failure here yields no warning and never blocks.
+function ignoredArtifactWarnings(projectRoot) {
+  try {
+    const root = path.resolve(projectRoot);
+    const specRoot = path.join(root, 'docs', 'pocket', 'spec');
+    const planIds = fs.readdirSync(specRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    const probes = planIds.flatMap((planId) => pocketArtifactProbePaths({
+      planDir: path.join(root, 'docs', 'pocket', 'plans', planId),
+      specDir: path.join(specRoot, planId),
+    }));
+    const warning = ignoredArtifactWarning(root, probes, { audience: 'enterprise' });
+    return warning ? [warning] : [];
+  } catch {
+    return [];
+  }
+}
 
 function readCoreInfo(getCoreInfo) {
   try {
@@ -49,7 +72,7 @@ function checkRegisteredExecutable(projectRoot, record, exists) {
   return { ok: true };
 }
 
-function preflightResult(core, loaded, legacyV3Pair) {
+function preflightResult(core, loaded, legacyV3Pair, warnings) {
   const result = {
     ok: true,
     code: null,
@@ -57,6 +80,7 @@ function preflightResult(core, loaded, legacyV3Pair) {
     record: loaded.record,
     path: loaded.path,
     core,
+    warnings,
   };
   if (legacyV3Pair) result.warning = versions.legacyV3Warning();
   return result;
@@ -86,7 +110,7 @@ function preflight(projectRoot, deps = {}) {
   if (!loaded.ok) return loaded;
   const executable = checkRegisteredExecutable(projectRoot, loaded.record, exists);
   if (!executable.ok) return executable;
-  return preflightResult(core, loaded, compatiblePair.legacyV3Pair);
+  return preflightResult(core, loaded, compatiblePair.legacyV3Pair, ignoredArtifactWarnings(projectRoot));
 }
 
 module.exports = { preflight };

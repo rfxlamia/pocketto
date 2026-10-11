@@ -15,7 +15,12 @@ const { resolveRepository, resolvePhasePr } = require('../enterprise/phase-handl
 const { createFixture } = require('../test-support/enterprise-phase/fixture');
 const { fakeGh, makePr } = require('../test-support/enterprise-phase/remote');
 const { dispatchEvent } = require('../enterprise/adapter');
-const { validateAdapterResponse } = require('../cli/lib/lifecycle-contract');
+const { validateAdapterResponse, isValidAdapterNotice } = require('../cli/lib/lifecycle-contract');
+const { ignoredArtifactWarning } = require('../cli/lib/artifact-ignore');
+const { ignoredArtifactNotice } = require('../enterprise/phase-closed-handler');
+const { redactSecrets } = require('../enterprise/retry');
+const { handlePlanClosed } = require('../enterprise/closure-handler');
+const { makeEvent: makePlanClosedEvent, makeFakeGh: makePlanClosedGh, ISSUE } = require('../test-support/enterprise-closeout/fixtures');
 const { buildRegistration, REGISTRATION_DIR, REGISTRATION_FILE } = require('../enterprise/registration-record');
 
 // Guard: any accidental real `gh` resolves to this stub, which refuses to run.
@@ -307,7 +312,7 @@ function phaseClosedEvent() {
 // Temp work clone with a bare origin. `main` is the root base on origin; the phase-1
 // branch is local only, with its durable root-base record. Registration carries durable
 // push consent unless `consent` is false. A recorded issue is seeded unless `issueRecorded` is false.
-function phaseClosedFixture(t, { stacked = true, consent = true, issueRecorded = true } = {}) {
+function phaseClosedFixture(t, { stacked = true, consent = true, issueRecorded = true, ignoreArtifacts = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase-closed-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const origin = path.join(root, 'origin.git');
@@ -362,6 +367,7 @@ function phaseClosedFixture(t, { stacked = true, consent = true, issueRecorded =
   });
   fs.mkdirSync(path.join(work, REGISTRATION_DIR), { recursive: true });
   fs.writeFileSync(path.join(work, REGISTRATION_DIR, REGISTRATION_FILE), `${JSON.stringify(registration, null, 2)}\n`);
+  if (ignoreArtifacts) fs.writeFileSync(path.join(work, '.gitignore'), 'lifecycle.json\n.pocket-meta.json\n');
 
   const issueUrl = `https://github.com/${PC_OWNER}/${PC_REPO}/issues/${PC_ISSUE}`;
   if (issueRecorded) {
@@ -638,4 +644,169 @@ test('phase-closed issue missing: no owned open issue is retryable ISSUE_REQUIRE
   assert.equal(response.error.code, 'ISSUE_REQUIRED', JSON.stringify(response));
   assert.equal(prCreateCalls(fixture).length, 0, 'no pr create without an owned issue');
   assert.equal(remoteHasBranch(fixture, PC_BRANCH), false, 'nothing pushed without an owned issue');
+});
+
+// RED cycle 2 (T14)
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration
+// Test intent: Given lifecycle.json and .pocket-meta.json are git-ignored, When a phase-closed event succeeds through dispatchEvent, Then notices contain both PR_CREATED and POCKET_ARTIFACTS_IGNORED, and the PR was still created.
+// Exercise through: dispatchEvent
+// Test doubles: fake gh; real git with bare origin
+// Expected RED: the handler emits only the publish notice
+// Exact command: `node --test --test-name-pattern="phase-closed ignored notice" test/enterprise-phase-closed.test.js`
+
+test('phase-closed ignored notice: ignored lifecycle and meta still publish and add POCKET_ARTIFACTS_IGNORED after PR_CREATED', (t) => {
+  const fixture = phaseClosedFixture(t, { ignoreArtifacts: true });
+  const event = phaseClosedEvent();
+
+  const response = dispatchPhaseClosed(fixture, event);
+
+  assert.equal(validateAdapterResponse(response, event.event_id).ok, true, JSON.stringify(response));
+  assert.equal(response.status, 'succeeded', JSON.stringify(response));
+  assert.deepEqual(response.notices.map((notice) => notice.code), ['PR_CREATED', 'POCKET_ARTIFACTS_IGNORED'], JSON.stringify(response));
+  assert.equal(prCreateCalls(fixture).length, 1, 'the PR must still be created');
+  const message = response.notices[1].message;
+  assert.match(message, /lifecycle\.json/, 'the notice must list the ignored lifecycle file');
+  assert.match(message, /\.pocket-meta\.json/, 'the notice must list the ignored metadata file');
+});
+
+// RED cycle 2 (T14), failure side: the notice rides on failure responses without changing their status.
+// Test intent: Given the same ignored paths and a missing push consent, When dispatched, Then the status and error code match the no-warning case and the notice is attached.
+// Exercise through: dispatchEvent
+// Test doubles: fake gh; real git with bare origin
+// Exact command: `node --test --test-name-pattern="phase-closed ignored notice" test/enterprise-phase-closed.test.js`
+
+test('phase-closed ignored notice: a failed publish keeps its status and error code and still carries the notice', (t) => {
+  const baseline = dispatchPhaseClosed(phaseClosedFixture(t, { consent: false }), phaseClosedEvent());
+  const fixture = phaseClosedFixture(t, { consent: false, ignoreArtifacts: true });
+
+  const response = dispatchPhaseClosed(fixture, phaseClosedEvent());
+
+  assert.equal(baseline.error.code, 'PUSH_CONSENT_REQUIRED', JSON.stringify(baseline));
+  assert.equal(response.status, baseline.status, 'the warning must not change the status');
+  assert.equal(response.error.code, baseline.error.code, 'the warning must not change the error code');
+  assert.deepEqual(response.notices.map((notice) => notice.code), ['POCKET_ARTIFACTS_IGNORED'], JSON.stringify(response));
+  assert.equal(prCreateCalls(fixture).length, 0, 'no pr create without consent');
+});
+
+// plan-closed fixture (T14): a real git repo with docs/pocket spec and plan directories. The
+// handler is wired the way enterprise/dispatch.js wires it, with the fake gh closeout runner.
+function planClosedFixture(t, { ignoreArtifacts = false, issueRecorded = true } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'plan-closed-ignored-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  gitIn(root, 'init', '-q');
+  const specDir = path.join(root, 'docs', 'pocket', 'spec', PLAN_ID);
+  const planDir = path.join(root, 'docs', 'pocket', 'plans', PLAN_ID);
+  fs.mkdirSync(specDir, { recursive: true });
+  fs.mkdirSync(planDir, { recursive: true });
+  fs.writeFileSync(path.join(planDir, 'log.json'), JSON.stringify({
+    header: { plan_dir: planDir, plan_type: 'phased', status: 'DONE', date_started: '2026-09-19', date_completed: '2026-09-20' },
+    phases: [{ order: 1, file: 'execution-plan/phase-1.md', status: 'DONE', tasks: [{ id: 'T1', name: 'Closeout proof', status: 'DONE', done_sha: '1234567890abcdef' }] }],
+  }, null, 2) + '\n');
+  fs.writeFileSync(path.join(planDir, 'execution-plan.md'), '# Final plan\n');
+  fs.writeFileSync(path.join(specDir, 'lifecycle.json'), JSON.stringify({
+    schema: 1,
+    plan: { plan_id: PLAN_ID, spec_dir: specDir, plan_dir: planDir, branch: PC_BRANCH, state: { approval: 'APPROVED', status: 'DONE' }, revision: 9 },
+    events: [],
+  }, null, 2) + '\n');
+  if (issueRecorded) enterpriseMeta.setIssueIdentity(specDir, { number: ISSUE.number, url: ISSUE.html_url });
+  fs.mkdirSync(path.join(root, REGISTRATION_DIR), { recursive: true });
+  fs.writeFileSync(path.join(root, REGISTRATION_DIR, REGISTRATION_FILE), `${JSON.stringify(buildRegistration({
+    argv: [process.execPath, '-e', '0'],
+  }), null, 2)}\n`);
+  if (ignoreArtifacts) fs.writeFileSync(path.join(root, '.gitignore'), 'lifecycle.json\n.pocket-meta.json\n');
+  return { root, specDir, planDir, gh: makePlanClosedGh() };
+}
+
+function dispatchPlanClosed(fixture, event) {
+  return dispatchEvent(event, {
+    projectRoot: fixture.root,
+    ghRunner: fixture.gh.runner,
+    handlers: {
+      'plan-closed': (planEvent, options) => handlePlanClosed(planEvent, {
+        ...options,
+        specDir: fixture.specDir,
+        planDir: fixture.planDir,
+      }),
+    },
+  });
+}
+
+// RED cycle 3 (T14)
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: integration
+// Test intent: Given lifecycle.json and .pocket-meta.json are git-ignored, When a plan-closed event is dispatched, Then its response carries a POCKET_ARTIFACTS_IGNORED notice, and its status is unchanged from the no-warning case.
+// Exercise through: dispatchEvent
+// Test doubles: fake gh (closeout runner from test-support)
+// Expected RED: closure-handler responses carry no notices
+// Exact command: `node --test --test-name-pattern="plan-closed ignored notice" test/enterprise-phase-closed.test.js`
+
+test('plan-closed ignored notice: ignored lifecycle and meta keep the success status and add POCKET_ARTIFACTS_IGNORED', (t) => {
+  const baselineFixture = planClosedFixture(t);
+  const baseline = dispatchPlanClosed(baselineFixture, makePlanClosedEvent(baselineFixture.planDir));
+  const fixture = planClosedFixture(t, { ignoreArtifacts: true });
+  const event = makePlanClosedEvent(fixture.planDir);
+
+  const response = dispatchPlanClosed(fixture, event);
+
+  assert.equal(baseline.status, 'succeeded', JSON.stringify(baseline));
+  assert.equal(validateAdapterResponse(response, event.event_id).ok, true, JSON.stringify(response));
+  assert.equal(response.status, baseline.status, 'the warning must not change the status');
+  assert.deepEqual((response.notices || []).map((notice) => notice.code), ['POCKET_ARTIFACTS_IGNORED'], JSON.stringify(response));
+  const message = response.notices[0].message;
+  assert.match(message, /lifecycle\.json/, 'the notice must list the ignored lifecycle file');
+  assert.match(message, /\.pocket-meta\.json/, 'the notice must list the ignored metadata file');
+});
+
+// RED cycle 3 (T14), failure side: a failed closure keeps its status and error code and carries the notice.
+// Test intent: Given the same ignored paths and no recorded issue, When dispatched, Then the status and error code match the no-warning case and the notice is attached.
+// Exercise through: dispatchEvent
+// Test doubles: fake gh (closeout runner from test-support)
+// Exact command: `node --test --test-name-pattern="plan-closed ignored notice" test/enterprise-phase-closed.test.js`
+
+test('plan-closed ignored notice: a failed closure keeps its status and error code and still carries the notice', (t) => {
+  const baselineFixture = planClosedFixture(t, { issueRecorded: false });
+  const baseline = dispatchPlanClosed(baselineFixture, makePlanClosedEvent(baselineFixture.planDir));
+  const fixture = planClosedFixture(t, { issueRecorded: false, ignoreArtifacts: true });
+
+  const response = dispatchPlanClosed(fixture, makePlanClosedEvent(fixture.planDir));
+
+  assert.notEqual(baseline.status, 'succeeded', JSON.stringify(baseline));
+  assert.equal(response.status, baseline.status, 'the warning must not change the status');
+  assert.equal(response.error.code, baseline.error.code, 'the warning must not change the error code');
+  assert.deepEqual((response.notices || []).map((notice) => notice.code), ['POCKET_ARTIFACTS_IGNORED'], JSON.stringify(response));
+});
+
+// RED cycle 4 (T14)
+// Test file: `test/enterprise-phase-closed.test.js`
+// Level: unit
+// Test intent: Given 40 ignored paths, When the Enterprise notice is built, Then its message is at most 500 characters and ends with "…and N more" with the correct N.
+// Exercise through: enterprise/phase-closed-handler.js ignoredArtifactNotice, fed by the Core ignoredArtifactWarning over real git ignore rules
+// Test doubles: none
+// Expected RED: the message is unbounded and fails Core notice validation
+// Exact command: `node --test --test-name-pattern="ignored notice bound" test/enterprise-phase-closed.test.js`
+
+test('ignored notice bound: 40 ignored paths give a message within 500 characters that ends with the remaining count', (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ignored-notice-bound-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  gitIn(root, 'init', '-q');
+  fs.writeFileSync(path.join(root, '.gitignore'), 'docs/pocket/\n');
+  const probes = Array.from({ length: 40 }, (_, index) => path.join(
+    root, 'docs', 'pocket', 'plans', `plan-with-a-long-name-${String(index).padStart(2, '0')}`, 'closeout.md',
+  ));
+  const warning = ignoredArtifactWarning(root, probes, { audience: 'enterprise' });
+  assert.equal(warning.paths.length, 40, 'all 40 paths must be reported as ignored');
+
+  const notice = ignoredArtifactNotice(warning, root);
+
+  assert.equal(notice.code, 'POCKET_ARTIFACTS_IGNORED');
+  assert.ok(notice.message.length <= 500, `message is ${notice.message.length} characters`);
+  const redacted = { code: notice.code, message: redactSecrets(notice.message) };
+  assert.equal(isValidAdapterNotice(redacted), true, 'the notice must stay valid after redaction, or serializeNotices drops it');
+  const remaining = /…and (\d+) more$/.exec(notice.message);
+  assert.ok(remaining, `message must end with "…and N more": ${notice.message}`);
+  const listed = (notice.message.match(/docs\/pocket\/plans\//g) || []).length;
+  assert.equal(listed + Number(remaining[1]), 40, 'listed paths plus the remaining count must cover all 40 paths');
+  assert.ok(listed > 0, 'at least one path must be listed');
+  assert.ok(notice.message.includes('plan-with-a-long-name-00/closeout.md'), 'the first path must be listed first');
 });

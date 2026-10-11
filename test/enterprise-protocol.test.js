@@ -188,6 +188,62 @@ test('CYCLE 1: failed install writes no partial registration state', () => {
 // through enterprise/adapter.js response serializer and enterprise/retry.js
 // redaction. Fixed response objects and a fake gh runner; never live GitHub.
 
+// T14 preflight ignored-artifact warnings. Warnings are display-only: preflight still passes.
+function gitInit(root) {
+  execFileSync('git', ['-C', root, 'init', '-q'], { stdio: 'ignore' });
+}
+
+function makePlanArtifacts(root) {
+  const specDir = path.join(root, 'docs', 'pocket', 'spec', 'demo-plan');
+  const planDir = path.join(root, 'docs', 'pocket', 'plans', 'demo-plan');
+  fs.mkdirSync(path.join(planDir, 'reviews'), { recursive: true });
+  fs.mkdirSync(specDir, { recursive: true });
+  const files = [
+    path.join(planDir, 'log.json'),
+    path.join(planDir, 'closeout.md'),
+    path.join(planDir, 'reviews', 'closeout-phase-1.md'),
+    path.join(specDir, 'lifecycle.json'),
+    path.join(specDir, '.pocket-meta.json'),
+  ];
+  for (const file of files) fs.writeFileSync(file, '{}\n');
+  return files.map((file) => path.relative(root, file).split(path.sep).join('/'));
+}
+
+test('preflight ignored warnings: an ignored docs/pocket emits POCKET_ARTIFACTS_IGNORED in data.warnings', () => {
+  const root = fs.realpathSync(makeTempRoot());
+  const dummy = makeDummyExecutable(root);
+  assert.equal(runCli(['install', root, '--argv', dummy, '--json']).exit, 0);
+  gitInit(root);
+  makePlanArtifacts(root);
+  fs.writeFileSync(path.join(root, '.gitignore'), 'docs/pocket/\n');
+
+  const res = runCli(['preflight', root, '--json']);
+  assert.equal(res.exit, 0, `ignored artifacts are warnings, not failures: ${res.stdout}`);
+  assert.equal(res.json.ok, true);
+  const [warning] = res.json.data.warnings || [];
+  assert.equal(warning && warning.code, 'POCKET_ARTIFACTS_IGNORED', JSON.stringify(res.json.data));
+  assert.match(warning.consequence, /another clone/, 'consequence must name other clones');
+  assert.match(warning.consequence, /\bCI\b/, 'consequence must name CI');
+  assert.ok(warning.paths.length > 0, 'warning must list the ignored paths');
+  assert.match(warning.fix, /git add -f/);
+  assert.match(warning.fix, /\.gitignore/);
+});
+
+test('preflight ignored warnings: tracked artifacts emit no warning and keep the legacy warning unchanged', () => {
+  const root = fs.realpathSync(makeTempRoot());
+  const dummy = makeDummyExecutable(root);
+  assert.equal(runCli(['install', root, '--argv', dummy, '--json']).exit, 0);
+  gitInit(root);
+  const tracked = makePlanArtifacts(root);
+  fs.writeFileSync(path.join(root, '.gitignore'), 'docs/pocket/\n');
+  execFileSync('git', ['-C', root, 'add', '-f', '--', ...tracked], { stdio: 'ignore' });
+
+  const res = runCli(['preflight', root, '--json']);
+  assert.equal(res.exit, 0, `preflight must pass: ${res.stdout}`);
+  assert.ok(!res.json.data.warnings || res.json.data.warnings.length === 0, JSON.stringify(res.json.data));
+  assert.equal(res.json.data.warning, undefined, 'no legacy warning on a compatible install');
+});
+
 const adapter = require('../enterprise/adapter');
 const retry = require('../enterprise/retry');
 const { validateAdapterResponse } = require('../cli/lib/lifecycle-contract');

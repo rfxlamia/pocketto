@@ -29,6 +29,7 @@ const {
   upsertTasklist,
 } = require('./closure-tasklist');
 const { canonicalArtifactRefs } = require('./lifecycle-proof');
+const { ignoredNoticeFor, withIgnoredArtifactNotice } = require('./phase-closed-handler');
 
 const RECONCILABLE_DELIVERY_STATUSES = new Set(['claimed', 'pending', 'retryable', 'reconciling']);
 const PROOF_HASH_PATTERN = /^[0-9a-f]{64}$/;
@@ -341,7 +342,35 @@ function metadataFailure(eventId, error) {
     'Linked issue metadata is missing or has an unsafe path; manual resolution is required.', false);
 }
 
+// Plan closure covers the closeout record of every phase, so the probe spans each phase order in log.json.
+function planPhaseOrders(planDir) {
+  try {
+    const log = JSON.parse(fs.readFileSync(path.join(planDir, 'log.json'), 'utf8'));
+    const count = log && Array.isArray(log.phases) ? log.phases.length : 0;
+    return count > 0 ? Array.from({ length: count }, (_, index) => index + 1) : [1];
+  } catch {
+    return [1];
+  }
+}
+
+// No directories means no notice: a closure without a resolvable plan directory is never probed.
+function plannedNoticeFor(opts) {
+  if (!opts || !opts.projectRoot || !opts.planDir || !opts.specDir) return null;
+  return ignoredNoticeFor({
+    root: opts.projectRoot,
+    planDir: opts.planDir,
+    specDir: opts.specDir,
+    phaseOrders: planPhaseOrders(opts.planDir),
+  });
+}
+
+// Every plan-closed response, success or failure, carries the notice. The wrapper sits on the
+// outer handler, so the early adapterResult returns never need to thread notices themselves.
 function handlePlanClosed(event, opts = {}) {
+  return withIgnoredArtifactNotice(handlePlanClosedResponse(event, opts), plannedNoticeFor(opts));
+}
+
+function handlePlanClosedResponse(event, opts) {
   const eventId = event && typeof event.event_id === 'string' ? event.event_id : 'unknown-event';
   const invalid = validateEventAndPaths(event, opts, eventId);
   if (invalid) return invalid;

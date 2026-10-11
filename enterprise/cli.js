@@ -128,6 +128,7 @@ function runPreflight(rest) {
         path: res.path,
         record: res.record,
         core: res.core,
+        warnings: res.warnings || [],
         ...(res.warning ? { warning: res.warning } : {}),
       },
       error: null,
@@ -135,7 +136,14 @@ function runPreflight(rest) {
   } else {
     console.log(`Enterprise preflight passed: ${res.path}`);
     if (res.warning) console.warn(`${res.warning.code}: ${res.warning.message}`);
+    for (const warning of res.warnings || []) console.warn(formatIgnoredWarning(warning));
   }
+}
+
+// Human text for an ignored-artifact warning. Display-only: it never changes the exit code.
+function formatIgnoredWarning(warning) {
+  const fixLines = warning.fix.split('\n').join('\n    ');
+  return `${warning.code}: ${warning.consequence}\n  Ignored: ${warning.paths.join(', ')}\n  Fix:\n    ${fixLines}`;
 }
 
 function runConsentPush(rest) {
