@@ -338,10 +338,20 @@ test("stacked enterprise skill contract", () => {
 });
 
 function documentationSection(text, heading) {
-	const start = text.indexOf(heading);
+	const level = heading.match(/^(#{1,6})\s/)?.[1].length;
+	assert.ok(level, `Invalid documentation heading: ${heading}`);
+
+	const lines = text.split("\n");
+	const start = lines.findIndex((line) => line === heading);
 	assert.ok(start >= 0, `Missing documentation heading: ${heading}`);
-	const end = text.indexOf("\n## ", start + heading.length);
-	return text.slice(start, end < 0 ? undefined : end);
+
+	const nextHeading = /^ {0,3}(#{1,6})(?:\s|$)/;
+	const end = lines.findIndex((line, index) => {
+		if (index <= start) return false;
+		const match = line.match(nextHeading);
+		return match !== null && match[1].length <= level;
+	});
+	return lines.slice(start, end < 0 ? undefined : end).join("\n");
 }
 
 test("enterprise label recovery: route and confirmed absence", () => {
@@ -387,6 +397,7 @@ test("enterprise label recovery: origin identity and access gate lookup", () => 
 	assert.match(branch, /Before lookup[^.]*confirm repository access/i, "Repository access must be confirmed before label lookup");
 	assert.match(branch, /do not perform the label lookup/i, "Unverified origin/access must stop the label lookup");
 	assert.match(branch, /do not offer a label write/i, "Unverified origin/access must stop any write offer");
+	assert.doesNotMatch(branch, /If the exact GET returns 200/i, "Origin verification must exclude the sibling lookup-outcomes branch");
 });
 
 test("enterprise label recovery: inconclusive exact lookup stops creation", () => {
@@ -400,6 +411,7 @@ test("enterprise label recovery: inconclusive exact lookup stops creation", () =
 	assert.match(outcomes, /inconclusive/i, "Lookup failure must be classified as inconclusive");
 	assert.match(outcomes, /Do not offer or perform label creation/i, "Inconclusive lookup must stop creation offers");
 	assert.match(outcomes, /report[^.]*lookup failure/i, "Inconclusive lookup failure must be reported");
+	assert.doesNotMatch(outcomes, /Only after the exact lookup confirms absence/i, "Lookup outcomes must exclude the sibling approval-and-creation branch");
 });
 
 test("enterprise label recovery: explicit approval precedes exact label creation", () => {
