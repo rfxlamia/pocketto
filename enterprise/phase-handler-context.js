@@ -93,8 +93,9 @@ function resolveLifecyclePath(root, registeredRoot, value, label) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new PhaseHandlerError('PHASE_LIFECYCLE_PATH_REQUIRED', `Lifecycle metadata does not contain ${label}.`);
   }
-  const resolved = path.isAbsolute(value) ? path.resolve(value) : path.resolve(registeredRoot, value);
-  if (!isInside(registeredRoot, resolved) && !isInside(root, resolved)) {
+  const absoluteValue = path.isAbsolute(value);
+  const resolved = absoluteValue ? path.resolve(value) : path.resolve(registeredRoot, value);
+  if (!absoluteValue && !isInside(registeredRoot, resolved) && !isInside(root, resolved)) {
     throw invalidLifecyclePath(label);
   }
 

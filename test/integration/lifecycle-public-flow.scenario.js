@@ -53,7 +53,7 @@ function deliverInitialEvents(fixture) {
   assert.deepEqual(data.deliveries.map(({ event_id, revision, status }) => ({ event_id, revision, status })), [
     { event_id: `${PLAN_ID}:spec-approved:r1`, revision: 1, status: 'succeeded' },
     { event_id: `${PLAN_ID}:phase-complete:r2`, revision: 2, status: 'succeeded' },
-  ], 'Core must deliver the public-emitter events in revision order through the registered Enterprise executable');
+  ], `Core must deliver the public-emitter events in revision order through the registered Enterprise executable: ${JSON.stringify(data.deliveries)}`);
 }
 
 function emitClosureEvent(fixture) {

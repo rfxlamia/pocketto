@@ -848,3 +848,61 @@ test('install invalid phase flag: --phase-branches maybe and --push-consent othe
   assert.equal(badConsent.json.error.code, 'ENTERPRISE_INSTALL_FAILED');
   assert.equal(pocketDirListing(root), null, 'no .pocket directory may be written for an invalid push consent');
 });
+
+test('default install repairs a committed legacy registration with machine-specific paths', () => {
+  const root = makeTempRoot();
+  const legacyArgv = [process.execPath, path.resolve(__dirname, '../enterprise/dispatch.js'), root];
+  const legacy = registration.installRegistration(root, { argv: legacyArgv });
+  assert.equal(legacy.ok, true);
+  assert.deepEqual(readRegistrationRecord(root).argv, legacyArgv);
+
+  const reinstalled = runCli(['install', root, '--json']);
+  assert.equal(reinstalled.exit, 0, `reinstall should replace the bundled default: ${reinstalled.stdout}`);
+  assert.deepEqual(readRegistrationRecord(root).argv, ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js']);
+});
+
+test('preflight accepts portable runtime tokens and still rejects a missing explicit executable path', () => {
+  const root = makeTempRoot();
+  const portable = registration.installRegistration(root, { argv: ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js'] });
+  assert.equal(portable.ok, true);
+  assert.equal(registration.preflight(root).ok, true, 'portable token registration must pass preflight');
+
+  const missingPath = path.join(root, 'missing-explicit-runner.js');
+  const missing = registration.installRegistration(root, { argv: [missingPath] });
+  assert.equal(missing.ok, true);
+  const checked = registration.preflight(root);
+  assert.equal(checked.ok, false);
+  assert.equal(checked.code, 'ENTERPRISE_ADAPTER_UNAVAILABLE');
+});
+
+test('Core expands only the bundled runtime argv and leaves custom token-like arguments unchanged', () => {
+  const { resolveAdapterArgv } = require('../cli/lib/lifecycle-adapter');
+  const installRoot = path.resolve(os.tmpdir(), 'pocketto-runtime-install');
+  const nodeExecutable = path.join(installRoot, 'node');
+  const defaultArgv = ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js'];
+
+  assert.deepEqual(resolveAdapterArgv(defaultArgv, { installRoot, nodeExecutable }), [
+    nodeExecutable,
+    path.join(installRoot, 'enterprise', 'dispatch.js'),
+  ]);
+
+  for (const customArgv of [
+    ['custom-runner', '@pocketto-install-root/config.json'],
+    ['@pocketto-node', '@pocketto-install-root/custom.js'],
+    ['@pocketto-node', '@pocketto-install-root/../../outside.js'],
+  ]) {
+    assert.deepEqual(resolveAdapterArgv(customArgv, { installRoot, nodeExecutable }), customArgv);
+  }
+  assert.equal(resolveAdapterArgv([
+    '@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/../../outside.js',
+  ], { installRoot, nodeExecutable }), null, 'reserved runtime descriptor must reject install-root traversal');
+
+  const root = makeTempRoot();
+  const malicious = registration.installRegistration(root, {
+    argv: ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/../../outside.js'],
+  });
+  assert.equal(malicious.ok, true);
+  const checked = require('../cli/lib/lifecycle-adapter-compatibility').preflightAdapter(root);
+  assert.equal(checked.error.code, 'ADAPTER_MAJOR_UNVERIFIED',
+    'unrecognized runtime-token shapes must fail closed before invoking an adapter');
+});

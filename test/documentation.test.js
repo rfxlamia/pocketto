@@ -263,6 +263,24 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 	assertEnterpriseOnboardingCliContract(
 		documentation["skills/pocket-enterprise/references/onboarding.md"],
 	);
+	for (const rel of [
+		"skills/pocket-enterprise/references/onboarding.md",
+		"skills/pocket-enterprise/references/lifecycle-contract.md",
+	]) {
+		const text = documentation[rel];
+		for (const [pattern, label] of [
+			[/lifecycle-adapter\.json/, "registration path"],
+			[/@pocketto-runtime-argv-v1/, "runtime argv descriptor"],
+			[/@pocketto-node/, "Node runtime token"],
+			[/@pocketto-install-root/, "installation-root runtime token"],
+			[/installation root/i, "shared installation root"],
+			[/reserved/i, "reserved-token policy"],
+			[/commit/i, "commit policy"],
+			[/reinstall/i, "migration guidance"],
+		]) {
+			assert.match(text, pattern, `${rel} must document the portable registration contract: missing ${label}`);
+		}
+	}
 	assertCompatibilityMatrix(readme);
 	assertMigrationPolicy(allDocs);
 	assertRollbackGuidance(allDocs, documentation);

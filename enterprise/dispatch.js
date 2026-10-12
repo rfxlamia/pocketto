@@ -57,25 +57,27 @@ function readEventFile(eventFile) {
   }
 }
 
-function parseInvocation(argv) {
+function parseInvocation(argv, runtimeRoot = process.cwd()) {
   const args = Array.isArray(argv) ? argv : [];
-  const projectRoot = args[0];
-  const eventFile = args[1];
+  const legacyInvocation = args.length === 5;
+  const projectRoot = legacyInvocation ? args[0] : runtimeRoot;
+  const eventFile = legacyInvocation ? args[1] : args[0];
+  const flagOffset = legacyInvocation ? 2 : 1;
   const event = typeof eventFile === 'string' && path.isAbsolute(eventFile)
     ? readEventFile(eventFile)
     : null;
   const eventId = eventIdOf(event);
 
-  if (args.length !== 5
+  if ((args.length !== 4 && !legacyInvocation)
       || typeof projectRoot !== 'string'
       || !path.isAbsolute(projectRoot)
       || typeof eventFile !== 'string'
       || !path.isAbsolute(eventFile)
-      || args[2] !== '--json'
-      || args[3] !== '--contract'
-      || args[4] !== '3') {
+      || args[flagOffset] !== '--json'
+      || args[flagOffset + 1] !== '--contract'
+      || args[flagOffset + 2] !== '3') {
     return { event, eventId, error: makeFailure(eventId, 'ADAPTER_ARGUMENTS_INVALID',
-      'Expected <project-root> <event-file> --json --contract 3; no handler or GitHub call ran.') };
+      'Expected <event-file> --json --contract 3 from an absolute working directory, or legacy <project-root> <event-file> --json --contract 3; no handler or GitHub call ran.') };
   }
   if (event === null) {
     return { event: null, eventId, error: makeFailure(eventId, 'ADAPTER_EVENT_FILE_INVALID',

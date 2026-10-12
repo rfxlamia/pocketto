@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { readAdapterRegistration } = require('./lifecycle-adapter');
+const { readAdapterRegistration, resolveAdapterArgv } = require('./lifecycle-adapter');
 const { protocolFailure } = require('./lifecycle-retry');
 const { CLI_VERSION, SURFACE_MANIFEST } = require('./version');
 
@@ -60,15 +60,15 @@ function adapterMajorForEntrypoint(entrypointPath) {
     && packageMajor === surface.release.major ? packageMajor : null;
 }
 
-function installedAdapterMajor(projectRoot, registration) {
-  const argv = registration && Array.isArray(registration.argv) ? registration.argv : [];
-  const executablePath = resolveEntrypointPath(projectRoot, argv[0]);
+function installedAdapterMajor(projectRoot, argv) {
+  const entries = Array.isArray(argv) ? argv : [];
+  const executablePath = resolveEntrypointPath(projectRoot, entries[0]);
   if (!executablePath) return null;
   let entrypointPath = executablePath;
   try {
     fs.accessSync(executablePath, fs.constants.X_OK);
     if (executablePath === fs.realpathSync(process.execPath)) {
-      entrypointPath = resolveEntrypointPath(projectRoot, argv[1], true);
+      entrypointPath = resolveEntrypointPath(projectRoot, entries[1], true);
     }
   } catch {
     return null;
@@ -81,7 +81,8 @@ function preflightAdapter(projectRoot) {
   if (loaded.error || !loaded.registration) return loaded;
 
   const coreMajor = installedCoreMajor();
-  const adapterMajor = installedAdapterMajor(projectRoot, loaded.registration);
+  const runtimeArgv = resolveAdapterArgv(loaded.registration.argv);
+  const adapterMajor = runtimeArgv ? installedAdapterMajor(projectRoot, runtimeArgv) : null;
   if (!Number.isInteger(coreMajor) || !Number.isInteger(adapterMajor)) {
     return {
       registration: null,
@@ -112,7 +113,7 @@ function preflightAdapter(projectRoot) {
       ),
     };
   }
-  return loaded;
+  return { ...loaded, runtimeArgv };
 }
 
 module.exports = { preflightAdapter };

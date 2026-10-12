@@ -9,6 +9,10 @@ const { protocolFailure } = require('./lifecycle-retry');
 const { ADAPTER_CONTRACT } = require('./version');
 
 const REGISTRATION_PATH = path.join('.pocket', 'lifecycle-adapter.json');
+const RUNTIME_ARGV_TOKEN = '@pocketto-runtime-argv-v1';
+const NODE_EXECUTABLE_TOKEN = '@pocketto-node';
+const INSTALL_ROOT_TOKEN = '@pocketto-install-root';
+const CORE_INSTALL_ROOT = path.resolve(__dirname, '..', '..');
 // Enterprise install accepts the same ceiling (registration-record.js).
 // A lower Core bound rejects a legal install as ADAPTER_REGISTRATION_INVALID.
 const MAX_ADAPTER_TIMEOUT_MS = 600_000;
@@ -24,6 +28,38 @@ function resolveProjectRoot(startDir) {
     if (dir === filesystemRoot) return path.resolve(startDir);
     dir = path.dirname(dir);
   }
+}
+
+function resolveAdapterArgv(argv, {
+  installRoot = CORE_INSTALL_ROOT,
+  nodeExecutable = process.execPath,
+} = {}) {
+  if (!Array.isArray(argv)) return null;
+  if (argv[0] !== RUNTIME_ARGV_TOKEN) return argv.slice();
+
+  const root = path.resolve(installRoot);
+  const rootPrefix = `${INSTALL_ROOT_TOKEN}/`;
+  const resolved = [];
+  for (const entry of argv.slice(1)) {
+    if (entry === NODE_EXECUTABLE_TOKEN) {
+      resolved.push(nodeExecutable);
+      continue;
+    }
+    if (entry === INSTALL_ROOT_TOKEN) {
+      resolved.push(root);
+      continue;
+    }
+    if (entry.startsWith(rootPrefix)) {
+      const suffix = entry.slice(rootPrefix.length).split('/').join(path.sep);
+      const absolute = path.resolve(root, suffix);
+      const relative = path.relative(root, absolute);
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+      resolved.push(absolute);
+      continue;
+    }
+    resolved.push(entry);
+  }
+  return resolved;
 }
 
 function readAdapterRegistration(projectDir) {
@@ -85,7 +121,11 @@ function invocationFailure(error) {
   );
 }
 
-function invokeAdapter(event, registration, projectRoot) {
+function invokeAdapter(event, registration, projectRoot, runtimeArgv) {
+  const executableArgv = runtimeArgv || resolveAdapterArgv(registration.argv);
+  if (!Array.isArray(executableArgv) || executableArgv.length === 0) {
+    throw protocolFailure('ADAPTER_REGISTRATION_INVALID', 'registered lifecycle adapter argv could not be resolved');
+  }
   const eventDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pocketto-lifecycle-event-'));
   const eventPath = path.join(eventDir, 'event.json');
   const cwd = typeof projectRoot === 'string' && projectRoot.length > 0
@@ -94,13 +134,13 @@ function invokeAdapter(event, registration, projectRoot) {
   try {
     fs.writeFileSync(eventPath, `${JSON.stringify(event)}\n`, { mode: 0o600 });
     const args = [
-      ...registration.argv.slice(1),
+      ...executableArgv.slice(1),
       eventPath,
       '--json',
       '--contract',
       '3',
     ];
-    const result = spawnSync(registration.argv[0], args, {
+    const result = spawnSync(executableArgv[0], args, {
       cwd,
       encoding: 'utf8',
       timeout: registration.timeout_ms,
@@ -143,9 +183,13 @@ function registrationFallbackWarning(code) {
 }
 
 module.exports = {
+  RUNTIME_ARGV_TOKEN,
+  INSTALL_ROOT_TOKEN,
+  NODE_EXECUTABLE_TOKEN,
   MAX_ADAPTER_TIMEOUT_MS,
   PHASE_BRANCH_MODES,
   REGISTRATION_PATH,
+  resolveAdapterArgv,
   invokeAdapter,
   readAdapterRegistration,
   readRegisteredPhaseBranches,

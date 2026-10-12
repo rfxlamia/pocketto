@@ -122,7 +122,7 @@ function attemptDelivery(specDir, event, adapter, projectRoot) {
   }
   if (!failure) {
     try {
-      response = invokeAdapter(attempted.event, adapter.registration, projectRoot);
+      response = invokeAdapter(attempted.event, adapter.registration, projectRoot, adapter.runtimeArgv);
     } catch (err) {
       failure = err && typeof err.code === 'string'
         ? protocolFailure(err.code, 'registered lifecycle adapter failed protocol validation', err.retryable !== false)
