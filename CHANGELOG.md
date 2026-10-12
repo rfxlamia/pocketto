@@ -2,6 +2,10 @@
 
 All notable changes to Pocketto are documented here, newest first. Dates are the tag's commit date.
 
+## Unreleased
+
+**Enterprise registration migration (issue #74).** Runtime-token registrations require a Core build that exports `resolveAdapterArgv`; the `v4.2.0` tag predates this capability. Upgrade Core before consuming token-based registrations. The minimum semantic release will be stated when a release containing this capability is cut. Legacy absolute-path registrations remain usable but Enterprise preflight reports `ADAPTER_REGISTRATION_NOT_PORTABLE` and recommends reinstalling.
+
 ## 4.2.0 — 2026-10-12
 
 **Breaking (Enterprise).** Adapter contract 2 makes every existing Enterprise registration incompatible until the adapter is reinstalled. This release stays on 4.x because `CONTRACT` is unchanged; see the reinstall notes below.

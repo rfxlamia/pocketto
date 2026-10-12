@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const CLI = path.resolve(__dirname, '../enterprise/cli.js');
 const registration = require('../enterprise/registration');
@@ -90,6 +90,74 @@ test('CYCLE 1: preflight passes on compatible Core plus valid registration', () 
   const viaCli = runCli(['preflight', root, '--json']);
   assert.equal(viaCli.exit, 0, `cli preflight should succeed: ${viaCli.stdout}`);
   assert.equal(viaCli.json.ok, true);
+});
+
+test('preflight rejects token registrations when Core has no runtime argv resolver', () => {
+  const root = makeTempRoot();
+  const installed = registration.installRegistration(root, {
+    argv: ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js'],
+  });
+  assert.equal(installed.ok, true);
+
+  const checked = registration.preflight(root, { resolveAdapterArgv: null });
+  assert.equal(checked.ok, false);
+  assert.equal(checked.code, 'ADAPTER_REGISTRATION_REQUIRES_NEWER_CORE');
+});
+
+test('preflight warns on legacy absolute argv without blocking registration', () => {
+  const root = makeTempRoot();
+  const dummy = makeDummyExecutable(root);
+  const installed = registration.installRegistration(root, { argv: [dummy] });
+  assert.equal(installed.ok, true);
+
+  const checked = registration.preflight(root);
+  assert.equal(checked.ok, true, 'legacy absolute argv remains usable');
+  assert.ok(checked.warnings.some((warning) => warning.code === 'ADAPTER_REGISTRATION_NOT_PORTABLE'));
+  assert.match(checked.warnings.find((warning) => warning.code === 'ADAPTER_REGISTRATION_NOT_PORTABLE').message, /enterprise install/i);
+  const checkedWithoutResolver = registration.preflight(root, { resolveAdapterArgv: null });
+  assert.equal(checkedWithoutResolver.ok, true, 'legacy registrations remain compatible with Core builds without token support');
+
+  const viaCli = runCli(['preflight', root, '--json']);
+  assert.equal(viaCli.exit, 0, `non-portable registration warning must not fail CLI preflight: ${viaCli.stdout}`);
+  assert.equal(viaCli.json.ok, true);
+  assert.ok(viaCli.json.data.warnings.some((warning) => warning.code === 'ADAPTER_REGISTRATION_NOT_PORTABLE'));
+
+  const human = spawnSync(process.execPath, [CLI, 'preflight', root], { encoding: 'utf8' });
+  assert.equal(human.status, 0, `human preflight warning must not set a failure exit code: ${human.stdout}${human.stderr}`);
+  assert.match(human.stderr, /ADAPTER_REGISTRATION_NOT_PORTABLE/);
+});
+
+test('preflight checks the dispatcher resolved from a token registration', () => {
+  const root = makeTempRoot();
+  const installed = registration.installRegistration(root, {
+    argv: ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js'],
+  });
+  assert.equal(installed.ok, true);
+  const missingDispatcher = path.join(root, 'missing-dispatch.js');
+
+  const checked = registration.preflight(root, {
+    resolveAdapterArgv: () => [process.execPath, missingDispatcher],
+  });
+  assert.equal(checked.ok, false);
+  assert.equal(checked.code, 'ENTERPRISE_ADAPTER_UNAVAILABLE');
+
+  const missingNode = path.join(root, 'missing-node');
+  const existingDispatcher = path.resolve(__dirname, '../enterprise/dispatch.js');
+  const recordPath = path.join(root, '.pocket', 'lifecycle-adapter.json');
+  const registrationBefore = fs.readFileSync(recordPath);
+  const missingExecutable = registration.preflight(root, {
+    resolveAdapterArgv: () => [missingNode, existingDispatcher],
+  });
+  assert.equal(missingExecutable.ok, false, 'preflight must check the executable as well as the dispatcher');
+  assert.equal(missingExecutable.code, 'ENTERPRISE_ADAPTER_UNAVAILABLE');
+  assert.deepEqual(fs.readFileSync(recordPath), registrationBefore, 'preflight must not rewrite registration');
+
+  for (const resolver of [() => null, () => { throw new Error('resolver failed'); }]) {
+    const unresolved = registration.preflight(root, { resolveAdapterArgv: resolver });
+    assert.equal(unresolved.ok, false);
+    assert.equal(unresolved.code, 'ENTERPRISE_ADAPTER_UNAVAILABLE');
+    assert.deepEqual(fs.readFileSync(recordPath), registrationBefore, 'resolver failure must not mutate registration');
+  }
 });
 
 test('CYCLE 1: preflight fails closed on missing registration with zero GitHub calls', () => {
@@ -229,7 +297,7 @@ test('preflight ignored warnings: an ignored docs/pocket emits POCKET_ARTIFACTS_
   assert.match(warning.fix, /\.gitignore/);
 });
 
-test('preflight ignored warnings: tracked artifacts emit no warning and keep the legacy warning unchanged', () => {
+test('preflight ignored warnings: tracked artifacts avoid artifact warnings but retain legacy registration warnings', () => {
   const root = fs.realpathSync(makeTempRoot());
   const dummy = makeDummyExecutable(root);
   assert.equal(runCli(['install', root, '--argv', dummy, '--json']).exit, 0);
@@ -240,8 +308,10 @@ test('preflight ignored warnings: tracked artifacts emit no warning and keep the
 
   const res = runCli(['preflight', root, '--json']);
   assert.equal(res.exit, 0, `preflight must pass: ${res.stdout}`);
-  assert.ok(!res.json.data.warnings || res.json.data.warnings.length === 0, JSON.stringify(res.json.data));
-  assert.equal(res.json.data.warning, undefined, 'no legacy warning on a compatible install');
+  const warnings = res.json.data.warnings || [];
+  assert.ok(!warnings.some((warning) => warning.code === 'POCKET_ARTIFACTS_IGNORED'), JSON.stringify(res.json.data));
+  assert.ok(warnings.some((warning) => warning.code === 'ADAPTER_REGISTRATION_NOT_PORTABLE'), JSON.stringify(res.json.data));
+  assert.equal(res.json.data.warning, undefined, 'no legacy release-pair warning on a compatible install');
 });
 
 const adapter = require('../enterprise/adapter');

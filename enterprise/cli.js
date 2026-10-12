@@ -137,7 +137,10 @@ function runPreflight(rest) {
   } else {
     console.log(`Enterprise preflight passed: ${res.path}`);
     if (res.warning) console.warn(`${res.warning.code}: ${res.warning.message}`);
-    for (const warning of res.warnings || []) console.warn(formatIgnoredWarning(warning));
+    for (const warning of res.warnings || []) {
+      if (warning.code === 'POCKET_ARTIFACTS_IGNORED') console.warn(formatIgnoredWarning(warning));
+      else console.warn(`${warning.code}: ${warning.message}`);
+    }
   }
 }
 

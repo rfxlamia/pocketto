@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const registration = require('./registration-record');
 const versions = require('./registration-version');
+const coreLifecycleAdapter = require('../cli/lib/lifecycle-adapter');
 const { pocketArtifactProbePaths, ignoredArtifactWarning } = require('../cli/lib/artifact-ignore');
 
 // Preflight has no plan in scope, so it probes every plan that has a spec directory
@@ -51,11 +52,46 @@ function readEnterpriseInfo(getEnterpriseInfo) {
   }
 }
 
-function checkRegisteredExecutable(projectRoot, record, exists) {
-  const argv0 = record.argv[0];
-  if (argv0.includes('/') || argv0.includes(path.sep) || argv0.endsWith('.js')) {
-    let resolved = argv0;
-    if (!path.isAbsolute(resolved)) resolved = path.resolve(projectRoot, resolved);
+function isRuntimeArgv(record) {
+  return record.argv[0] === '@pocketto-runtime-argv-v1';
+}
+
+function checkRegisteredExecutable(projectRoot, record, exists, resolveAdapterArgv) {
+  const runtimeRegistration = isRuntimeArgv(record);
+  if (runtimeRegistration && typeof resolveAdapterArgv !== 'function') {
+    return registration.fail(
+      'ADAPTER_REGISTRATION_REQUIRES_NEWER_CORE',
+      'This runtime-token adapter registration requires a Core release with runtime argv resolution. Upgrade Core before running lifecycle drain; the event stays pending and no GitHub calls were made.'
+    );
+  }
+
+  let argv;
+  try {
+    argv = typeof resolveAdapterArgv === 'function'
+      ? resolveAdapterArgv(record.argv)
+      : record.argv;
+  } catch {
+    argv = null;
+  }
+  if (!Array.isArray(argv) || argv.length === 0) {
+    return registration.fail(
+      'ENTERPRISE_ADAPTER_UNAVAILABLE',
+      'Registered adapter argv could not be resolved. Re-run enterprise install with a compatible Core; the event stays pending and no GitHub calls were made.'
+    );
+  }
+
+  const executable = argv[0];
+  const possibleEntrypoint = executable === process.execPath
+    && typeof argv[1] === 'string'
+    && !argv[1].startsWith('-')
+    ? argv[1]
+    : null;
+  const pathsToCheck = [executable, possibleEntrypoint].filter((candidate) => (
+    typeof candidate === 'string'
+    && (path.isAbsolute(candidate) || candidate.includes('/') || candidate.includes(path.sep) || candidate.endsWith('.js'))
+  ));
+  for (const candidate of pathsToCheck) {
+    const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(projectRoot, candidate);
     let present = false;
     try {
       present = exists(resolved);
@@ -65,11 +101,19 @@ function checkRegisteredExecutable(projectRoot, record, exists) {
     if (!present) {
       return registration.fail(
         'ENTERPRISE_ADAPTER_UNAVAILABLE',
-        `Registered adapter executable is missing: ${argv0}. Re-run enterprise install; the event stays pending and no GitHub calls were made.`
+        `Registered adapter executable or entrypoint is missing: ${candidate}. Re-run enterprise install; the event stays pending and no GitHub calls were made.`
       );
     }
   }
   return { ok: true };
+}
+
+function registrationWarnings(record) {
+  if (isRuntimeArgv(record) || !record.argv.some((entry) => path.isAbsolute(entry))) return [];
+  return [{
+    code: 'ADAPTER_REGISTRATION_NOT_PORTABLE',
+    message: 'Registered adapter argv contains absolute paths and may not work on another machine. Re-run enterprise install with the matching Core to write portable runtime tokens.',
+  }];
 }
 
 function preflightResult(core, loaded, legacyV3Pair, warnings) {
@@ -108,9 +152,16 @@ function preflight(projectRoot, deps = {}) {
   if (!protocol.ok) return protocol;
   const loaded = registration.loadRegistration(projectRoot, deps);
   if (!loaded.ok) return loaded;
-  const executable = checkRegisteredExecutable(projectRoot, loaded.record, exists);
+  const resolver = Object.prototype.hasOwnProperty.call(deps, 'resolveAdapterArgv')
+    ? deps.resolveAdapterArgv
+    : coreLifecycleAdapter.resolveAdapterArgv;
+  const executable = checkRegisteredExecutable(projectRoot, loaded.record, exists, resolver);
   if (!executable.ok) return executable;
-  return preflightResult(core, loaded, compatiblePair.legacyV3Pair, ignoredArtifactWarnings(projectRoot));
+  const warnings = [
+    ...ignoredArtifactWarnings(projectRoot),
+    ...registrationWarnings(loaded.record),
+  ];
+  return preflightResult(core, loaded, compatiblePair.legacyV3Pair, warnings);
 }
 
 module.exports = { preflight };
