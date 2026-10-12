@@ -99,7 +99,7 @@ test("enterprise label recovery: issue #70 is discoverable from README and chang
 
 	assert.match(readme, /\[#70\]\(https:\/\/github\.com\/rfxlamia\/pocketto\/issues\/70\)/, "README troubleshooting must link issue #70");
 	assert.match(readme, /\[missing-label consent recovery procedure\]\(skills\/pocket-enterprise\/references\/issue-reconciliation\.md#missing-label-consent-recovery\)/, "README troubleshooting must link the recovery procedure");
-	assert.match(changelog, /issue #70[\s\S]*\[the procedure\]\(skills\/pocket-enterprise\/references\/issue-reconciliation\.md#missing-label-consent-recovery\)/i, "Changelog must link issue #70 to the recovery procedure");
+	assert.match(changelog, /\[issue #70\]\(https:\/\/github\.com\/rfxlamia\/pocketto\/issues\/70\)[\s\S]*\[the procedure\]\(skills\/pocket-enterprise\/references\/issue-reconciliation\.md#missing-label-consent-recovery\)/i, "Changelog must link issue #70 and the recovery procedure");
 	assert.match(changelog, /not a runtime fix or a claim that #70 is closed/i, "Changelog must not claim issue #70 is fixed or closed");
 });
 

@@ -29,7 +29,7 @@ Keep the full approved spec available as issue context using the existing format
 
 ## Missing-label consent recovery
 
-For a failed `spec-approved` delivery that reports `GH_UNKNOWN`, do not infer that the `pocket-plan` label is missing or that it caused the failure from that generic result alone. `GH_UNKNOWN` alone is not evidence of label absence. Before considering recovery, verify the current origin host and repository and confirm access to that repository. Diagnose only with this exact read-only GET, using the owner and repository from the verified origin:
+For a failed `spec-approved` delivery that reports `GH_UNKNOWN`, do not infer that the `pocket-plan` label is missing or that it caused the failure from that generic result alone. `GH_UNKNOWN` alone is not evidence of label absence. Before considering recovery, verify the current origin host and repository and confirm access to that repository. Diagnose only with an exact read-only GET, using this endpoint and the owner and repository from the verified origin:
 
 ```bash
 gh api repos/<owner>/<repo>/labels/pocket-plan
@@ -67,7 +67,7 @@ If the user declines, stop without a label write or lifecycle retry. If the appr
 
 ### Eligible retry
 
-After successful label creation, resume only the same original event if it is active and retryable, its retry is due, and it remains below six total attempts (one initial attempt plus at most five retries). Drain that original event; do not emit a new event or run `gh issue create` directly. This is a documented procedure, not a runtime guarantee that event identity is independently checked here.
+After successful label creation or successful one-time verification that the label already exists, resume only the same original event if it is active and retryable, its retry is due, and it remains below six total attempts (one initial attempt plus at most five retries). Drain that original event; do not emit a new event or run `gh issue create` directly. This is a documented procedure, not a runtime guarantee that event identity is independently checked here.
 
 ### Pending backoff
 

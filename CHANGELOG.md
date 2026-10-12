@@ -20,7 +20,7 @@ All notable changes to Pocketto are documented here, newest first. Dates are the
 
 **Behavior change (stacked plans only).** For stacked plans, phase PR lookup now requires the head to live in this repository (`isCrossRepository === false`). Non-stacked plans are unchanged: a fork-headed PR is still accepted.
 
-**Documentation (issue #70).** Clarifies the consent-based recovery steps for a missing `pocket-plan` label after `GH_UNKNOWN`; see [the procedure](skills/pocket-enterprise/references/issue-reconciliation.md#missing-label-consent-recovery). This is guidance, not a runtime fix or a claim that #70 is closed.
+**Documentation.** Clarifies the consent-based recovery steps for a missing `pocket-plan` label after `GH_UNKNOWN`; see [issue #70](https://github.com/rfxlamia/pocketto/issues/70) and [the procedure](skills/pocket-enterprise/references/issue-reconciliation.md#missing-label-consent-recovery). This is guidance, not a runtime fix or a claim that #70 is closed.
 
 ## 4.1.0 — 2026-10-09
 
