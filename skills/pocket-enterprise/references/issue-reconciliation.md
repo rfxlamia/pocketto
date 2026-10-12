@@ -4,7 +4,7 @@ This reference owns issue lookup, creation, and proof for the Enterprise `spec-a
 
 ## Preflight and target resolution
 
-Run the Enterprise preflight before any issue operation. It must confirm a compatible v4 Core installation, lifecycle schema `1`, and registered adapter contract `1`; missing or mismatched components fail closed with no GitHub call. GitHub authentication is checked by the Enterprise adapter, never by Core.
+Run the Enterprise preflight before any issue operation. It must confirm a compatible v4 Core installation, lifecycle schema `2`, and registered adapter contract `2`; missing or mismatched components fail closed with no GitHub call. GitHub authentication is checked by the Enterprise adapter, never by Core.
 
 Use the current repository's `origin` and normalized `plan_id` from the event. Read `github_issue.number` and `github_issue.url` from Enterprise-owned `.pocket-meta.json` first when available. A metadata target is reusable only when it belongs to the current `origin`, is open, and is tied to the exact plan identity in its title or embedded full-spec path.
 

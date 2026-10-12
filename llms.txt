@@ -1,6 +1,6 @@
 # Pocketto
 
-> Pocketto `4.1.0` provides local-first AI coding workflows for Claude Code and Pi. Core is useful without GitHub or Enterprise; the optional Enterprise adapter consumes durable neutral lifecycle events and owns all remote reconciliation. An opt-in Pocket Education mode turns the agent into a repository-aware mentor — the human implements, the agent teaches and reviews. The 15 skills include a 6-stage pipeline and 9 standalone skills.
+> Pocketto `4.2.0` provides local-first AI coding workflows for Claude Code and Pi. Core is useful without GitHub or Enterprise; the optional Enterprise adapter consumes durable neutral lifecycle events and owns all remote reconciliation. An opt-in Pocket Education mode turns the agent into a repository-aware mentor — the human implements, the agent teaches and reviews. The 15 skills include a 6-stage pipeline and 9 standalone skills.
 
 ## Release surfaces
 
@@ -11,7 +11,7 @@ The schema-1 `surfaces.json` manifest defines exactly four roles:
 - `claude/core` — local-first Core workflows for Claude Code, including Education.
 - `claude/enterprise` — additive Enterprise adapter for Claude Code; requires `claude/core`.
 
-Protocol versions are independent: `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1`.
+Protocol versions are independent: `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=2`, `ADAPTER_CONTRACT=2`, and `SURFACE_MANIFEST=1`.
 
 Core commits state and events locally. Core does not call `gh`, does not create GitHub resources, does not reconcile GitHub resources, does not merge pull requests, and does not close issues. Enterprise is explicit, optional, and fail-closed before remote operations. It does not auto-create a PR; `create-pr` is an explicit user-triggered recorder. Merge and issue closure remain human-controlled.
 

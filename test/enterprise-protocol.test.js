@@ -50,7 +50,7 @@ function pocketDirListing(root) {
   return fs.readdirSync(dir).sort();
 }
 
-test('CYCLE 1: install atomically writes registration with schema 1, adapter contract 1, argv, allowlist, timeout', () => {
+test('CYCLE 1: install atomically writes registration with schema 1, adapter contract 2, argv, allowlist, timeout', () => {
   const root = makeTempRoot();
   const dummy = makeDummyExecutable(root);
   const res = runCli(['install', root, '--argv', dummy, '--json']);

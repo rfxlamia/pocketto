@@ -2,7 +2,15 @@
 
 All notable changes to Pocketto are documented here, newest first. Dates are the tag's commit date.
 
-## Unreleased
+## 4.2.0 — 2026-10-12
+
+**Protocol bumps.** Lifecycle schema is now `2` (maximum supported) and adapter contract is now `2`. `CONTRACT=3`, `PIPELINE=5`, and `SURFACE_MANIFEST=1` are unchanged. Lifecycle documents stay on schema `1` unless a stacked plan patch is applied, which writes schema `2`.
+
+**Lifecycle schema 2.** Adds the `phase-closed` event and `plan.phases` identity. The `phase-closed` event is emitted by `log handoff` on stacked plans only, and is committed at most once per phase.
+
+**Adapter contract 2 (Enterprise reinstall required).** Adapter responses may carry display-only `notices`. A registration written under adapter contract 1 is now incompatible and is rejected by Enterprise preflight with `ENTERPRISE_ADAPTER_CONTRACT_MISMATCH`, and lifecycle drains report `ADAPTER_CONTRACT_MISMATCH` and leave events pending without a remote call. After upgrading, reinstall the Enterprise adapter (`pocket-enterprise` onboarding) so the registration declares contract 2.
+
+**CLI additions.** `log handoff` commits the plan artifacts and moves to the next phase branch. `publish-phase` repairs a phase PR manually. Git-ignored artifacts now produce a warning. Command output includes `next_actions`.
 
 **Stacked phase PRs.** A child phase whose parent PR is already merged now reuses its open PR when that PR targets the base the parent merged into, instead of ending the lifecycle event. With no such PR the event is retryable (`parent PR merged`): open or retarget the child PR on GitHub, then rerun the drain. Pocket still never creates a PR on a merged parent, and never retargets or rebases. A fork PR that reuses a phase head name is ignored with a `FORK_PR_IGNORED` notice.
 

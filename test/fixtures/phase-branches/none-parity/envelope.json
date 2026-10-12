@@ -1,7 +1,7 @@
 {
   "ok": true,
   "command": "log init",
-  "cliVersion": "4.1.0",
+  "cliVersion": "4.2.0",
   "contract": 3,
   "data": {
     "planDir": "<PLAN_DIR>",
