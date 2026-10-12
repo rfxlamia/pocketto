@@ -20,6 +20,8 @@ All notable changes to Pocketto are documented here, newest first. Dates are the
 
 **Behavior change (stacked plans only).** For stacked plans, phase PR lookup now requires the head to live in this repository (`isCrossRepository === false`). Non-stacked plans are unchanged: a fork-headed PR is still accepted.
 
+**Documentation (issue #70).** Clarifies the consent-based recovery steps for a missing `pocket-plan` label after `GH_UNKNOWN`; see [the procedure](skills/pocket-enterprise/references/issue-reconciliation.md#missing-label-consent-recovery). This is guidance, not a runtime fix or a claim that #70 is closed.
+
 ## 4.1.0 — 2026-10-09
 
 **Fixed (issue #64, artifact lifecycle).** Event validation no longer masks nested artifact-ref errors: a bad `root`, escaping `path`, invalid `sha256`, or stale digest now surfaces its specific `LIFECYCLE_*` code instead of collapsing to `LIFECYCLE_BAD_ARTIFACT`. Artifact-ref canonicalization treats `path` as an exact code-point identity rather than normalizing it, so two references that differ only by Unicode normalization no longer hash the same.

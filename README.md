@@ -237,6 +237,10 @@ Replay only after the adapter is pinned to the last compatible v4 release or rei
 npx pocketto-pi lifecycle drain <spec_dir> --json --contract 3
 ```
 
+### Troubleshooting
+
+- `GH_UNKNOWN` when approving a spec? For issue [#70](https://github.com/rfxlamia/pocketto/issues/70), follow the [missing-label consent recovery procedure](skills/pocket-enterprise/references/issue-reconciliation.md#missing-label-consent-recovery); it documents a workaround, not a runtime fix.
+
 ## Pocket Education (opt-in)
 
 ```text

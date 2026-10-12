@@ -29,7 +29,13 @@ Keep the full approved spec available as issue context using the existing format
 
 ## Missing-label consent recovery
 
-For a failed `spec-approved` delivery that reports `GH_UNKNOWN`, do not infer that the `pocket-plan` label is missing or that it caused the failure from that generic result alone. `GH_UNKNOWN` alone is not evidence of label absence. Before considering recovery, verify the current origin host and repository and confirm access to that repository. Diagnose only with an exact read-only GET for the `pocket-plan` label; only a 404 in the verified, accessible origin confirms label absence.
+For a failed `spec-approved` delivery that reports `GH_UNKNOWN`, do not infer that the `pocket-plan` label is missing or that it caused the failure from that generic result alone. `GH_UNKNOWN` alone is not evidence of label absence. Before considering recovery, verify the current origin host and repository and confirm access to that repository. Diagnose only with this exact read-only GET, using the owner and repository from the verified origin:
+
+```bash
+gh api repos/<owner>/<repo>/labels/pocket-plan
+```
+
+Only a 404 confirms label absence if `gh repo view` has already succeeded for that exact same host and repository; a 404 without that successful access check is ambiguous and inconclusive.
 
 Describe confirmed label absence only as a missing prerequisite, not as the proven root cause of `GH_UNKNOWN`; the delivery may have another cause. Ask the user for explicit permission to create the label. Do not write the label or retry/drain the lifecycle event before consent.
 
@@ -41,7 +47,7 @@ Before lookup, run `git remote get-url origin` and verify that its host and repo
 
 If the exact GET returns 200, the label exists: do not offer or perform creation. Stop and report that the delivery failure needs another diagnosis.
 
-If the exact lookup returns 401/403, a server or transport error, or an ambiguous 404, the result is inconclusive. Do not offer or perform label creation; stop and report the lookup failure.
+If the exact lookup returns 401/403, a server or transport error, or an ambiguous 404 (one without a successful `gh repo view` for the exact same host and repository), the result is inconclusive. Do not offer or perform label creation; stop and report the lookup failure.
 
 ### Approval and creation
 
@@ -51,9 +57,13 @@ Only after the exact lookup confirms absence, the target remains unchanged, and 
 
 After permission and immediately before creation, recheck the origin host and repository identity. If either changes from the verified target used for lookup or consent, stop: do not write to the changed target under stale consent. Verify the new target and obtain fresh consent before any label write.
 
+### Create race recovery
+
+If the single approved create explicitly reports that the label already exists, repeat the exact GET above once against the same verified target. Do not infer this condition from a generic 422 or any other failure status alone. If that one lookup returns 200, treat the label prerequisite as satisfied and continue only with the eligible retry rules below. If it returns anything else, or the response does not explicitly say the label already exists, stop and report the result; do not repeat the lookup or create.
+
 ### Refusal or create failure
 
-If the user declines, stop without a label write or lifecycle retry. If the approved label creation fails or its result is ambiguous, stop and report it; do not repeat the create, drain the lifecycle event, or run `gh issue create` directly.
+If the user declines, stop without a label write or lifecycle retry. If the approved label creation fails for any reason other than an explicit “already exists” response, or its result is ambiguous, stop and report it; do not repeat the create, drain the lifecycle event, or run `gh issue create` directly.
 
 ### Eligible retry
 

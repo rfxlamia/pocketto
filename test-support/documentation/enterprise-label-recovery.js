@@ -85,11 +85,22 @@ test("enterprise label recovery: route and confirmed absence", () => {
 
 	assert.ok(skill.includes("[Missing-label consent recovery](references/issue-reconciliation.md#missing-label-consent-recovery)"), "Enterprise skill must route to the recovery procedure");
 	assert.match(section, /origin[\s\S]{0,120}access/i, "Recovery must verify origin and repository access");
-	assert.match(section, /exact read-only GET[\s\S]{0,120}404/i, "Recovery must require an exact-label 404");
+	assert.match(section, /exact read-only GET[\s\S]{0,240}404/i, "Recovery must require an exact-label 404");
+	assert.match(section, /gh api repos\/<owner>\/<repo>\/labels\/pocket-plan/, "Recovery must provide the exact label lookup command");
 	assert.match(section, /explicit permission to create/i, "Confirmed absence must be followed by an explicit ask");
 	assert.match(section, /only as a missing prerequisite, not as the proven root cause/i, "Absence must not be described as the proven cause");
 	assert.match(section, /Do not write the label[^.]*before consent/i, "No label write may precede consent");
 	assert.match(section, /Do not[^.]*retry\/drain[^.]*before consent/i, "No lifecycle retry may precede consent");
+});
+
+test("enterprise label recovery: issue #70 is discoverable from README and changelog", () => {
+	const readme = readFileSync(path.join(ROOT, "README.md"), "utf8");
+	const changelog = readFileSync(path.join(ROOT, "CHANGELOG.md"), "utf8");
+
+	assert.match(readme, /\[#70\]\(https:\/\/github\.com\/rfxlamia\/pocketto\/issues\/70\)/, "README troubleshooting must link issue #70");
+	assert.match(readme, /\[missing-label consent recovery procedure\]\(skills\/pocket-enterprise\/references\/issue-reconciliation\.md#missing-label-consent-recovery\)/, "README troubleshooting must link the recovery procedure");
+	assert.match(changelog, /issue #70[\s\S]*\[the procedure\]\(skills\/pocket-enterprise\/references\/issue-reconciliation\.md#missing-label-consent-recovery\)/i, "Changelog must link issue #70 to the recovery procedure");
+	assert.match(changelog, /not a runtime fix or a claim that #70 is closed/i, "Changelog must not claim issue #70 is fixed or closed");
 });
 
 test("enterprise label recovery: GH_UNKNOWN requires read-only diagnosis", () => {
@@ -132,6 +143,7 @@ test("enterprise label recovery: inconclusive exact lookup stops creation", () =
 	assert.match(outcomes, /401.{0,10}403/i, "401/403 lookup results must be handled as inconclusive");
 	assert.match(outcomes, /server or transport error/i, "Server and transport errors must be handled as inconclusive");
 	assert.match(outcomes, /ambiguous 404/i, "An ambiguous 404 must be handled as inconclusive");
+	assert.match(outcomes, /ambiguous 404[^.]*gh repo view[^.]*same host and repository/i, "An ambiguous 404 must lack successful access verification for the same host and repository");
 	assert.match(outcomes, /inconclusive/i, "Lookup failure must be classified as inconclusive");
 	assert.match(outcomes, /Do not offer or perform label creation/i, "Inconclusive lookup must stop creation offers");
 	assert.match(outcomes, /report[^.]*lookup failure/i, "Inconclusive lookup failure must be reported");
@@ -162,6 +174,19 @@ test("enterprise label recovery: target change invalidates prior consent", () =>
 	assert.match(branch, /after[^.]*permission[^.]*before[^.]*creation/i, "Identity must be checked after permission and before creation");
 	assert.match(branch, /if[^.]*changes[^.]*stop/i, "A changed target must stop the pending write");
 	assert.match(branch, /fresh[^.]*consent/i, "A changed target requires new consent");
+});
+
+test("enterprise label recovery: explicit already-exists response gets one verification lookup", () => {
+	const reconciliation = readFileSync(path.join(ROOT, "skills/pocket-enterprise/references/issue-reconciliation.md"), "utf8");
+	const recovery = documentationSection(reconciliation, "## Missing-label consent recovery");
+	const branch = documentationSection(recovery, "### Create race recovery");
+
+	assert.match(branch, /explicitly reports[^.]*already exists/i, "Only an explicit already-exists response enables the recovery lookup");
+	assert.match(branch, /not[^.]*422/i, "A generic 422 must not be treated as proof that the label exists");
+	assert.match(branch, /exact GET[^.]*once/i, "The race recovery must repeat the exact GET only once");
+	assert.match(branch, /same verified target/i, "The recovery lookup must stay on the verified repository");
+	assert.match(branch, /200[^.]*label[^.]*satisfied/i, "A verified 200 treats the label prerequisite as satisfied");
+	assert.match(branch, /anything else[^.]*stop/i, "Any unconfirmed result must stop recovery");
 });
 
 test("enterprise label recovery: refusal and failed create stop recovery", () => {
