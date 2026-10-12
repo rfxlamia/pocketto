@@ -119,11 +119,11 @@ function assertManifestRoles(readme) {
 
 function assertReleaseIdentifiers(releaseDocs) {
 	for (const [label, pattern] of [
-		["package version 4.1.0", /\b4\.1\.0\b/],
+		["package version 4.2.0", /\b4\.2\.0\b/],
 		["CLI CONTRACT=3", /\bCONTRACT\s*=\s*3\b/],
 		["PIPELINE=5", /\bPIPELINE\s*=\s*5\b/],
-		["LIFECYCLE_SCHEMA=1", /\bLIFECYCLE_SCHEMA\s*=\s*1\b/],
-		["ADAPTER_CONTRACT=1", /\bADAPTER_CONTRACT\s*=\s*1\b/],
+		["LIFECYCLE_SCHEMA=2", /\bLIFECYCLE_SCHEMA\s*=\s*2\b/],
+		["ADAPTER_CONTRACT=2", /\bADAPTER_CONTRACT\s*=\s*2\b/],
 		["SURFACE_MANIFEST=1", /\bSURFACE_MANIFEST\s*=\s*1\b/],
 	]) {
 		assert.match(releaseDocs, pattern, `Release documentation must identify ${label}`);

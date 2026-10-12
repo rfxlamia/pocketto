@@ -53,7 +53,7 @@ pi install npm:pocketto-pi
 
 ### Release surfaces
 
-Version `4.1.0` is built from the explicit `surfaces.json` manifest. It defines exactly four role names:
+Version `4.2.0` is built from the explicit `surfaces.json` manifest. It defines exactly four role names:
 
 | Role | Host | Contents |
 |------|------|----------|
@@ -62,7 +62,7 @@ Version `4.1.0` is built from the explicit `surfaces.json` manifest. It defines 
 | `claude/core` | Claude Code | Local-first Core workflows and neutral lifecycle CLI. |
 | `claude/enterprise` | Claude Code | Additive Enterprise adapter and references; requires `claude/core`. |
 
-Select the role artifact for the target host and install the matching Core role first. Release builds stage an explicit manifest role with `node scripts/build-surfaces.js --role <role> --output <artifact-dir>`. That directory contains only the selected role. An Enterprise stage is an overlay on the matching Core stage and does not include Core entry points such as `cli/index.js`. `pi install npm:pocketto-pi` publishes one package that contains both Core and Enterprise sources so either role can be staged from it; it is not itself a Core-only tree. Enterprise is optional and adds only its adapter-owned files; it does not bundle or copy Core skills. The manifest schema is `SURFACE_MANIFEST=1`. The independent protocol versions are `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, and `ADAPTER_CONTRACT=1`.
+Select the role artifact for the target host and install the matching Core role first. Release builds stage an explicit manifest role with `node scripts/build-surfaces.js --role <role> --output <artifact-dir>`. That directory contains only the selected role. An Enterprise stage is an overlay on the matching Core stage and does not include Core entry points such as `cli/index.js`. `pi install npm:pocketto-pi` publishes one package that contains both Core and Enterprise sources so either role can be staged from it; it is not itself a Core-only tree. Enterprise is optional and adds only its adapter-owned files; it does not bundle or copy Core skills. The manifest schema is `SURFACE_MANIFEST=1`. The independent protocol versions are `CONTRACT=3`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=2`, and `ADAPTER_CONTRACT=2`.
 
 ### Pi extensions (Pi users)
 
@@ -312,7 +312,7 @@ The cross-platform Node CLI requires Node.js ≥ 18. Core commands work locally.
 
 For progressed v3 plans refused by migration (`PIN_V3_REQUIRED`), pin the compatible v3 CLI with `npx -y pocketto-pi@3.1.3` and finish the plan under v3.
 
-Lifecycle CLI flags above use `CONTRACT=3`; distribution version `4.1.0`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=1`, `ADAPTER_CONTRACT=1`, and `SURFACE_MANIFEST=1` are independently versioned. State flow remains `WAITING` → `REVIEW` → `DONE` | `BLOCKED`. Core lifecycle events contain artifact references and opaque proof references, never GitHub IDs or credentials.
+Lifecycle CLI flags above use `CONTRACT=3`; distribution version `4.2.0`, `PIPELINE=5`, `LIFECYCLE_SCHEMA=2`, `ADAPTER_CONTRACT=2`, and `SURFACE_MANIFEST=1` are independently versioned. State flow remains `WAITING` → `REVIEW` → `DONE` | `BLOCKED`. Core lifecycle events contain artifact references and opaque proof references, never GitHub IDs or credentials.
 
 ## Changelog
 
