@@ -1037,6 +1037,11 @@ test('dispatcher accepts cwd-rooted portable invocation and preserves explicit-r
   assert.equal(legacy.error, null);
   assert.equal(legacy.projectRoot, root);
 
+  const legacyWithExtraArgvPrefix = parseInvocation([root, '--custom-runner-flag', eventPath, '--json', '--contract', '3']);
+  assert.equal(legacyWithExtraArgvPrefix.error, null);
+  assert.equal(legacyWithExtraArgvPrefix.projectRoot, root);
+  assert.equal(legacyWithExtraArgvPrefix.event.event_id, event.event_id);
+
   const relative = parseInvocation(['relative-root', eventPath, '--json', '--contract', '3']);
   assert.equal(relative.error.error.code, 'ADAPTER_ARGUMENTS_INVALID');
 
