@@ -52,7 +52,7 @@ Core emits only neutral event names and artifact references. The event journal a
 
 | Event | Enterprise-owned action |
 |-------|-------------------------|
-| `spec-approved` | Reconcile the approved spec with its owned issue; see `references/issue-reconciliation.md`. |
+| `spec-approved` | Reconcile the approved spec with its owned issue; see `references/issue-reconciliation.md`. If delivery reports `GH_UNKNOWN`, follow [Missing-label consent recovery](references/issue-reconciliation.md#missing-label-consent-recovery). |
 | `phase-complete` | Reconcile an existing phase PR and its proof; see `references/phase-reconciliation.md`. A missing PR is `PR_REQUIRED`; the adapter never creates one. For stacked plans this event is deferred to `phase-closed`. |
 | `phase-closed` | Stacked plans only. Publish the closed phase PR with its stack identity, summary, findings, and stack proof, pushing its phase branch only with consent; see `references/phase-reconciliation.md`. A missing consent is retryable `PUSH_CONSENT_REQUIRED`. |
 | `plan-closed` | Reconcile the final tasklist proof on the linked issue; see `references/phase-reconciliation.md`. |
