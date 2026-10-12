@@ -65,7 +65,7 @@ function rejectPhasePlanDirectorySymlink(t, helpers) {
   fs.symlinkSync(externalPlanDir, fixture.planDir, 'dir');
 
   const { tracePath, record } = prepareRegisteredRunner(t, fixture);
-  const response = invokeAdapter(fixture.phaseEvent, record);
+  const response = invokeAdapter(fixture.phaseEvent, record, fixture.root);
 
   assert.equal(readCalls(tracePath).length, 0,
     'an escaping plan_dir must be rejected before the phase handler reaches fake GitHub');

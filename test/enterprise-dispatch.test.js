@@ -326,7 +326,7 @@ test('registered phase-complete rejects phase evidence file symlinks escaping th
   );
   const { tracePath, record } = prepareRegisteredRunner(t, fixture);
 
-  const response = invokeAdapter(fixture.phaseEvent, record);
+  const response = invokeAdapter(fixture.phaseEvent, record, fixture.root);
 
   assert.equal(readCalls(tracePath).length, 0,
     `symlinked phase evidence must be rejected before fake GitHub; handler status was ${response.status}`);
@@ -348,7 +348,7 @@ test('registered phase-complete rejects review JSON symlinks escaping the plan r
   );
   const { tracePath, record } = prepareRegisteredRunner(t, fixture);
 
-  const response = invokeAdapter(fixture.phaseEvent, record);
+  const response = invokeAdapter(fixture.phaseEvent, record, fixture.root);
 
   assert.equal(readCalls(tracePath).length, 0,
     `symlinked review JSON must be rejected before fake GitHub; handler status was ${response.status}`);
@@ -367,7 +367,7 @@ test('registered plan-closed rejects log.json symlinks escaping the plan root be
   );
   const { tracePath, record } = prepareRegisteredRunner(t, fixture);
 
-  const response = invokeAdapter(fixture.closeEvent, record);
+  const response = invokeAdapter(fixture.closeEvent, record, fixture.root);
 
   assert.equal(readCalls(tracePath).length, 0,
     `symlinked log.json must be rejected before fake GitHub; handler status was ${response.status}`);
@@ -386,7 +386,7 @@ test('registered plan-closed rejects closeout.md symlinks without overwriting ex
   );
   const { tracePath, record } = prepareRegisteredRunner(t, fixture);
 
-  const response = invokeAdapter(fixture.closeEvent, record);
+  const response = invokeAdapter(fixture.closeEvent, record, fixture.root);
 
   assert.deepEqual(fs.readFileSync(external.externalPath), external.externalBefore,
     `T10 must not overwrite the external closeout target; status=${response.status}, fake-gh-calls=${readCalls(tracePath).length}`);
@@ -420,20 +420,26 @@ test('Core invokes the packaged Enterprise runner for all concrete handlers thro
   assert.equal(installed.json.ok, true);
   const registrationPath = path.join(fixture.root, '.pocket', 'lifecycle-adapter.json');
   const registration = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
-  assert.deepEqual(registration.argv, [process.execPath, DISPATCH, fixture.root],
-    'default argv must pin Node, the packaged dispatcher, and this explicit project root');
+  assert.deepEqual(registration.argv, ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js'],
+    'default argv must store only portable runtime tokens');
+  assert.ok(registration.argv.every((entry) => !path.isAbsolute(entry)),
+    'default registration must not persist absolute machine-specific paths');
+  assert.ok(!JSON.stringify(registration.argv).includes(fixture.root));
+  assert.ok(!JSON.stringify(registration.argv).includes(os.homedir()));
+  assert.ok(!JSON.stringify(registration.argv).includes(DISPATCH), 'registration must not pin the Enterprise package/cache path');
+  assert.ok(!JSON.stringify(registration.argv).includes(process.execPath), 'registration must not pin the local Node binary');
   assert.deepEqual(registration.events, ['spec-approved', 'phase-complete', 'plan-closed', 'phase-closed']);
 
   const record = registeredAdapter(fixture.root);
   const beforeSpec = readCalls(tracePath).length;
-  const specResponse = invokeAdapter(fixture.specEvent, record);
+  const specResponse = invokeAdapter(fixture.specEvent, record, fixture.root);
   assertRawResponse(specResponse, fixture.specEvent);
   const specCalls = readCalls(tracePath).slice(beforeSpec);
   assert.ok(specCalls.some((args) => args[0] === 'issue' && args[1] === 'view' && args[2] === String(ISSUE_NUMBER)),
     'spec-approved must reach T8 issue ownership reconciliation');
 
   const beforePhase = readCalls(tracePath).length;
-  const phaseResponse = invokeAdapter(fixture.phaseEvent, record);
+  const phaseResponse = invokeAdapter(fixture.phaseEvent, record, fixture.root);
   assertRawResponse(phaseResponse, fixture.phaseEvent);
   const phaseCalls = readCalls(tracePath).slice(beforePhase);
   assert.ok(phaseCalls.some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === String(PR_NUMBER)),
@@ -442,7 +448,7 @@ test('Core invokes the packaged Enterprise runner for all concrete handlers thro
     'phase-complete must run T9 review-thread reconciliation');
 
   const beforeClose = readCalls(tracePath).length;
-  const closeResponse = invokeAdapter(fixture.closeEvent, record);
+  const closeResponse = invokeAdapter(fixture.closeEvent, record, fixture.root);
   assertRawResponse(closeResponse, fixture.closeEvent);
   const closeCalls = readCalls(tracePath).slice(beforeClose);
   assert.ok(closeCalls.some((args) => args[0] === 'api' && args[1] === `repos/${REPOSITORY}/issues/${ISSUE_NUMBER}`),
@@ -897,7 +903,7 @@ test('registered succeeded replays reject external metadata symlinks without rea
       const metadataAlias = path.join(fixture.specDir, '.pocket-meta.json');
       const fileIoTrace = observeFilePaths(setup.env, fixture.root, [metadataAlias, external.externalPath]);
       const beforeGhCalls = readCalls(setup.tracePath).length;
-      const response = withProcessEnvironment(setup.env, () => invokeAdapter(succeededEvent, registeredAdapter(fixture.root)));
+      const response = withProcessEnvironment(setup.env, () => invokeAdapter(succeededEvent, registeredAdapter(fixture.root), fixture.root));
 
       assert.equal(response.status, 'terminal');
       assert.equal(response.error.code, scenario.code);
@@ -942,7 +948,7 @@ test('registered event runner fails closed before GitHub calls and keeps diagnos
   fs.writeFileSync(registrationPath, `${JSON.stringify(registration, null, 2)}\n`);
   const record = registeredAdapter(fixture.root);
   const before = readCalls(tracePath).length;
-  const response = invokeAdapter(fixture.phaseEvent, record);
+  const response = invokeAdapter(fixture.phaseEvent, record, fixture.root);
   assert.equal(response.event_id, fixture.phaseEvent.event_id);
   assert.equal(response.status, 'retryable');
   assert.equal(response.error.code, 'ADAPTER_EVENT_NOT_ALLOWED');
@@ -965,7 +971,7 @@ test('registered plan-closed rejects a plan_dir symlink escaping the explicit pr
   fs.symlinkSync(externalPlanDir, fixture.planDir, 'dir');
 
   const { tracePath, record } = prepareRegisteredRunner(t, fixture);
-  const response = invokeAdapter(fixture.closeEvent, record);
+  const response = invokeAdapter(fixture.closeEvent, record, fixture.root);
 
   assert.equal(readCalls(tracePath).length, 0,
     'an escaping plan_dir must be rejected before the closure handler reaches fake GitHub');
@@ -999,7 +1005,7 @@ test('registered phase-complete rejects a spec directory symlink escaping the ex
   fs.symlinkSync(externalSpecDir, fixture.specDir, 'dir');
 
   const { tracePath, record } = prepareRegisteredRunner(t, fixture);
-  const response = invokeAdapter(fixture.phaseEvent, record);
+  const response = invokeAdapter(fixture.phaseEvent, record, fixture.root);
 
   assert.equal(readCalls(tracePath).length, 0,
     'an escaping spec directory must be rejected before phase reconciliation reaches fake GitHub');
@@ -1012,4 +1018,121 @@ test('packaged dispatcher maps phase-closed to the Enterprise phase-closed handl
   const dispatcher = require('../enterprise/dispatch');
   assert.deepEqual(Object.keys(dispatcher.handlers).sort(), ['phase-closed', 'phase-complete', 'plan-closed', 'spec-approved']);
   assert.equal(typeof dispatcher.handlers['phase-closed'], 'function');
+});
+
+test('dispatcher accepts cwd-rooted portable invocation and preserves explicit-root validation', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-portable-parse-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const eventPath = path.join(root, 'event.json');
+  const event = makeEvent('spec-approved', 1, []);
+  fs.writeFileSync(eventPath, JSON.stringify(event));
+  const parseInvocation = require('../enterprise/dispatch').parseInvocation;
+
+  const portable = parseInvocation([eventPath, '--json', '--contract', '3'], root);
+  assert.equal(portable.error, null);
+  assert.equal(portable.projectRoot, root);
+  assert.equal(portable.event.event_id, event.event_id);
+
+  const legacy = parseInvocation([root, eventPath, '--json', '--contract', '3']);
+  assert.equal(legacy.error, null);
+  assert.equal(legacy.projectRoot, root);
+
+  const relative = parseInvocation(['relative-root', eventPath, '--json', '--contract', '3']);
+  assert.equal(relative.error.error.code, 'ADAPTER_ARGUMENTS_INVALID');
+
+  const relativeRuntimeRoot = parseInvocation([eventPath, '--json', '--contract', '3'], 'relative-runtime-root');
+  assert.equal(relativeRuntimeRoot.error.error.code, 'ADAPTER_ARGUMENTS_INVALID');
+});
+
+test('portable registration dispatches after project relocation from the matching npm installation root', (t) => {
+  const fixture = createFixture(t);
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-portable-npm-'));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const rootB = path.join(parent, 'project-b');
+  const tracePath = path.join(parent, 'fake-gh.jsonl');
+  fs.writeFileSync(tracePath, '');
+  const fakeGh = writeFakeGh(parent, tracePath);
+
+  const installed = runCli(['install', fixture.root, '--json']);
+  assert.equal(installed.exit, 0, `default install must succeed: ${installed.stdout}`);
+  const registrationPath = path.join(fixture.root, '.pocket', 'lifecycle-adapter.json');
+  const record = JSON.parse(fs.readFileSync(registrationPath, 'utf8'));
+  assert.deepEqual(record.argv, ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js']);
+  assert.ok(record.argv.every((entry) => !path.isAbsolute(entry)));
+  assert.ok(!JSON.stringify(record.argv).includes(fixture.root));
+  assert.ok(!JSON.stringify(record.argv).includes(os.homedir()));
+
+  const lifecyclePathA = path.join(fixture.specDir, 'lifecycle.json');
+  const lifecycle = JSON.parse(fs.readFileSync(lifecyclePathA, 'utf8'));
+  lifecycle.plan.revision = 1;
+  lifecycle.events = [fixture.specEvent];
+  fs.writeFileSync(lifecyclePathA, `${JSON.stringify(lifecycle, null, 2)}\n`);
+  fs.cpSync(fixture.root, rootB, { recursive: true });
+  fs.rmSync(fixture.root, { recursive: true, force: true });
+
+  const packedDir = path.join(parent, 'package');
+  fs.mkdirSync(packedDir);
+  execFileSync('npm', ['pack', '--pack-destination', packedDir], {
+    cwd: path.resolve(__dirname, '..'),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const tarball = path.join(packedDir, fs.readdirSync(packedDir).find((name) => name.endsWith('.tgz')));
+  const env = {
+    ...process.env,
+    PATH: `${fakeGh.binDir}${path.delimiter}${process.env.PATH || ''}`,
+    FAKE_GH_TRACE: tracePath,
+    GITHUB_TOKEN: 'ghp_portable_dispatch_test_token',
+    npm_config_cache: path.join(parent, 'npm-cache'),
+    npm_config_update_notifier: 'false',
+    npm_config_fund: 'false',
+    npm_config_audit: 'false',
+  };
+  const stdout = execFileSync('npm', [
+    'exec', '--yes', '--offline', '--package', tarball, '--', 'pocketto-pi',
+    'lifecycle', 'drain', path.join(rootB, 'docs', 'pocket', 'spec', PLAN_ID), '--json', '--contract', '3',
+  ], { cwd: rootB, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const drain = JSON.parse(stdout);
+  assert.equal(drain.ok, true, `npm exec lifecycle drain must succeed: ${stdout}`);
+  assert.equal(drain.data.deliveries[0].status, 'succeeded', JSON.stringify(drain.data.deliveries[0]));
+  assert.ok(readCalls(tracePath).length > 0, 'relocated dispatch must reach the fake GitHub runner');
+});
+
+test('lifecycle context accepts absolute project aliases but rejects paths resolving outside the project', (t) => {
+  const fixture = createFixture(t);
+  const aliases = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-context-alias-'));
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-context-external-'));
+  t.after(() => {
+    fs.rmSync(aliases, { recursive: true, force: true });
+    fs.rmSync(external, { recursive: true, force: true });
+  });
+  const projectAlias = path.join(aliases, 'project');
+  fs.symlinkSync(fixture.root, projectAlias, 'dir');
+  const lifecyclePath = path.join(fixture.specDir, 'lifecycle.json');
+  const lifecycle = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+  lifecycle.plan.spec_dir = path.join(projectAlias, 'docs', 'pocket', 'spec', PLAN_ID);
+  lifecycle.plan.plan_dir = path.join(projectAlias, 'docs', 'pocket', 'plans', PLAN_ID);
+  fs.writeFileSync(lifecyclePath, `${JSON.stringify(lifecycle, null, 2)}\n`);
+
+  const { loadContext } = require('../enterprise/phase-handler-context');
+  assert.doesNotThrow(() => loadContext(fixture.phaseEvent, { projectRoot: fixture.root }),
+    'an absolute alias whose realpath remains in the project root must be accepted');
+
+  const externalSpec = path.join(external, PLAN_ID);
+  fs.mkdirSync(externalSpec, { recursive: true });
+  const externalAlias = path.join(aliases, 'external-project');
+  fs.symlinkSync(external, externalAlias, 'dir');
+  lifecycle.plan.spec_dir = path.join(externalAlias, PLAN_ID);
+  fs.writeFileSync(lifecyclePath, `${JSON.stringify(lifecycle, null, 2)}\n`);
+  assert.throws(() => loadContext(fixture.phaseEvent, { projectRoot: fixture.root }),
+    (error) => error.code === 'PHASE_LIFECYCLE_PATH_INVALID',
+    'an absolute symlink alias whose realpath escapes the project root must still be rejected');
+
+  const missingAlias = path.join(aliases, 'missing-project');
+  fs.symlinkSync(path.join(external, 'missing-root'), missingAlias, 'dir');
+  lifecycle.plan.spec_dir = path.join(missingAlias, PLAN_ID);
+  fs.writeFileSync(lifecyclePath, `${JSON.stringify(lifecycle, null, 2)}\n`);
+  assert.throws(() => loadContext(fixture.phaseEvent, { projectRoot: fixture.root }),
+    (error) => error.code === 'PHASE_LIFECYCLE_PATH_INVALID',
+    'an absolute alias whose target is missing must remain invalid');
 });

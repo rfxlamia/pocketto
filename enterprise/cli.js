@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const registration = require('./registration');
 const enterpriseMeta = require('./meta');
+const { INSTALL_ROOT_TOKEN, NODE_EXECUTABLE_TOKEN, RUNTIME_ARGV_TOKEN } = require('../cli/lib/lifecycle-adapter');
 
 // Install flags that take exactly one value. Validation of the value itself
 // lives in registration-record.js so the CLI and direct callers share it.
@@ -21,8 +22,8 @@ function usage() {
     + '       enterprise/cli.js preflight <project-root> [--json]';
 }
 
-function defaultRunnerArgv(projectRoot) {
-  return [process.execPath, path.resolve(__dirname, 'dispatch.js'), path.resolve(projectRoot)];
+function defaultRunnerArgv() {
+  return [RUNTIME_ARGV_TOKEN, NODE_EXECUTABLE_TOKEN, `${INSTALL_ROOT_TOKEN}/enterprise/dispatch.js`];
 }
 
 function parseCommandArgs(argv, { allowRunnerArgv = false, valueFlags = [] } = {}) {
@@ -76,7 +77,7 @@ function runInstall(rest) {
   }
   const runnerArgv = parsed.runnerArgs.length > 0
     ? parsed.runnerArgs
-    : defaultRunnerArgv(positional);
+    : defaultRunnerArgv();
   const res = registration.installRegistration(positional, {
     argv: runnerArgv,
     phaseBranches: parsed.values['--phase-branches'],

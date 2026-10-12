@@ -53,7 +53,9 @@ Existing user files are not overwritten. Create the `pocket-plan` label only whe
 
 ## Register and verify the lifecycle adapter
 
-The Enterprise distribution bundles `enterprise/dispatch.js`, which composes the `spec-approved`, `phase-complete`, `phase-closed`, and `plan-closed` handlers behind the Core adapter protocol. The default registration uses the exact fixed argv `[process.execPath, <absolute enterprise/dispatch.js>, <absolute project-root>]`; Core appends the event-file path and `--json --contract 3`. A registered custom runner receives lifecycle event files on future drains and can perform remote operations, so use one only when the user explicitly selects a runner they trust.
+The Enterprise distribution bundles `enterprise/dispatch.js`, which composes the `spec-approved`, `phase-complete`, `phase-closed`, and `plan-closed` handlers behind the Core adapter protocol. The default registration stores the reserved descriptor `@pocketto-runtime-argv-v1`, followed by runtime tokens `@pocketto-node` and `@pocketto-install-root/enterprise/dispatch.js`; it stores no machine-specific paths. Core expands runtime tokens only when the reserved descriptor is the first `argv` entry. Custom `--argv` values without that reserved descriptor remain verbatim. The matching Core release expands the tokens using its active Node executable and installation root, then launches the dispatcher with the project root as its working directory. Core validates the resolved Enterprise package/surface before dispatch and launches that same resolved entrypoint. The Enterprise role is an overlay on its matching Core installation; both must share the same installation root.
+
+`<project-root>/.pocket/lifecycle-adapter.json` is shared project configuration and may be committed when it contains the default portable registration. Custom `--argv` values are stored verbatim and may be machine-specific, so commit them only when the selected runner and its arguments are portable. Run lifecycle drains through the matching installed `pocketto-pi` Core CLI (for example, `npx -y pocketto-pi lifecycle drain ...`). Enterprise preflight checks explicit executable paths; runtime token expansion and package compatibility verification are performed by Core during lifecycle dispatch.
 
 `enterprise/cli.js` is in the pocketto-pi package root, not in the project being registered. The commands below are a checkout of this repository. A project that depends on the npm package replaces `node enterprise/cli.js` with `node node_modules/pocketto-pi/enterprise/cli.js`.
 
@@ -82,7 +84,7 @@ node enterprise/cli.js install <project-root> --phase-branches none --json
 
 ### Reinstall after upgrading
 
-A reinstall is required after upgrading to an Enterprise release that declares adapter contract 2. A registration written under adapter contract 1 is incompatible: preflight reports `ENTERPRISE_ADAPTER_CONTRACT_MISMATCH`, and the lifecycle adapter fails closed with no remote call. A registration is compatible only when it declares adapter contract 2 and matches the installed Core.
+After upgrading to the runtime-token release, rerun `enterprise install` to replace any committed registration that still contains absolute Node, dispatcher, or project-root paths. The new registration requires the matching Core release to expand its runtime tokens. This migration is required even when the adapter contract has not changed. A reinstall is also required after upgrading to an Enterprise release that declares adapter contract 2. A registration written under adapter contract 1 is incompatible: preflight reports `ENTERPRISE_ADAPTER_CONTRACT_MISMATCH`, and the lifecycle adapter fails closed with no remote call. A registration is compatible only when it declares adapter contract 2 and matches the installed Core.
 
 Inspect `<project-root>/.pocket/lifecycle-adapter.json` before reinstalling. `install` atomically replaces this file. Then decide by its contents:
 

@@ -155,7 +155,7 @@ function invokeRegistered(fixture, event, environment) {
   const loaded = readAdapterRegistration(fixture.root);
   assert.equal(loaded.error, null, loaded.error && loaded.error.message);
   assert.ok(loaded.registration, 'test requires the real installed Enterprise registration');
-  return withEnvironment(environment, () => invokeAdapter(event, loaded.registration));
+  return withEnvironment(environment, () => invokeAdapter(event, loaded.registration, fixture.root));
 }
 
 function withEnvironment(environment, callback) {

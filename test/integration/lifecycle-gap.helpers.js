@@ -16,6 +16,7 @@ const { sha256, writeFile } = require('./support/files');
 const { commitTransition, updateEventDelivery } = require('../../cli/lib/lifecycle-store');
 const { validateEvent } = require('../../cli/lib/lifecycle-contract');
 const { responseDeliveryPatch } = require('../../cli/lib/lifecycle-retry');
+const { resolveAdapterArgv } = require('../../cli/lib/lifecycle-adapter');
 const enterpriseMeta = require('../../enterprise/meta');
 
 function preparePhaseFixtures(fixture) {
@@ -105,7 +106,7 @@ function deliverRegisteredEvent(fixture, event, {
   fs.mkdirSync(eventDir, { recursive: true });
   const eventFile = path.join(eventDir, `revision-${event.revision}.json`);
   fs.writeFileSync(eventFile, `${JSON.stringify(event, null, 2)}\n`);
-  const [executable, ...registeredArgs] = registration.argv;
+  const [executable, ...registeredArgs] = resolveAdapterArgv(registration.argv);
   const env = { ...fixture.env };
   const preloadHooks = [];
   if (faultGate) {
