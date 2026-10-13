@@ -4,7 +4,7 @@ All notable changes to Pocketto are documented here, newest first. Dates are the
 
 ## Unreleased
 
-## 4.2.1 — Pending release
+## 4.2.1 — 2026-10-13
 
 **Enterprise adapter portability (issue #74).** Default Enterprise registrations now use portable runtime-token arguments instead of machine-specific absolute paths. Core resolves the bundled tokens and preflight validates the resolved executable and dispatcher before remote operations. This requires Core `4.2.1` or later; upgrade the matching Core before installing or reinstalling Enterprise. Existing absolute-path registrations remain usable but preflight reports `ADAPTER_REGISTRATION_NOT_PORTABLE`; reinstall after upgrading Core to migrate them. Replacing a custom registration still requires explicit authorization and preserving its `--argv` entries.
 
