@@ -81,7 +81,15 @@ function checkRegisteredExecutable(projectRoot, record, exists, resolveAdapterAr
   }
 
   const executable = argv[0];
-  const possibleEntrypoint = executable === process.execPath
+  let nodeExecutable = executable === process.execPath;
+  if (!nodeExecutable && typeof executable === 'string') {
+    try {
+      nodeExecutable = fs.realpathSync(path.resolve(projectRoot, executable)) === fs.realpathSync(process.execPath);
+    } catch {
+      // Missing executables are rejected below; custom runner arguments stay opaque.
+    }
+  }
+  const possibleEntrypoint = nodeExecutable
     && typeof argv[1] === 'string'
     && !argv[1].startsWith('-')
     ? argv[1]
@@ -109,7 +117,7 @@ function checkRegisteredExecutable(projectRoot, record, exists, resolveAdapterAr
 }
 
 function registrationWarnings(record) {
-  if (isRuntimeArgv(record) || !record.argv.some((entry) => path.isAbsolute(entry))) return [];
+  if (!record.argv.some((entry) => path.isAbsolute(entry))) return [];
   return [{
     code: 'ADAPTER_REGISTRATION_NOT_PORTABLE',
     message: 'Registered adapter argv contains absolute paths and may not work on another machine. Re-run enterprise install with the matching Core to write portable runtime tokens.',
