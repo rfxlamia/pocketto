@@ -160,6 +160,54 @@ test('preflight checks the dispatcher resolved from a token registration', () =>
   }
 });
 
+test('preflight checks Node aliases while keeping custom runner arguments opaque', (t) => {
+  const root = makeTempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const alias = path.join(root, 'node-alias');
+  fs.symlinkSync(process.execPath, alias);
+  const missingScript = path.join(root, 'missing-dispatch.js');
+  assert.equal(registration.installRegistration(root, { argv: [alias, missingScript] }).ok, true);
+  const recordPath = registration.registrationPathFor(root);
+  const before = fs.readFileSync(recordPath);
+  const checked = registration.preflight(root);
+  assert.equal(checked.ok, false);
+  assert.equal(checked.code, 'ENTERPRISE_ADAPTER_UNAVAILABLE');
+  assert.deepEqual(fs.readFileSync(recordPath), before);
+
+  const runner = makeDummyExecutable(root);
+  assert.equal(registration.installRegistration(root, { argv: [runner, missingScript] }).ok, true);
+  assert.equal(registration.preflight(root).ok, true, 'custom runner path arguments are opaque');
+});
+
+test('preflight warns on hybrid raw argv but not resolved portable paths', (t) => {
+  const root = makeTempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const portable = ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js'];
+  assert.equal(registration.installRegistration(root, { argv: portable }).ok, true);
+  const defaultResolved = registration.preflight(root);
+  assert.equal(defaultResolved.ok, true);
+  assert.deepEqual(defaultResolved.warnings, []);
+
+  assert.equal(registration.installRegistration(root, { argv: [...portable, root] }).ok, true);
+  const hybrid = registration.preflight(root);
+  assert.equal(hybrid.ok, true);
+  assert.equal(hybrid.warnings.filter((warning) => warning.code === 'ADAPTER_REGISTRATION_NOT_PORTABLE').length, 1);
+});
+
+test('preflight resolver exceptions remain bounded and do not expose raw secrets', (t) => {
+  const root = makeTempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.equal(registration.installRegistration(root, {
+    argv: ['@pocketto-runtime-argv-v1', '@pocketto-node', '@pocketto-install-root/enterprise/dispatch.js'],
+  }).ok, true);
+  const result = registration.preflight(root, {
+    resolveAdapterArgv: () => { throw new Error('private-secret-value'); },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ENTERPRISE_ADAPTER_UNAVAILABLE');
+  assert.ok(!JSON.stringify(result).includes('private-secret-value'));
+});
+
 test('CYCLE 1: preflight fails closed on missing registration with zero GitHub calls', () => {
   const root = makeTempRoot();
   let ghCalls = 0;

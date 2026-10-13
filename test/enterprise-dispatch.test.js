@@ -1047,6 +1047,21 @@ test('dispatcher accepts cwd-rooted portable invocation and preserves explicit-r
 
   const relativeRuntimeRoot = parseInvocation([eventPath, '--json', '--contract', '3'], 'relative-runtime-root');
   assert.equal(relativeRuntimeRoot.error.error.code, 'ADAPTER_ARGUMENTS_INVALID');
+
+  const alias = path.join(root, 'root-alias');
+  fs.symlinkSync(root, alias, 'dir');
+  assert.equal(parseInvocation([alias, '--prefix', eventPath, '--json', '--contract', '3']).error, null);
+  const dangling = path.join(root, 'dangling-root');
+  fs.symlinkSync(path.join(root, 'missing-root'), dangling, 'dir');
+  for (const invalidRoot of [eventPath, path.join(root, 'missing-root'), dangling, 'relative-root']) {
+    const rejected = parseInvocation([invalidRoot, '--prefix', eventPath, '--json', '--contract', '3']);
+    assert.equal(rejected.error.error.code, 'ADAPTER_ARGUMENTS_INVALID');
+    assert.equal(rejected.error.event_id, event.event_id);
+    assertBoundedFailure(rejected.error, event);
+  }
+  const malformedModern = parseInvocation([eventPath, eventPath, '--json', '--contract', '3']);
+  assert.equal(malformedModern.error.error.code, 'ADAPTER_ARGUMENTS_INVALID');
+  assert.equal(parseInvocation([root, eventPath, '--json', '--contract', '99']).error.error.code, 'ADAPTER_ARGUMENTS_INVALID');
 });
 
 test('portable registration dispatches after project relocation from the matching npm installation root', (t) => {

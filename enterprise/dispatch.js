@@ -57,6 +57,14 @@ function readEventFile(eventFile) {
   }
 }
 
+function isDirectory(target) {
+  try {
+    return fs.statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function parseInvocation(argv, runtimeRoot = process.cwd()) {
   const args = Array.isArray(argv) ? argv : [];
   const protocolOffset = args.length - 3;
@@ -65,6 +73,7 @@ function parseInvocation(argv, runtimeRoot = process.cwd()) {
   const legacyInvocation = eventFileIndex >= 1
     && typeof args[0] === 'string'
     && path.isAbsolute(args[0])
+    && isDirectory(args[0])
     && typeof eventFile === 'string'
     && path.isAbsolute(eventFile);
   const projectRoot = legacyInvocation ? args[0] : runtimeRoot;
