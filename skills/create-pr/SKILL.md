@@ -14,7 +14,7 @@ It does not own phase-verdict reporting.
 
 **Core principle:** This is an explicit user-triggered recorder. It creates or discovers a PR, records its identity, and surfaces preflight warnings verbatim. Phase summaries and inline verdicts belong to the Enterprise adapter, not this skill or Core.
 
-**v4 boundary:** Package `4.2.0` uses `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `2`, adapter contract `2`, and surface manifest `1`. This skill is part of the additive Enterprise role and requires matching Core. Core is local-first: it does not call `gh`, it does not merge pull requests, and it does not close issues. This recorder may call GitHub only after explicit user invocation and successful Enterprise preflight; it never merges a PR or closes an issue.
+**v4 boundary:** Package `4.2.1` uses `CONTRACT=3`, `PIPELINE=5`, lifecycle schema `2`, adapter contract `2`, and surface manifest `1`. This skill is part of the additive Enterprise role and requires matching Core. Core is local-first: it does not call `gh`, it does not merge pull requests, and it does not close issues. This recorder may call GitHub only after explicit user invocation and successful Enterprise preflight; it never merges a PR or closes an issue.
 
 **Use this when:** The user requests a phase PR, or explicitly confirms an Enterprise offer. For a non-stacked plan the target phase is in `REVIEW`. For a stacked plan the target phase is `DONE` and its `phase-closed` event exists (created by `log handoff`, see pocket-closing's Stacked Handoff).
 
