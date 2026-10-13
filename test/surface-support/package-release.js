@@ -43,7 +43,7 @@ function assertArchiveRebuildConsumesTheManifest() {
 
 function assertExplicitPackageListIncludesReleaseAssets() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  assert.equal(pkg.version, '4.2.0');
+  assert.equal(pkg.version, '4.2.1');
   for (const entry of pkg.files || []) {
     assert.ok(
       entry !== 'skills/**' && entry !== 'skills/*' && entry !== 'cli/**',
@@ -106,6 +106,7 @@ function assertClaudeManifestsUseExplicitSurfaces() {
     const doc = JSON.parse(
       fs.readFileSync(path.join(ROOT, '.claude-plugin', name), 'utf8'),
     );
+    assert.equal(doc.version, '4.2.1', `${name} must declare release version 4.2.1`);
     const text = JSON.stringify(doc);
     assert.ok(
       text.includes('surfaces.json') || text.includes('claude/core') || text.includes('surface_manifest'),

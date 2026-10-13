@@ -4,7 +4,11 @@ All notable changes to Pocketto are documented here, newest first. Dates are the
 
 ## Unreleased
 
-**Enterprise registration migration (issue #74).** Runtime-token registrations require a Core build that exports `resolveAdapterArgv`; the `v4.2.0` tag predates this capability. Upgrade Core before consuming token-based registrations. The minimum semantic release will be stated when a release containing this capability is cut. Legacy absolute-path registrations remain usable but Enterprise preflight reports `ADAPTER_REGISTRATION_NOT_PORTABLE` and recommends reinstalling.
+## 4.2.1 — Pending release
+
+**Enterprise adapter portability (issue #74).** Default Enterprise registrations now use portable runtime-token arguments instead of machine-specific absolute paths. Core resolves the bundled tokens and preflight validates the resolved executable and dispatcher before remote operations. This requires Core `4.2.1` or later; upgrade the matching Core before installing or reinstalling Enterprise. Existing absolute-path registrations remain usable but preflight reports `ADAPTER_REGISTRATION_NOT_PORTABLE`; reinstall after upgrading Core to migrate them. Replacing a custom registration still requires explicit authorization and preserving its `--argv` entries.
+
+**Enterprise recovery documentation.** Adds consent-based recovery guidance for a missing `pocket-plan` label after `GH_UNKNOWN`; see [issue #70](https://github.com/rfxlamia/pocketto/issues/70) and [the procedure](skills/pocket-enterprise/references/issue-reconciliation.md#missing-label-consent-recovery). This is a documented workaround, not a runtime fix or a claim that #70 is closed.
 
 ## 4.2.0 — 2026-10-12
 
@@ -23,8 +27,6 @@ All notable changes to Pocketto are documented here, newest first. Dates are the
 **Stacked phase PRs.** A child phase whose parent PR is already merged now reuses its open PR when that PR targets the base the parent merged into, instead of ending the lifecycle event. With no such PR the event is retryable (`parent PR merged`): open or retarget the child PR on GitHub, then run `publish-phase` again; Pocket reuses that PR. Each lifecycle drain rerun spends one of 6 delivery attempts, after which the event is terminal. Multi-phase PR bodies end with `refs #N` rather than `closes #N`, so close the linked issue by hand after the last phase. Pocket still never creates a PR on a merged parent, and never retargets or rebases. A fork PR that reuses a phase head name is ignored with a `FORK_PR_IGNORED` notice.
 
 **Behavior change (stacked plans only).** For stacked plans, phase PR lookup now requires the head to live in this repository (`isCrossRepository === false`). Non-stacked plans are unchanged: a fork-headed PR is still accepted.
-
-**Documentation.** Clarifies the consent-based recovery steps for a missing `pocket-plan` label after `GH_UNKNOWN`; see [issue #70](https://github.com/rfxlamia/pocketto/issues/70) and [the procedure](skills/pocket-enterprise/references/issue-reconciliation.md#missing-label-consent-recovery). This is guidance, not a runtime fix or a claim that #70 is closed.
 
 ## 4.1.0 — 2026-10-09
 

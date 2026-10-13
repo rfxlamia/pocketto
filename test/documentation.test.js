@@ -120,7 +120,11 @@ function assertManifestRoles(readme) {
 
 function assertReleaseIdentifiers(releaseDocs) {
 	for (const [label, pattern] of [
-		["package version 4.2.0", /\b4\.2\.0\b/],
+		["active README release version 4.2.1", /Version `4\.2\.1` is built from/],
+		["llms.txt release version 4.2.1", /Pocketto `4\.2\.1` provides/],
+		["create-pr package version 4.2.1", /Package `4\.2\.1` uses/],
+		["Enterprise skill package version 4.2.1", /package `4\.2\.1`, CLI/],
+		["lifecycle contract package version 4.2.1", /Package `4\.2\.1` ships/],
 		["CLI CONTRACT=3", /\bCONTRACT\s*=\s*3\b/],
 		["PIPELINE=5", /\bPIPELINE\s*=\s*5\b/],
 		["LIFECYCLE_SCHEMA=2", /\bLIFECYCLE_SCHEMA\s*=\s*2\b/],
@@ -161,6 +165,20 @@ function assertEnterpriseOnboardingCliContract(onboarding) {
 	}
 }
 
+test("Enterprise onboarding documents all non-blocking preflight warning types", () => {
+	const onboarding = readFileSync(
+		path.join(__dirname, "..", "skills/pocket-enterprise/references/onboarding.md"),
+		"utf8",
+	);
+
+	assert.match(onboarding, /data\.warnings/);
+	assert.match(onboarding, /ignored-artifact warnings and registration warnings/i);
+	assert.match(onboarding, /ADAPTER_REGISTRATION_NOT_PORTABLE/);
+	assert.match(onboarding, /Surface each warning verbatim/i);
+	assert.match(onboarding, /warnings are non-blocking and do not change preflight success/i);
+	assert.match(onboarding, /ADAPTER_REGISTRATION_REQUIRES_NEWER_CORE/);
+});
+
 function assertCompatibilityMatrix(readme) {
 	const compatibilityRows = [
 		[/v3 Core\s*\+\s*v3 Enterprise[^\n]*(?:operational|usable)[^\n]*warning/i, "v3 Core + v3 Enterprise remains usable with a warning"],
@@ -183,10 +201,6 @@ function assertMigrationPolicy(allDocs) {
 	);
 }
 
-function bashFences(text) {
-	return [...text.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]);
-}
-
 function assertNoUnnegatedCoreRemoteClaims(allDocs) {
 	const unnegatedCoreClaims = unnegatedCoreRemoteClaims(allDocs);
 	assert.deepEqual(
@@ -203,6 +217,9 @@ test("user-facing documentation describes the v4 Core and Enterprise contract", 
 		documentation["README.md"],
 		documentation["CHANGELOG.md"],
 		documentation["llms.txt"],
+		documentation["skills/create-pr/SKILL.md"],
+		documentation["skills/pocket-enterprise/SKILL.md"],
+		documentation["skills/pocket-enterprise/references/lifecycle-contract.md"],
 	].join("\n");
 	const allDocs = Object.values(documentation).join("\n");
 

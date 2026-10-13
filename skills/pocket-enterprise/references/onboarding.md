@@ -112,7 +112,7 @@ Then run the read-only compatibility preflight:
 node enterprise/cli.js preflight <project-root> --json
 ```
 
-Proceed only when it reports success with compatible Core, registration, adapter contract 2, and executable. Preflight also returns `data.warnings`, which lists ignored-artifact warnings to surface to the user. On any failure, stop before issue, PR, or comment operations; give the actionable install/upgrade guidance and leave local Core state untouched. Preflight is read-only. Do not automatically run a drain as the final onboarding step.
+Proceed only when it reports success with compatible Core, registration, adapter contract 2, and executable. Preflight also returns `data.warnings`, which may include ignored-artifact warnings and registration warnings such as `ADAPTER_REGISTRATION_NOT_PORTABLE`. Surface each warning verbatim; warnings are non-blocking and do not change preflight success. A runtime-token registration requiring a newer Core is a preflight failure (`ADAPTER_REGISTRATION_REQUIRES_NEWER_CORE`), not a warning. On any failure, stop before issue, PR, or comment operations; give the actionable install/upgrade guidance and leave local Core state untouched. Preflight is read-only. Do not automatically run a drain as the final onboarding step.
 
 ## After onboarding
 
