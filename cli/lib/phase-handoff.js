@@ -117,6 +117,13 @@ function commitPhaseClosed({ planDir, logPath, log, phase, snapshot, projectionW
   return { specDir, next, outcome, eventStep: eventStep(outcome.event, revisionBefore) };
 }
 
+// JSON quoting handles C0; also escape DEL/C1 and Unicode line separators
+// so worktree labels cannot inject terminal controls or extra display lines.
+function quoteHumanWorktree(value) {
+  return JSON.stringify(value).replace(/[\u007f-\u009f\u2028\u2029]/g, (char) =>
+    `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 function handoffResult({ planDir, phase, snapshot, transition, commit, branch, warnings }) {
   const order = phase.order;
   const { specDir, next, outcome } = transition;
@@ -133,6 +140,11 @@ function handoffResult({ planDir, phase, snapshot, transition, commit, branch, w
     `  commit   : ${steps.commit}`,
     `  branch   : ${steps.branch}`,
   ];
+  for (const warning of warnings) {
+    if (warning.code !== 'HANDOFF_FOREIGN_WORKTREE') continue;
+    const head = warning.branch === null ? 'detached HEAD' : `branch ${quoteHumanWorktree(warning.branch)}`;
+    human.push(`  warning  : Foreign worktree remains registered: ${quoteHumanWorktree(warning.path)} (${head})`);
+  }
   return {
     command: 'log handoff',
     exit: 0,
