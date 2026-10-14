@@ -117,7 +117,7 @@ function commitPhaseClosed({ planDir, logPath, log, phase, snapshot, projectionW
   return { specDir, next, outcome, eventStep: eventStep(outcome.event, revisionBefore) };
 }
 
-function handoffResult({ planDir, phase, snapshot, transition, commit, branch }) {
+function handoffResult({ planDir, phase, snapshot, transition, commit, branch, warnings }) {
   const order = phase.order;
   const { specDir, next, outcome } = transition;
   const steps = {
@@ -148,7 +148,7 @@ function handoffResult({ planDir, phase, snapshot, transition, commit, branch })
       branch,
       commit: { sha: commit.sha, paths: commit.paths, skipped: commit.skipped },
       next_phase: next ? { phase_key: next.phaseKey, branch: next.branch, base_branch: next.base_branch } : null,
-      warnings: phaseArtifactWarnings({ planDir, specDir, phaseOrder: order }),
+      warnings: [...phaseArtifactWarnings({ planDir, specDir, phaseOrder: order }), ...warnings],
       next_actions: pendingDrainActions({ specDir, projectDir: planDir }),
     },
   };
@@ -191,12 +191,12 @@ function handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter
   }
   const planDir = resolvePlanDir(positionals[0]);
   assertPlanIdIsSlug(planDir);
-  const { logPath, log, phase, closeout } = checkPreconditionsStagedAware(planDir, positionals[1], findPhaseInLog);
+  const { logPath, log, phase, closeout, warnings } = checkPreconditionsStagedAware(planDir, positionals[1], findPhaseInLog);
   const snapshot = ensureSnapshot(planDir, phase.order, closeout);
   const transition = commitPhaseClosed({ planDir, logPath, log, phase, snapshot, projectionWriter, adapterRunner });
   const commit = commitPlanArtifacts({ planDir, phase, specDir: transition.specDir, planId: planIdForLog(planDir) });
   const branch = createNextBranch({ planDir, phase, next: transition.next });
-  return handoffResult({ planDir, phase, snapshot, transition, commit, branch });
+  return handoffResult({ planDir, phase, snapshot, transition, commit, branch, warnings });
 }
 
 module.exports = { handoff };

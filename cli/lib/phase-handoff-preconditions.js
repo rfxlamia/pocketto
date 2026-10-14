@@ -81,39 +81,63 @@ function assertOnPhaseBranch(planDir, phase) {
   );
 }
 
-// Worktree paths from `git worktree list --porcelain`. The first entry is the
-// main worktree. Null when git cannot list them (fail closed by the caller).
+// Worktree path + branch records. NUL delimiters preserve spaces/newlines in
+// paths. The first entry is the main worktree; detached HEAD has branch null.
+// Null when git cannot list them (fail closed by the caller).
 function worktreeList(cwd) {
-  const r = spawnSync('git', ['worktree', 'list', '--porcelain'], {
+  const r = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
   if (r.status !== 0 || r.error) return null;
-  return r.stdout
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith('worktree '))
-    .map((line) => line.slice('worktree '.length));
+  const list = [];
+  let entry = null;
+  for (const field of r.stdout.split('\0')) {
+    if (field.startsWith('worktree ')) {
+      entry = { path: field.slice('worktree '.length), branch: null };
+      list.push(entry);
+    } else if (entry && field.startsWith('branch refs/heads/')) {
+      entry.branch = field.slice('branch refs/heads/'.length);
+    } else if (field === '') {
+      entry = null;
+    }
+  }
+  return list.length > 0 ? list : null;
 }
 
-// Pocket parallel groups register task worktrees (conventionally under
-// .worktree/). Any registered worktree besides the main one means a group may
-// still hold unmerged work, so handoff refuses. Entries are counted, never
-// compared as path strings.
+// Pocket parallel groups may still hold unmerged work: refuse extra entries
+// inside the main worktree's .worktree/ directory OR on task/* branches.
+// Other registered worktrees belong to unrelated sessions: warn, never remove.
 function assertNoExtraWorktrees(planDir) {
   const list = worktreeList(planDir);
   if (list === null) {
     throw new CliError('HANDOFF_WORKTREES_ACTIVE', 'Could not list git worktrees (git worktree list --porcelain failed), so handoff cannot confirm no parallel group is active.');
   }
-  const extra = list.slice(1);
-  if (extra.length === 0) return;
-  const err = new CliError(
-    'HANDOFF_WORKTREES_ACTIVE',
-    `Other git worktrees are still registered: ${extra.join(', ')}. Merge or finish the parallel group, remove them with git worktree remove <path> (and git worktree prune), then rerun log handoff.`,
-  );
-  err.details = { worktrees: extra };
-  throw err;
+  const taskRoot = path.join(list[0].path, '.worktree');
+  const blocking = [];
+  const warnings = [];
+  for (const entry of list.slice(1)) {
+    const relative = path.relative(taskRoot, entry.path);
+    const inside = relative === '' || (
+      relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+    );
+    if (inside || (entry.branch !== null && entry.branch.startsWith('task/'))) {
+      blocking.push(entry.path);
+    } else {
+      warnings.push({ code: 'HANDOFF_FOREIGN_WORKTREE', path: entry.path, branch: entry.branch });
+    }
+  }
+  if (blocking.length > 0) {
+    const err = new CliError(
+      'HANDOFF_WORKTREES_ACTIVE',
+      `Pocket parallel-group worktrees are still registered: ${blocking.join(', ')}. Merge or finish the parallel group, remove them with git worktree remove <path> (and git worktree prune), then rerun log handoff.`,
+    );
+    err.details = { worktrees: blocking };
+    throw err;
+  }
+  return warnings;
 }
 
 // Step 1: preconditions, in spec order. Every refusal throws before anything
@@ -144,9 +168,9 @@ function checkPreconditions(planDir, phaseFileArg, findPhaseInLog) {
   }
   const closeout = readCloseoutLines(planDir, phase.order);
   assertOnPhaseBranch(planDir, phase);
-  assertNoExtraWorktrees(planDir);
+  const warnings = assertNoExtraWorktrees(planDir);
   assertCleanOutsidePlan(planDir, 'log handoff');
-  return { logPath, log, phase, closeout };
+  return { logPath, log, phase, closeout, warnings };
 }
 
 module.exports = { checkPreconditions, extractSection, closeoutMarker };

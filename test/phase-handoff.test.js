@@ -381,6 +381,133 @@ test('handoff worktrees active: a registered extra worktree fails with HANDOFF_W
   assertRefused(fx, r, 'HANDOFF_WORKTREES_ACTIVE', before);
 });
 
+// Issue #78: worktree ownership, not the total count, controls handoff.
+// These tests catch broad refusals, AND instead of OR matching, path-prefix
+// collisions, lost branch/path metadata, and warning replacement.
+function extraWorktree(fx, { relativePath = null, branch = null } = {}) {
+  const location = relativePath
+    ? path.join(fx.repo, relativePath)
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'pocket-handoff-extra-'));
+  if (relativePath) {
+    fs.mkdirSync(path.join(fx.repo, '.git', 'info'), { recursive: true });
+    fs.appendFileSync(path.join(fx.repo, '.git', 'info', 'exclude'), `${relativePath.split(path.sep)[0]}/\n`);
+  } else {
+    created.push(location);
+  }
+  const args = branch ? ['-b', branch] : ['--detach'];
+  git(fx.repo, 'worktree', 'add', '-q', location, ...args);
+  return fs.realpathSync(location);
+}
+
+for (const entry of [
+  { name: 'foreign branch', branch: 'unrelated/session', relativePath: null },
+  { name: 'detached HEAD', branch: null, relativePath: null },
+  { name: 'near-prefix directory', branch: 'feature/near', relativePath: '.worktree-other/T1' },
+  { name: 'path with spaces and newline', branch: 'feature/path', relativePath: 'foreign worktrees/T1\nbranch refs/heads/task/fake' },
+]) {
+  test(`handoff worktree ownership: ${entry.name} succeeds with a warning and leaves the worktree unchanged`, () => {
+    const fx = makeStackedPlan();
+    writeCloseout(fx.planDir, [phaseSection(1, 2)]);
+    const location = extraWorktree(fx, entry);
+    const before = headState(location);
+    const r = handoff(fx.repo, fx.planDir, fx.phaseFile);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.deepEqual(r.env.data.warnings.filter((w) => w.code === 'HANDOFF_FOREIGN_WORKTREE'), [
+      { code: 'HANDOFF_FOREIGN_WORKTREE', path: location, branch: entry.branch },
+    ]);
+    assert.deepEqual(headState(location), before);
+    assert.equal(git(location, 'status', '--porcelain'), '');
+    assert.equal(phaseClosedEvents(fx.specDir).length, 1);
+    assert.equal(headState(fx.repo).branch, 'pocket/p/phase-2');
+  });
+}
+
+for (const entry of [
+  { name: 'path-only blocker', branch: 'feature/inside', relativePath: '.worktree/T9' },
+  { name: 'branch-only blocker', branch: 'task/T9', relativePath: null },
+]) {
+  test(`handoff worktree ownership: ${entry.name} refuses with zero mutation`, () => {
+    const fx = makeStackedPlan();
+    writeCloseout(fx.planDir, [phaseSection(1, 2)]);
+    const location = extraWorktree(fx, entry);
+    const before = captureState(fx);
+    const r = handoff(fx.repo, fx.planDir, fx.phaseFile);
+    assertRefused(fx, r, 'HANDOFF_WORKTREES_ACTIVE', before);
+    assert.deepEqual(r.env.error.details.worktrees, [location]);
+  });
+}
+
+test('handoff worktree ownership: mixed worktrees report only the blocking worktree', () => {
+  const fx = makeStackedPlan();
+  writeCloseout(fx.planDir, [phaseSection(1, 2)]);
+  extraWorktree(fx, { branch: 'feature/foreign' });
+  const blocker = extraWorktree(fx, { branch: 'task/T9' });
+  const before = captureState(fx);
+  const r = handoff(fx.repo, fx.planDir, fx.phaseFile);
+  assertRefused(fx, r, 'HANDOFF_WORKTREES_ACTIVE', before);
+  assert.deepEqual(r.env.error.details.worktrees, [blocker]);
+});
+
+test('handoff worktree ownership: warnings compose with ignored artifact warnings', () => {
+  const fx = makeStackedPlan();
+  writeCloseout(fx.planDir, [phaseSection(1, 2)]);
+  writeFile(path.join(fx.repo, '.gitignore'), 'docs/pocket/\n');
+  git(fx.repo, 'add', '--', '.gitignore');
+  git(fx.repo, 'add', '-f', '--', 'docs/pocket/plans/p/log.json', 'docs/pocket/plans/p/closeout.md');
+  git(fx.repo, 'commit', '-q', '-m', 'track forced artifacts');
+  const location = extraWorktree(fx, { branch: 'feature/foreign' });
+  const r = handoff(fx.repo, fx.planDir, fx.phaseFile);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(r.env.data.warnings.find((w) => w.code === 'HANDOFF_FOREIGN_WORKTREE'), {
+    code: 'HANDOFF_FOREIGN_WORKTREE', path: location, branch: 'feature/foreign',
+  });
+  const artifactWarning = r.env.data.warnings.find((w) => w.code === 'POCKET_ARTIFACTS_IGNORED');
+  assert.ok(artifactWarning && artifactWarning.paths.some((p) => p.endsWith('reviews/closeout-phase-1.md')));
+});
+
+test('handoff worktree ownership: linked checkout uses the main worktree directory for path blockers', () => {
+  const fx = makeStackedPlan();
+  writeCloseout(fx.planDir, [phaseSection(1, 2)]);
+  git(fx.repo, 'add', '-A');
+  git(fx.repo, 'commit', '-q', '-m', 'persist plan for linked checkout');
+  git(fx.repo, 'switch', '-q', 'feature/x');
+  const linked = fs.mkdtempSync(path.join(os.tmpdir(), 'pocket-handoff-linked-'));
+  created.push(linked);
+  git(fx.repo, 'worktree', 'add', '-q', linked, 'pocket/p/phase-1');
+  const blocker = extraWorktree(fx, { branch: 'feature/inside', relativePath: '.worktree/T9' });
+  const linkedFx = {
+    repo: linked,
+    planDir: path.join(linked, 'docs/pocket/plans/p'),
+    specDir: path.join(linked, 'docs/pocket/spec/p'),
+    phaseFile: fx.phaseFile,
+  };
+  const before = captureState(linkedFx);
+  const r = handoff(linkedFx.repo, linkedFx.planDir, linkedFx.phaseFile);
+  assertRefused(linkedFx, r, 'HANDOFF_WORKTREES_ACTIVE', before);
+  assert.deepEqual(r.env.error.details.worktrees, [blocker]);
+});
+
+test('handoff worktree ownership: listing failure refuses before mutation', () => {
+  const fx = makeStackedPlan();
+  writeCloseout(fx.planDir, [phaseSection(1, 2)]);
+  const before = captureState(fx);
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pocket-handoff-git-shim-'));
+  created.push(shimDir);
+  // Only listing fails: branch and other preconditions still use real git.
+  const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  const shim = path.join(shimDir, 'git');
+  writeFile(shim, '#!/bin/sh\nif [ "$1" = worktree ] && [ "$2" = list ]; then exit 1; fi\nexec "$POCKET_TEST_REAL_GIT" "$@"\n');
+  fs.chmodSync(shim, 0o755);
+  const r = runCli(fx.repo, ['log', 'handoff', fx.planDir, fx.phaseFile], {
+    envOverride: {
+      ...process.env, POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK,
+      POCKET_TEST_REAL_GIT: realGit, PATH: `${shimDir}${path.delimiter}${process.env.PATH}`,
+    },
+  });
+  assertRefused(fx, r, 'HANDOFF_WORKTREES_ACTIVE', before);
+  assert.match(r.env.error.message, /Could not list git worktrees/);
+});
+
 // ─── Cycle 7: non-stacked plan ──────────────────────────────────────────────
 // RED cycle 7: non-stacked plan
 // Test file: `test/phase-handoff.test.js`
