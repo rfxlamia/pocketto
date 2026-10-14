@@ -9,7 +9,16 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const EXPECTED_ROLES = ['pi/core', 'pi/enterprise', 'claude/core', 'claude/enterprise'];
+const EXPECTED_ROLES = [
+  'pi/core',
+  'pi/enterprise',
+  'claude/core',
+  'claude/enterprise',
+  'copilot/core',
+  'codex/core',
+  'gemini/core',
+  'agents/core',
+];
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

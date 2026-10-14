@@ -233,3 +233,88 @@ test("empty-diff skip stub is attributed to the main agent", () => {
 });
 
 require("../test-support/package/role-archives");
+
+// --- Wave-1 multi-harness guards (sprint 1, TDD; plan §5.3) ---
+
+const nodeCrypto = require("node:crypto");
+const nodeOs = require("node:os");
+const nodeFs = require("node:fs");
+const {
+	posixPath: harnessPosixPath,
+	stageRole: harnessStageRole,
+	walkFiles: harnessWalkFiles,
+	withTemporaryDirectory: harnessWithTemporaryDirectory,
+} = require("../test-support/surface-test-utils");
+
+// Baseline 2026-10-14: sha256 over JSON.stringify([...files].sort()).
+// Harness installer files (.codex-plugin/, gemini-extension.json, GEMINI.md)
+// are repo-root installers, NOT Pi runtime — they must never leak into the
+// pocketto-pi npm pack (plan §3.4: "File package.json/files tidak berubah").
+const BASELINE_PACKAGE_FILES_HASH =
+	"d943c2bfe5c2972a4c1d4b3717f5a3f06e07584fa678e3ca314ef5f0bd08b525";
+
+test("package.json files array is unchanged by harness installer additions", () => {
+	const { files } = JSON.parse(
+		readFileSync(path.join(ROOT, "package.json"), "utf8"),
+	);
+	const digest = nodeCrypto
+		.createHash("sha256")
+		.update(JSON.stringify([...files].sort()))
+		.digest("hex");
+	assert.equal(
+		digest,
+		BASELINE_PACKAGE_FILES_HASH,
+		"package.json `files` must not change when harness installers are added",
+	);
+});
+
+test("packed tarball contains no harness installer files", () =>
+	withPackedPackage(ROOT, (extracted) => {
+		const files = packedPaths(extracted);
+		const installerPaths = [...files]
+			.filter(
+				(rel) =>
+					rel.startsWith(".codex-plugin/") ||
+					rel.startsWith(".copilot-plugin/") ||
+					rel.startsWith(".github/plugin/") ||
+					rel === "gemini-extension.json" ||
+					rel === "GEMINI.md",
+			)
+			.sort();
+		assert.deepEqual(
+			installerPaths,
+			[],
+			"harness installer files must not ship in the pocketto-pi tarball",
+		);
+	}),
+);
+
+test("staged codex/core contains exactly its role-owned set with no Pi-only leakage", () =>
+	harnessWithTemporaryDirectory("t-package-codex-core-", (temp) => {
+		const output = path.join(temp, "codex-core");
+		// Throws SURFACE_ROLE_INVALID on the baseline — the TDD red state.
+		harnessStageRole(ROOT, "codex/core", output);
+		const staged = harnessWalkFiles(output).map((file) =>
+			harnessPosixPath(path.relative(output, file)),
+		);
+		assert.ok(
+			!staged.includes("cli/commands/setup-extensions.js"),
+			"staged codex/core must not leak the Pi-only setup-extensions.js",
+		);
+		const manifest = JSON.parse(
+			readFileSync(path.join(ROOT, "surfaces.json"), "utf8"),
+		);
+		const role = manifest.roles["codex/core"];
+		assert.ok(role, "codex/core must be declared in surfaces.json");
+		for (const forbidden of role.forbidden_paths) {
+			const leaked = staged.filter(
+				(rel) => rel === forbidden || rel.startsWith(forbidden),
+			);
+			assert.deepEqual(
+				leaked,
+				[],
+				`staged codex/core must not contain forbidden path ${forbidden}`,
+			);
+		}
+	}),
+);

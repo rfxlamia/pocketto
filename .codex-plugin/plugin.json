@@ -1,0 +1,24 @@
+{
+  "author": {
+    "name": "rfxlamia",
+    "url": "https://github.com/rfxlamia"
+  },
+  "description": "Pocket-driven development skills: structured subagent delegation, bug hunting, iterative planning, code review workflows, and an opt-in education mentor mode for Codex CLI.",
+  "keywords": [
+    "pocket",
+    "development",
+    "delegation",
+    "bug-hunting",
+    "planning",
+    "workflow",
+    "structured-research",
+    "education"
+  ],
+  "name": "pocketto",
+  "repository": "https://github.com/rfxlamia/pocketto",
+  "surface_manifest": "./surfaces.json",
+  "surfaces": {
+    "core": "codex/core"
+  },
+  "version": "4.2.1"
+}
