@@ -1,25 +1,16 @@
 'use strict';
 
-// Installer-manifest assertions for wave-1 harness glue (plan §5.1).
-//
-//  - Codex: .codex-plugin/marketplace.json + .codex-plugin/plugin.json must
-//    exist and mirror the .claude-plugin/ conventions — the marketplace
-//    plugin entry carries name/source/description/category/tags, the plugin
-//    manifest carries name/description/surfaces like its Claude counterpart.
-//    (TDD RED: neither file exists on the baseline.)
-//  - Gemini: gemini-extension.json must be valid JSON with the expected
-//    fields, alongside GEMINI.md. (TDD RED on the baseline.)
-//  - Copilot: NO forked manifest may ever exist — Copilot reuses
-//    .claude-plugin/marketplace.json as the single source of truth. This is a
-//    GREEN-on-baseline guard: it must stay green after implementation, and it
-//    is deleted/replaced only if the §3.5.2 fallback (a dedicated
-//    .github/plugin/plugin.json) is ever adopted.
+// Installer-manifest assertions for native harness formats.
+// Codex uses its documented marketplace catalog and portable plugin manifest.
+// Gemini discovers skills from the extension root; its context file must not eagerly import them.
+// Copilot officially supports Claude-compatible marketplace locations.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ROOT } = require('./shared');
+const { walkFiles } = require('../../test-support/surface-test-utils');
 
 function readJson(rel) {
   const full = path.join(ROOT, rel);
@@ -27,48 +18,77 @@ function readJson(rel) {
   return JSON.parse(fs.readFileSync(full, 'utf8'));
 }
 
-test('codex installer manifests exist and mirror the claude-plugin conventions', () => {
-  const marketplace = readJson('.codex-plugin/marketplace.json');
-  const plugin = readJson('.codex-plugin/plugin.json');
+test('codex marketplace uses the documented path and local plugin source shape', () => {
+  const marketplace = readJson('.agents/plugins/marketplace.json');
+  const plugin = readJson('plugin.json');
+  const skillEntrypoints = walkFiles(path.join(ROOT, 'skills'))
+    .filter((file) => path.basename(file) === 'SKILL.md')
+    .map((file) => path.relative(ROOT, file).split(path.sep).join('/'));
 
-  // Marketplace shape mirrors .claude-plugin/marketplace.json.
-  assert.equal(typeof marketplace.name, 'string', 'codex marketplace.json must declare a name');
-  assert.ok(
-    Array.isArray(marketplace.plugins) && marketplace.plugins.length > 0,
-    'codex marketplace.json must declare at least one plugin',
-  );
-  const entry = marketplace.plugins[0];
-  for (const field of ['name', 'source', 'description', 'category', 'tags']) {
-    assert.ok(entry[field] !== undefined, `codex marketplace plugin entry must define ${field}`);
+  assert.equal(skillEntrypoints.length, 16, 'the repository-root plugin currently exposes 16 skill files');
+  assert.ok(skillEntrypoints.includes('skills/pocket-enterprise/SKILL.md'));
+  assert.ok(skillEntrypoints.includes('skills/create-pr/SKILL.md'));
+  assert.equal(typeof marketplace.name, 'string', 'Codex marketplace must declare a name');
+  assert.ok(Array.isArray(marketplace.plugins), 'Codex marketplace must declare plugins');
+  assert.equal(marketplace.plugins.length, 1, 'Codex marketplace must expose one plugin');
+  const [entry] = marketplace.plugins;
+  assert.equal(entry.name, 'pocketto');
+  assert.deepEqual(entry.source, { source: 'local', path: './' });
+  assert.equal(typeof entry.category, 'string');
+  assert.ok(!('surface_manifest' in marketplace), 'Pocketto-specific fields are not marketplace fields');
+  assert.ok(!('surfaces' in marketplace), 'Pocketto-specific fields are not marketplace fields');
+
+  const allowedPluginFields = new Set([
+    '$schema', 'name', 'version', 'description', 'author', 'homepage', 'repository',
+    'license', 'keywords', 'extensions',
+  ]);
+  for (const field of Object.keys(plugin)) {
+    assert.ok(allowedPluginFields.has(field), `plugin.json field ${field} is outside Agent Plugins 1.0`);
   }
-  assert.equal(entry.name, 'pocketto', 'codex marketplace plugin entry must be named pocketto');
+  for (const field of ['$schema', 'name']) {
+    assert.ok(Object.hasOwn(plugin, field), `Agent Plugins 1.0 requires ${field}`);
+  }
   assert.equal(
-    marketplace.surfaces && marketplace.surfaces.core,
-    'codex/core',
-    'codex marketplace must map its core surface to codex/core',
+    plugin.$schema,
+    'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+    'Codex and Copilot use the documented portable Agent Plugins manifest',
   );
+  assert.match(plugin.name, /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/);
+  assert.ok(plugin.name.length <= 64);
+  assert.equal(typeof plugin.description, 'string');
+  assert.equal(typeof plugin.version, 'string');
+  assert.equal(typeof plugin.repository, 'string');
+  assert.equal(typeof plugin.license, 'string');
+  assert.deepEqual(Object.keys(plugin.author).sort(), ['name', 'url']);
+  assert.ok(!('surface_manifest' in plugin), 'surface_manifest is not an Agent Plugins field');
+  assert.ok(!('surfaces' in plugin), 'surfaces is not an Agent Plugins field');
 
-  // plugin.json shape mirrors .claude-plugin/plugin.json.
-  assert.equal(plugin.name, 'pocketto', 'codex plugin.json must be named pocketto');
-  assert.equal(typeof plugin.description, 'string', 'codex plugin.json must declare a description');
-  assert.equal(
-    plugin.surfaces && plugin.surfaces.core,
-    'codex/core',
-    'codex plugin.json must map its core surface to codex/core',
+  const pluginRoot = path.resolve(ROOT, entry.source.path);
+  assert.equal(pluginRoot, ROOT, 'marketplace plugin source must resolve to repository root');
+  assert.ok(fs.existsSync(path.join(pluginRoot, 'plugin.json')), 'marketplace source must contain plugin.json');
+  const packagedSkillEntrypoints = walkFiles(path.join(pluginRoot, 'skills'))
+    .filter((file) => path.basename(file) === 'SKILL.md');
+  assert.equal(packagedSkillEntrypoints.length, 16, 'portable plugin must expose 16 SKILL.md entrypoints');
+  assert.ok(
+    packagedSkillEntrypoints.some((file) => file.endsWith(path.join('pocket-enterprise', 'SKILL.md'))),
+    'portable plugin must include the Enterprise skill because it packages repository-root skills',
+  );
+  assert.ok(
+    packagedSkillEntrypoints.some((file) => file.endsWith(path.join('create-pr', 'SKILL.md'))),
+    'portable plugin must include the create-pr Enterprise skill',
   );
 });
 
-test('gemini extension manifest is valid JSON with the expected fields', () => {
+test('Gemini extension uses a concise context file instead of eagerly importing skill bodies', () => {
   const ext = readJson('gemini-extension.json');
+  const context = fs.readFileSync(path.join(ROOT, 'GEMINI.md'), 'utf8');
   assert.equal(typeof ext.name, 'string', 'gemini-extension.json must declare a name');
   assert.equal(typeof ext.description, 'string', 'gemini-extension.json must declare a description');
-  assert.ok(
-    fs.existsSync(path.join(ROOT, 'GEMINI.md')),
-    'GEMINI.md must exist at the repo root alongside gemini-extension.json',
-  );
+  assert.ok(fs.existsSync(path.join(ROOT, 'GEMINI.md')));
+  assert.ok(!context.includes('@./skills/'), 'GEMINI.md must not eagerly import skill bodies');
 });
 
-test('copilot reuses the claude marketplace manifest — no forked copilot manifest may exist', () => {
+test('copilot reuses the documented claude-compatible marketplace location', () => {
   assert.ok(
     !fs.existsSync(path.join(ROOT, '.copilot-plugin')),
     '.copilot-plugin/ must not exist: Copilot reuses .claude-plugin/ as the single source of truth',

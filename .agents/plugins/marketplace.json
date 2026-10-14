@@ -1,0 +1,16 @@
+{
+  "interface": {
+    "displayName": "Pocketto"
+  },
+  "name": "pocketto",
+  "plugins": [
+    {
+      "category": "Productivity",
+      "name": "pocketto",
+      "source": {
+        "path": "./",
+        "source": "local"
+      }
+    }
+  ]
+}

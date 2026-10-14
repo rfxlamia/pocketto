@@ -249,7 +249,7 @@ const {
 // Baseline 2026-10-14: sha256 over JSON.stringify([...files].sort()).
 // Harness installer files (.codex-plugin/, gemini-extension.json, GEMINI.md)
 // are repo-root installers, NOT Pi runtime — they must never leak into the
-// pocketto-pi npm pack (plan §3.4: "File package.json/files tidak berubah").
+// pocketto-pi npm pack (plan §3.4: "package.json files list unchanged").
 const BASELINE_PACKAGE_FILES_HASH =
 	"d943c2bfe5c2972a4c1d4b3717f5a3f06e07584fa678e3ca314ef5f0bd08b525";
 

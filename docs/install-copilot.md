@@ -1,57 +1,37 @@
-# Install Pocketto di GitHub Copilot CLI
+# Install Pocketto in GitHub Copilot CLI
 
-> Status: draf — belum smoke test end-to-end. Lihat [catatan verifikasi](#verifikasi) di bawah.
+GitHub Copilot CLI documents support for Claude-compatible marketplaces in `.claude-plugin/marketplace.json`. Pocketto reuses that marketplace rather than maintaining a second catalog.
 
-Pocketto tersedia sebagai plugin Copilot CLI. Single source of truth-nya adalah manifest `.claude-plugin/` yang sudah ada — Copilot CLI membaca ulang manifest itu apa adanya, jadi tidak ada manifest fork khusus Copilot di repo ini.
-
-## Cara install (kanonis)
+## Install
 
 ```bash
 copilot plugin marketplace add rfxlamia/pocketto
 copilot plugin install pocketto@pocketto
 ```
 
-Perintah pertama mendaftarkan marketplace Pocketto; perintah kedua menginstall plugin `pocketto` dari marketplace itu.
+The first command registers the marketplace; the second installs its `pocketto` plugin. These commands follow the [official Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference). The manifest format and location are documented by GitHub, but Pocketto's own end-to-end installation has not been smoke-tested with an authenticated Copilot CLI.
 
-## Syarat
+## Skills included
 
-- Copilot CLI terinstall dan bisa jalan di terminal.
-- Login GitHub yang punya akses Copilot (perintah plugin Copilot CLI butuh autentikasi GitHub).
+The marketplace points to Pocketto's repository plugin package, which exposes all 16 skills, including the two Enterprise skills (`pocket-enterprise` and `create-pr`). This is not a Core-only installation.
 
-## Alternatif (pihak ketiga)
-
-Kalau jalur plugin bermasalah, atau kamu mau install tanpa lewat marketplace:
+## Alternative: community skills installer
 
 ```bash
-npx skills add rfxlamia/pocketto -a github-copilot
+npx skills add rfxlamia/pocketto --skill '*' -a github-copilot -y
 ```
 
-> ⚠️ Nama agennya **harus `github-copilot`** — `-a copilot` ditolak CLI-nya ("Invalid agents: copilot"). Terverifikasi di spike 2026-10-14: 16/16 skill terinstall.
+The agent identifier is `github-copilot`. The third-party installer supports symlinks and copies; pass `--copy` to force a copy. Run `npx skills update` from the project directory to refresh installed skills. See the [`vercel-labs/skills` project](https://github.com/vercel-labs/skills).
 
-Atau via GitHub CLI:
-
-```bash
-gh skill install
-```
-
-Catatan alternatif `npx skills`: ini copy snapshot (bukan symlink) — untuk update, jalankan `npx skills update` di direktori project. `npx skills` adalah proyek pihak ketiga (`vercel-labs/skills`), bukan milik repo Pocketto.
-
-## Verifikasi
+## Verify
 
 ```bash
 copilot skill list
 ```
 
-Harusnya terlihat 16 skill Pocket (pocket-init, pocket-pitching, pocket-planning, pocket-structuring, pocket-development, pocket-grinding, pocket-closing, pocket-help, bug-hunting, hotfix, structured-research, validate-plan, brand-design, pocket-education, pocket-enterprise, create-pr).
+The Pocketto skills should be listed. Restart Copilot CLI if they do not appear.
 
-Kalau tidak ada di list, restart sesi Copilot CLI dulu, baru jalankan `copilot skill list` lagi.
+## Compatibility notes
 
-## Catatan desain
-
-- **Reuse manifest, tanpa fork.** Installer Copilot memakai ulang `.claude-plugin/marketplace.json` yang sama dipakai Claude Code. Tidak ada `.copilot-plugin/` atau `.github/plugin/` di repo — itu keputusan sadar, supaya satu file manifest tidak perlu di-sync dua kali selamanya.
-- Perintah di dokumen ini adalah command string yang di-pin di test compatibility (`test/compatibility.test.js`) — jangan diubah tanpa sinkron dengan test.
-
-## Verifikasi [BELUM TERVERIFIKASI]
-
-- [BELUM TERVERIFIKASI] Smoke test end-to-end `copilot plugin marketplace add rfxlamia/pocketto` → `copilot plugin install pocketto@pocketto` → `copilot skill list` **belum pernah dijalankan di manifest Pocketto**. Butuh Copilot CLI + login GitHub milik V (aksi V, bukan sesuatu yang bisa dikerjakan agent). Dasarnya: bukti komunitas 2+ repo + dok GitHub, tapi untuk repo ini masih asumsi.
-- [BELUM TERVERIFIKASI] Kalau reuse manifest gagal, fallback-nya `.github/plugin/plugin.json` khusus (tambahan ~0,5 sprint).
+- GitHub documents `.claude-plugin/marketplace.json` as a supported marketplace location. See the [file locations and marketplace schema](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference#file-locations).
+- Copilot CLI gives a root Agent Plugins `plugin.json` precedence over `.claude-plugin/plugin.json`. Pocketto's root manifest uses Agent Plugins 1.0; its portable skill location is the repository-root `skills/` directory. The supported marketplace location does not establish that every Pocketto installation flow works in a live Copilot CLI; that integration still needs a smoke test.

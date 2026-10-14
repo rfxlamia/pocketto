@@ -1,46 +1,37 @@
-# Install Pocketto di Codex CLI
+# Install Pocketto in Codex
 
-> Status: draf — jalur marketplace mengikuti pola manifest `.codex-plugin/` (meniru konvensi `.claude-plugin/`); smoke test CLI menunggu Codex CLI tersedia.
+Codex supports repository marketplaces through `.agents/plugins/marketplace.json`. The marketplace in this repository points to a portable plugin manifest at the repository root.
 
-Pocketto tersedia sebagai plugin Codex CLI lewat manifest `.codex-plugin/marketplace.json` + `.codex-plugin/plugin.json` di repo ini — pola yang sama dengan marketplace Claude Code.
+## Install
 
-## Cara install (kanonis)
+Add the marketplace from the repository:
 
 ```bash
 codex plugin marketplace add rfxlamia/pocketto
-codex plugin add pocketto@pocketto
 ```
 
-Perintah pertama mendaftarkan marketplace Pocketto; perintah kedua menginstall plugin `pocketto` dari marketplace itu.
+Then open the plugin browser with `/plugins`, select the Pocketto marketplace, and install Pocketto. Start a new session before using the installed skills.
 
-## Syarat
+The marketplace command is documented by [OpenAI's plugin packaging guide](https://developers.openai.com/plugins/build/plugins). The `/plugins` browser is the documented Codex CLI installation flow; this repository's installation has not yet been smoke-tested in Codex CLI.
 
-- Codex CLI terinstall.
+## Skills included
 
-## Alternatif (drop-in, terverifikasi spike)
+The repository-root plugin exposes all 16 Pocketto skills, including the two Enterprise skills (`pocket-enterprise` and `create-pr`). This is not a Core-only installation. Do not install it if Enterprise skills must be excluded.
 
-Kalau jalur marketplace bermasalah, install langsung sebagai skill tanpa lewat plugin system:
+For local skill discovery without installing a plugin, use the community-maintained `npx skills` CLI:
 
 ```bash
-npx skills add rfxlamia/pocketto -a codex
+npx skills add rfxlamia/pocketto --skill '*' -a codex -y
 ```
 
-Ini drop-in ke `.agents/skills/` (project scope) — Codex membaca folder itu secara native. Terverifikasi di spike 2026-10-14: 16/16 skill terinstall, frontmatter 16/16 ter-parse.
+This installs skills into the repository's `.agents/skills/` directory. `npx skills` is a third-party project maintained at [vercel-labs/skills](https://github.com/vercel-labs/skills), not a Pocketto product.
 
-Catatan: mode default `npx skills` adalah copy snapshot — untuk update, jalankan `npx skills update`. `npx skills` adalah proyek pihak ketiga (`vercel-labs/skills`), bukan milik repo Pocketto.
+## Verify
 
-## Verifikasi
+In Codex, run `/skills` or start a new session and ask Codex to use `$pocket-init`. The repository includes all 16 skills; plugin behavior has not been smoke-tested against a real Codex CLI installation.
 
-- Jalankan `$pocket-init` di Codex — kalau skill-nya kepasang, Codex mengenali dan menjalankan workflow init Pocketto.
-- Atau cek daftar skills yang dikenali Codex di sesi kamu.
-- Fallback (jalur drop-in): pastikan folder `.agents/skills/` ada di project dir dan berisi 16 folder skill.
+## Compatibility notes
 
-## Catatan desain
-
-- **Frontmatter kompatibel Codex.** Frontmatter resmi Codex cuma `name` + `description` — 15 dari 16 SKILL.md Pocketto sudah bersih; satu-satunya pengecualian `skills/validate-plan/SKILL.md` yang punya key tambahan `category: planning` (ditemukan spike 2026-10-14; penghapusan key-nya menunggu izin V karena menyentuh repo).
-- Perintah di dokumen ini adalah command string yang di-pin di test compatibility (`test/compatibility.test.js`) — jangan diubah tanpa sinkron dengan test.
-
-## Verifikasi [BELUM TERVERIFIKASI]
-
-- [BELUM TERVERIFIKASI] Smoke test end-to-end `codex plugin marketplace add` → `codex plugin add` di Codex CLI asli belum dijalankan (Codex CLI tidak tersedia di sandbox spike).
-- [BELUM TERVERIFIKASI] Perilaku key frontmatter `category` (di `validate-plan`) di Codex CLI asli — kemungkinan besar diabaikan, tapi belum diuji.
+- Codex reads repository marketplace catalogs from `.agents/plugins/marketplace.json`. OpenAI also documents `.claude-plugin/marketplace.json` as a Claude-compatible marketplace location; `.codex-plugin/` is reserved for the Codex plugin compatibility manifest.
+- The plugin uses the portable Agent Plugins 1.0 manifest at `plugin.json`. Codex fixed plugin paths discover skills in the repository-root `skills/` directory; Pocketto's surface-role metadata in `surfaces.json` is not part of Codex's plugin schema.
+- OpenAI documentation: [Build and package plugins](https://developers.openai.com/plugins/build/plugins), [Codex plugin management](https://developers.openai.com/codex/enterprise/plugin-management), and [Codex plugins](https://developers.openai.com/codex/plugins).
