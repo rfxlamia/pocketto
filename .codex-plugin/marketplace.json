@@ -1,0 +1,32 @@
+{
+  "description": "Pocket-driven development skills for Codex CLI",
+  "name": "pocketto",
+  "owner": {
+    "name": "rfxlamia",
+    "url": "https://github.com/rfxlamia"
+  },
+  "plugins": [
+    {
+      "category": "productivity",
+      "description": "Structured subagent delegation, bug hunting, iterative planning, and code review workflows.",
+      "name": "pocketto",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/rfxlamia/pocketto.git"
+      },
+      "tags": [
+        "pocket",
+        "development",
+        "delegation",
+        "bug-hunting",
+        "planning",
+        "structured-research"
+      ]
+    }
+  ],
+  "surface_manifest": "./surfaces.json",
+  "surfaces": {
+    "core": "codex/core"
+  },
+  "version": "4.2.1"
+}
