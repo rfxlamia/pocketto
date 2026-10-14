@@ -34,8 +34,8 @@ function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function runCli(repo, args, { envOverride } = {}) {
-  const r = spawnSync(process.execPath, [CLI, ...args, '--json', '--contract', '3'], {
+function runCli(repo, args, { envOverride, json = true } = {}) {
+  const r = spawnSync(process.execPath, [CLI, ...args, ...(json ? ['--json'] : []), '--contract', '3'], {
     cwd: repo,
     encoding: 'utf8',
     env: envOverride || { ...process.env, POCKETTO_LIFECYCLE_NOW: FIXED_CLOCK },
@@ -403,6 +403,7 @@ for (const entry of [
   { name: 'foreign branch', branch: 'unrelated/session', relativePath: null },
   { name: 'detached HEAD', branch: null, relativePath: null },
   { name: 'near-prefix directory', branch: 'feature/near', relativePath: '.worktree-other/T1' },
+  { name: 'DEL and C1 metadata', branch: 'feature/\u009b31m', relativePath: 'foreign worktrees/T1\u007f\u0085\u009b\u2028\u2029' },
   { name: 'path with spaces and newline', branch: 'feature/path', relativePath: 'foreign worktrees/T1\nbranch refs/heads/task/fake' },
 ]) {
   test(`handoff worktree ownership: ${entry.name} succeeds with a warning and leaves the worktree unchanged`, () => {
@@ -418,6 +419,59 @@ for (const entry of [
     assert.deepEqual(headState(location), before);
     assert.equal(git(location, 'status', '--porcelain'), '');
     assert.equal(phaseClosedEvents(fx.specDir).length, 1);
+    assert.equal(headState(fx.repo).branch, 'pocket/p/phase-2');
+  });
+}
+
+for (const scenario of [
+  { name: 'foreign branch and detached HEAD', entries: [{ branch: 'feature/human' }, { branch: null }] },
+  { name: 'escaped newline and terminal control', entries: [{ branch: 'feature/path', relativePath: 'foreign worktrees/T1\nunsafe\x1b[31m' }] },
+  {
+    name: 'escaped DEL C1 and Unicode separators',
+    entries: [{
+      branch: 'feature/\u009b31m', relativePath: 'foreign worktrees/T1\u007f\u0085\u009b\u2028\u2029',
+      branchText: 'feature/\\u009b31m', pathText: 'foreign worktrees/T1\\u007f\\u0085\\u009b\\u2028\\u2029',
+    }],
+  },
+  { name: 'no foreign worktrees', entries: [] },
+]) {
+  test(`handoff human warnings: ${scenario.name}`, () => {
+    const fx = makeStackedPlan();
+    writeCloseout(fx.planDir, [phaseSection(1, 2)]);
+    const extras = scenario.entries.map((entry) => {
+      const location = extraWorktree(fx, entry);
+      return { ...entry, location, before: headState(location) };
+    });
+    const r = runCli(fx.repo, ['log', 'handoff', fx.planDir, fx.phaseFile], { json: false });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const lines = r.stdout.trimEnd().split('\n');
+    assert.equal(lines[0], 'Handed off execution-plan/phase-1.md (phase-1)');
+    assert.match(lines[1], /^  snapshot : reviews\/closeout-phase-1\.md \(written\)$/);
+    assert.equal(lines[2], '  event    : committed');
+    assert.equal(lines[3], '  commit   : committed');
+    assert.equal(lines[4], '  branch   : created');
+    const warnings = lines.slice(5);
+    assert.equal(warnings.length, extras.length, 'each foreign worktree must have one human warning');
+    extras.forEach(({ location, branch, branchText, pathText, before }) => {
+      const expectedBranch = branch === null ? 'detached HEAD' : (branchText || branch);
+      const matches = warnings.filter((line) => line.includes(expectedBranch));
+      assert.equal(matches.length, 1, 'each branch must appear in exactly one warning');
+      const warning = matches[0];
+      assert.match(warning, /warning/i);
+      assert.match(warning, /registered/i);
+      if (pathText) {
+        assert.ok(warning.includes(pathText), warning);
+        assert.doesNotMatch(r.stdout, /[\u007f-\u009f\u2028\u2029]/, 'human output must escape DEL/C1 and line separators');
+      } else if (location.includes('\n')) {
+        assert.ok(warning.includes('foreign worktrees/T1\\nunsafe\\u001b[31m'), warning);
+        assert.ok(!r.stdout.includes(location), 'path must not contain a raw newline');
+        assert.ok(!r.stdout.includes('\x1b'), 'path must not inject a terminal escape');
+      } else {
+        assert.ok(warning.includes(location), warning);
+      }
+      assert.ok(warning.includes(expectedBranch), warning);
+      assert.deepEqual(headState(location), before);
+    });
     assert.equal(headState(fx.repo).branch, 'pocket/p/phase-2');
   });
 }
