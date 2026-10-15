@@ -120,11 +120,11 @@ function assertManifestRoles(readme) {
 
 function assertReleaseIdentifiers(releaseDocs) {
 	for (const [label, pattern] of [
-		["active README release version 4.2.1", /Version `4\.2\.1` is built from/],
-		["llms.txt release version 4.2.1", /Pocketto `4\.2\.1` provides/],
-		["create-pr package version 4.2.1", /Package `4\.2\.1` uses/],
-		["Enterprise skill package version 4.2.1", /package `4\.2\.1`, CLI/],
-		["lifecycle contract package version 4.2.1", /Package `4\.2\.1` ships/],
+		["active README release version 4.2.2", /Version `4\.2\.2` is built from/],
+		["llms.txt release version 4.2.2", /Pocketto `4\.2\.2` provides/],
+		["create-pr package version 4.2.2", /Package `4\.2\.2` uses/],
+		["Enterprise skill package version 4.2.2", /package `4\.2\.2`, CLI/],
+		["lifecycle contract package version 4.2.2", /Package `4\.2\.2` ships/],
 		["CLI CONTRACT=3", /\bCONTRACT\s*=\s*3\b/],
 		["PIPELINE=5", /\bPIPELINE\s*=\s*5\b/],
 		["LIFECYCLE_SCHEMA=2", /\bLIFECYCLE_SCHEMA\s*=\s*2\b/],

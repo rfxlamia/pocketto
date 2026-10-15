@@ -4,6 +4,10 @@ All notable changes to Pocketto are documented here, newest first. Dates are the
 
 ## Unreleased
 
+## 4.2.2 — 2026-10-16
+
+**Handoff worktree handling.** `log handoff` now refuses only when Pocket parallel-group worktrees remain registered: entries inside the main worktree's `.worktree/` directory or checked out on a `task/*` branch. Worktrees owned by unrelated sessions no longer block handoff; they are reported as `HANDOFF_FOREIGN_WORKTREE` entries in `data.warnings` (additive, `CONTRACT` unchanged) and as a `warning` line in human output, with path and branch escaped. `HANDOFF_WORKTREES_ACTIVE` is unchanged in code but now lists only parallel-group worktrees. Worktree listing uses NUL-delimited output so paths with spaces or newlines are handled.
+
 ## 4.2.1 — 2026-10-13
 
 **Enterprise adapter portability (issue #74).** Default Enterprise registrations now use portable runtime-token arguments instead of machine-specific absolute paths. Core resolves the bundled tokens and preflight validates the resolved executable and dispatcher before remote operations. This requires Core `4.2.1` or later; upgrade the matching Core before installing or reinstalling Enterprise. Existing absolute-path registrations remain usable but preflight reports `ADAPTER_REGISTRATION_NOT_PORTABLE`; reinstall after upgrading Core to migrate them. Replacing a custom registration still requires explicit authorization and preserving its `--argv` entries.
