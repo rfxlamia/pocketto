@@ -5,7 +5,7 @@ description: Fast iteration workflow with mandatory subagent plan review. Use wh
 
 # Hotfix
 
-Fast, accurate iteration. Not cowboy coding. Not full superpowers ceremony.
+Fast, accurate iteration. Not cowboy coding. Not full pocket pipeline ceremony.
 
 **Use this when:** Small-to-medium changes where brainstorm → spec → plan → review is overkill.
 **Use pocket-grinding instead when:** New system, architectural decision, unclear/contested requirements, or work spanning many files/phases. (A small, clearly-specified feature addition — e.g. a zoom button or CSV export — stays here in `hotfix`; "it's a feature" alone is not a reason to escalate.)
@@ -28,7 +28,7 @@ Write no implementation code until the user explicitly chooses. "Implement it" �
 
 **Step 1: Capture intent**
 Restate the goal in 1-2 sentences. Surface ambiguity now, not after coding.
-If the requirement is unclear after 1 clarifying question, escalate to superpowers/brainstorming.
+If the requirement is unclear after 1 clarifying question, escalate to pocket-grinding.
 
 **Step 2: Write brief plan**
 3-5 bullets covering: what changes, where, how, and test approach.
@@ -102,8 +102,8 @@ The brief plan scales in depth. The gates do not scale — they are always on.
 | Typo / string fix | 2 bullets acceptable | No |
 | Small UI change | 3-4 bullets | No |
 | Logic / behavior change | 4-5 bullets + edge cases | No |
-| New endpoint / component | 5 bullets minimum | Consider superpowers |
-| Architectural / multi-system | Brief plan is insufficient | Yes → superpowers/brainstorming |
+| New endpoint / component | 5 bullets minimum | Consider pocket-grinding |
+| Architectural / multi-system | Brief plan is insufficient | Yes → pocket pipeline |
 
 ---
 
