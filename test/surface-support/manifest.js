@@ -29,6 +29,10 @@ function assertRoleContract(manifest) {
   assert.deepEqual(manifest.roles['claude/enterprise'].requires, ['claude/core']);
   assert.deepEqual(manifest.roles['pi/core'].requires, []);
   assert.deepEqual(manifest.roles['claude/core'].requires, []);
+  for (const role of ['copilot/core', 'codex/core', 'gemini/core', 'agents/core']) {
+    assert.ok(manifest.roles[role], `${role}: wave-1 harness core role must be declared`);
+    assert.deepEqual(manifest.roles[role].requires, [], `${role}: harness core role must require nothing`);
+  }
 
   assert.ok(manifest.ownership, 'ownership map required');
   for (const mod of NAMED_CLI_MODULES) {
@@ -48,10 +52,10 @@ function assertManifestRelease(manifest) {
     'release major must be 4',
   );
   const roles = Object.keys(manifest.roles || {}).sort();
-  assert.deepEqual(roles, [...EXPECTED_ROLES].sort(), 'exactly four roles required');
+  assert.deepEqual(roles, [...EXPECTED_ROLES].sort(), 'exactly the expected roles required');
 }
 
-test('manifest declares exactly four explicit roles with no wildcard package surface', () => {
+test('manifest declares exactly the expected explicit roles with no wildcard package surface', () => {
   const { loadManifest } = require(LIB);
   const manifest = loadManifest(MANIFEST_PATH);
 

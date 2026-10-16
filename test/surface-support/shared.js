@@ -7,7 +7,16 @@ const MANIFEST_PATH = path.join(ROOT, 'surfaces.json');
 const BUILDER = path.join(ROOT, 'scripts', 'build-surfaces.js');
 const LIB = path.join(ROOT, 'cli', 'lib', 'surface-manifest.js');
 
-const EXPECTED_ROLES = ['pi/core', 'pi/enterprise', 'claude/core', 'claude/enterprise'];
+const EXPECTED_ROLES = [
+  'pi/core',
+  'pi/enterprise',
+  'claude/core',
+  'claude/enterprise',
+  'copilot/core',
+  'codex/core',
+  'gemini/core',
+  'agents/core',
+];
 const LIFECYCLE_CORE_MODULES = [
   'cli/lib/lifecycle-dispatch.js',
   'cli/lib/lifecycle-drain.js',

@@ -15,7 +15,7 @@ const {
   withTemporaryDirectory,
 } = require('../surface-test-utils');
 
-const CORE_ROLES = ['pi/core', 'claude/core'];
+const CORE_ROLES = ['pi/core', 'claude/core', 'copilot/core', 'codex/core', 'gemini/core', 'agents/core'];
 const CORE_SKILLS = [
   'validate-plan',
   'pocket-grinding',

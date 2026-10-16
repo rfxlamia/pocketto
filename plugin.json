@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "author": {
+    "name": "rfxlamia",
+    "url": "https://github.com/rfxlamia"
+  },
+  "description": "Pocket-driven development skills for structured planning, delegation, code review, and optional Enterprise workflows.",
+  "license": "MIT",
+  "name": "pocketto",
+  "repository": "https://github.com/rfxlamia/pocketto",
+  "version": "4.2.1"
+}

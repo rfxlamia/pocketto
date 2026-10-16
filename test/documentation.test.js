@@ -16,6 +16,10 @@ const DOCUMENTATION_PATHS = [
 	"skills/pocket-development/SKILL.md",
 	"skills/pocket-closing/SKILL.md",
 	"skills/create-pr/SKILL.md",
+	"docs/install-copilot.md",
+	"docs/install-codex.md",
+	"docs/install-gemini.md",
+	"docs/install-agents-drop-in.md",
 ];
 
 function readDocumentation() {
