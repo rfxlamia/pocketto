@@ -1,6 +1,6 @@
 ---
 name: hotfix
-description: Fast iteration workflow with mandatory subagent plan review. Use when implementing small-to-medium changes quickly. Trigger on "quick fix", "small change", "just update X", or any change where full superpowers ceremony is overkill but accuracy still matters. Enforces brief-plan + subagent-review gates before any implementation.
+description: Fast iteration workflow with mandatory subagent plan review. Use when implementing small-to-medium changes quickly. Trigger on "quick fix", "small change", "just update X", or any change where full pocket ceremony is overkill but accuracy still matters. Enforces brief-plan + subagent-review gates before any implementation.
 ---
 
 # Hotfix

@@ -26,7 +26,7 @@ What a valid brief plan looks like. Load this during Step 2 of quick-iteration.
 
 Write as a bulleted list. 3-5 bullets. No headers, no prose paragraphs.
 If you need more than 5 bullets, the task is too large for quick-iteration —
-escalate to superpowers/brainstorming.
+escalate to pocket-grinding.
 
 ---
 
