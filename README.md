@@ -2,7 +2,7 @@
 
 # 🪐 Pocketto
 
-**Structured AI coding workflows for [Claude Code](https://docs.claude.com/en/docs/claude-code) and [Pi](https://github.com/badlogic/pi-mono).**
+**Structured AI coding workflows, installable as skills for supported AI agents.**
 From a rough idea to reviewed, shipped code — without the agent improvising.
 
 [![npm](https://img.shields.io/npm/v/pocketto-pi?color=cb3837&logo=npm)](https://www.npmjs.com/package/pocketto-pi)
@@ -29,6 +29,20 @@ Coding agents are great at *writing* code and bad at *not skipping steps*. Pocke
 </p>
 
 ## Install
+
+### Install for supported agents
+
+Install Pocketto skills with the [Skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add rfxlamia/pocketto
+```
+
+Choose the skills and agent destinations in the interactive prompts. The universal `.agents/skills` destination is always included; the CLI supports additional harness-specific install destinations for 60+ agents. This refers to installation targets, not feature parity across agents.
+
+### Native installation
+
+Claude Code and Pi users can also install through their native distribution paths:
 
 <table>
 <tr><th>Pi</th><th>Claude Code</th></tr>
