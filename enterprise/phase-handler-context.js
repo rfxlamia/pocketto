@@ -89,7 +89,7 @@ function resolvePlanArtifactPath(planDir, relative, label, { allowMissing = fals
   return physical;
 }
 
-function resolveLifecyclePath(root, registeredRoot, value, label) {
+function resolveLifecyclePath(root, registeredRoot, value, label, { lifecycleDirectory = false } = {}) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new PhaseHandlerError('PHASE_LIFECYCLE_PATH_REQUIRED', `Lifecycle metadata does not contain ${label}.`);
   }
@@ -104,10 +104,42 @@ function resolveLifecyclePath(root, registeredRoot, value, label) {
     physical = fs.realpathSync(resolved);
   } catch (error) {
     if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo(label, error);
+    if (lifecycleDirectory && error && error.code === 'ENOENT') {
+      missingLifecycleDocument(root, path.join(resolved, 'lifecycle.json'));
+    }
     throw invalidLifecyclePath(label);
   }
   if (!isInside(root, physical)) throw invalidLifecyclePath(label);
   return { resolved, physical };
+}
+
+// An absent path is missing only after its nearest existing ancestor has
+// passed containment checks. Dangling symlinks remain invalid paths.
+function missingLifecycleDocument(root, candidate) {
+  if (!isInside(root, candidate)) throw invalidLifecyclePath('document');
+  let ancestor = candidate;
+  while (true) {
+    try {
+      fs.lstatSync(ancestor);
+    } catch (error) {
+      if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('document', error);
+      if (!error || error.code !== 'ENOENT') throw invalidLifecyclePath('document');
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) throw invalidLifecyclePath('document');
+      ancestor = parent;
+      continue;
+    }
+    try {
+      if (!isInside(root, fs.realpathSync(ancestor))) throw invalidLifecyclePath('document');
+    } catch (error) {
+      if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('document', error);
+      throw invalidLifecyclePath('document');
+    }
+    break;
+  }
+  const specDir = path.dirname(candidate);
+  throw new PhaseHandlerError('PHASE_LIFECYCLE_MISSING',
+    `${candidate} not found; run 'pocketto-pi lifecycle transition ${specDir} spec-approved --artifact <root>:<kind>:<relative-path>:<sha256>' or 'pocketto-pi lifecycle repair ${specDir}'.`);
 }
 
 function resolveLifecycleFile(root, candidate) {
@@ -115,12 +147,13 @@ function resolveLifecycleFile(root, candidate) {
   try {
     physical = fs.realpathSync(candidate);
   } catch (error) {
-    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('lifecycle document', error);
-    throw invalidLifecyclePath('lifecycle document');
+    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('document', error);
+    if (error && error.code === 'ENOENT') missingLifecycleDocument(root, candidate);
+    throw invalidLifecyclePath('document');
   }
   const specDir = path.dirname(candidate);
   if (!isInside(root, physical) || !isInside(specDir, physical)) {
-    throw invalidLifecyclePath('lifecycle document');
+    throw invalidLifecyclePath('document');
   }
   return physical;
 }
@@ -203,7 +236,7 @@ function loadContext(event, options = {}) {
   }
   const { registeredRoot, root } = resolveRegisteredRoot(options);
   const specCandidate = path.resolve(registeredRoot, 'docs', 'pocket', 'spec', event.plan_id);
-  const specPath = resolveLifecyclePath(root, registeredRoot, specCandidate, 'spec directory');
+  const specPath = resolveLifecyclePath(root, registeredRoot, specCandidate, 'spec directory', { lifecycleDirectory: true });
   const specDir = specPath.physical;
   const expectedSpecDir = path.resolve(root, 'docs', 'pocket', 'spec', event.plan_id);
   if (specDir !== expectedSpecDir) {

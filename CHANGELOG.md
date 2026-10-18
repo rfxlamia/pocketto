@@ -4,6 +4,8 @@ All notable changes to Pocketto are documented here, newest first. Dates are the
 
 ## Unreleased
 
+**Missing lifecycle evidence (issue #84).** Enterprise phase handlers now report `PHASE_LIFECYCLE_MISSING` with recovery commands when `lifecycle.json` is absent, while unsafe paths remain `PHASE_LIFECYCLE_PATH_INVALID`. Core log init, phase REVIEW/DONE updates, handoff, and close warn with `LIFECYCLE_DOCUMENT_MISSING` for stacked or adapter-registered plans; commands still succeed and do not create lifecycle documents. Handoff explicitly reports that `phase-closed` was not recorded.
+
 ## 4.2.2 — 2026-10-16
 
 **Handoff worktree handling.** `log handoff` now refuses only when Pocket parallel-group worktrees remain registered: entries inside the main worktree's `.worktree/` directory or checked out on a `task/*` branch. Worktrees owned by unrelated sessions no longer block handoff; they are reported as `HANDOFF_FOREIGN_WORKTREE` entries in `data.warnings` (additive, `CONTRACT` unchanged) and as a `warning` line in human output, with path and branch escaped. `HANDOFF_WORKTREES_ACTIVE` is unchanged in code but now lists only parallel-group worktrees. Worktree listing uses NUL-delimited output so paths with spaces or newlines are handled.

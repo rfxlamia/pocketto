@@ -207,6 +207,28 @@ function lifecycleSpecDirForPlan(planDir) {
   return null;
 }
 
+// Read-only advisory: emission hooks still skip plans without a document.
+// Commands can append these fields without changing their success behavior.
+function lifecycleDocumentAdvisory(planDir, log, { eventType = null } = {}) {
+  const empty = { warnings: [], next_actions: [] };
+  const stacked = log && log.header && log.header.phase_branches
+    && log.header.phase_branches.mode === 'stacked';
+  if (!stacked && !hasAdapterRegistration(planDir)) return empty;
+  const specDir = lifecycleSpecDirForPlan(planDir);
+  if (!specDir || existsSync(path.join(specDir, 'lifecycle.json'))) return empty;
+  const resolved = path.resolve(specDir);
+  // Keep recovery commands safe to paste even when the path has shell syntax.
+  const quoted = "'" + resolved.replace(/'/g, "'\\''") + "'";
+  const command = `pocketto-pi lifecycle transition ${quoted} spec-approved --artifact <root>:<kind>:<relative-path>:<sha256>`;
+  const repair = `pocketto-pi lifecycle repair ${quoted}`;
+  const consequence = eventType ? ` ${eventType} was not recorded.` : ' Lifecycle evidence cannot be recorded while the document is absent.';
+  const message = `${path.join(resolved, 'lifecycle.json')} not found.${consequence} Run '${command}' or '${repair}'.`;
+  return {
+    warnings: [{ code: 'LIFECYCLE_DOCUMENT_MISSING', message }],
+    next_actions: [{ required: true, command, reason: message }],
+  };
+}
+
 // Per-phase branch identity for a stacked plan, read from the log.json header
 // and the matching phase entry. Returns null for every other plan (none
 // strategy or no header mode), so none plans take the legacy path unchanged.
@@ -510,4 +532,4 @@ function runPlanCloseTransition({ planDir, logPath, log, phaseFiles, mutate, dep
   });
 }
 
-module.exports = { parseArtifactFlag, planIdFor, planIdForLog, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, emitPhaseClosed, runLifecycleTransition, transitionDeps, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };
+module.exports = { lifecycleDocumentAdvisory, parseArtifactFlag, planIdFor, planIdForLog, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, emitPhaseClosed, runLifecycleTransition, transitionDeps, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };

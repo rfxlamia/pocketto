@@ -9,7 +9,7 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { writeLog, todayISO, readLogChecked, withProjectionMutation } = require('../lib/logjson');
-const { runPhaseUpdateTransition, runPlanCloseTransition, lifecycleSpecDirForPlan } = require('../lib/lifecycle-transition');
+const { runPhaseUpdateTransition, runPlanCloseTransition, lifecycleSpecDirForPlan, lifecycleDocumentAdvisory } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 const { currentBranch } = require('../lib/git-worktree');
 const { pendingDrainActions } = require('../lib/next-actions');
@@ -228,6 +228,16 @@ function buildOwnerMap(planDir, phase, baselineSha) {
   return owner;
 }
 
+// Append advisory fields only when needed, preserving unaffected envelopes.
+function withLifecycleAdvisory(result, planDir, log) {
+  const advisory = lifecycleDocumentAdvisory(planDir, log);
+  if (!advisory.warnings.length) return result;
+  result.data.warnings = [...(result.data.warnings || []), ...advisory.warnings];
+  if (Array.isArray(result.data.next_actions)) result.data.next_actions.push(...advisory.next_actions);
+  result.human.push(...advisory.warnings.map(warning => `Warning ${warning.code}: ${warning.message}`));
+  return result;
+}
+
 // ─── INIT ───────────────────────────────────────────────────────────────────
 
 function init(positionals, { phaseBranches: requested = null } = {}) {
@@ -240,7 +250,7 @@ function init(positionals, { phaseBranches: requested = null } = {}) {
 
   if (existsSync(logPath)) {
     phaseBranches.assertUnlocked({ logPath, requested: flag });
-    return migrateExisting(planDir, logPath);
+    return withLifecycleAdvisory(migrateExisting(planDir, logPath), planDir, readLogChecked(logPath));
   }
 
   // A fresh init cannot produce duplicate done_sha values: tasks are created
@@ -282,7 +292,7 @@ function init(positionals, { phaseBranches: requested = null } = {}) {
     human.push(`    [${p.order}] ${p.file} → ${p.status} | tasks: ${ids || 'none'}`);
   }
 
-  return {
+  return withLifecycleAdvisory({
     command: 'log init',
     exit: 0,
     human,
@@ -290,7 +300,7 @@ function init(positionals, { phaseBranches: requested = null } = {}) {
       planDir, logPath, planType, migrated: false, phaseCount: phases.length, phases,
       ...phaseBranches.initEnvelope({ strategy, stacked }),
     },
-  };
+  }, planDir, log);
 }
 
 // Pre-existing logs may carry duplicate done_sha values recorded before the
@@ -634,7 +644,9 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
   }
   data.phases = log.phases;
 
-  return { command: 'log update', exit: 0, human, data };
+  const result = { command: 'log update', exit: 0, human, data };
+  return !taskId && ['REVIEW', 'DONE'].includes(newStatus)
+    ? withLifecycleAdvisory(result, planDir, log) : result;
 }
 
 // ─── CORRECTION ─────────────────────────────────────────────────────────────
@@ -857,12 +869,12 @@ function close(positionals, { projectionWriter = null, adapterRunner = null } = 
     data.branch = { from: currentBranch(planDir), created: null, switched: false, status: 'none' };
   }
 
-  return {
+  return withLifecycleAdvisory({
     command: 'log close',
     exit: 0,
     human,
     data,
-  };
+  }, planDir, log);
 }
 
 // ─── DISPATCH ───────────────────────────────────────────────────────────────
