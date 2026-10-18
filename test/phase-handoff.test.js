@@ -1138,3 +1138,30 @@ test('handoff null plan id: a non-slug plan dir fails with PHASE_BRANCHES_PLAN_I
   assert.match(r.env.error.message, /slug/);
   assert.equal(refSha(fx.repo, 'refs/heads/pocket/null/phase-2'), null);
 });
+
+// Issue #84: closing a stacked plan whose spec dir has no lifecycle.json records no
+// plan-closed event, so `log close` names the gap instead of a clean success.
+test('missing lifecycle: log close on a stacked plan without lifecycle.json warns LIFECYCLE_DOCUMENT_MISSING', () => {
+  const { repo, planDir, specDir } = makeStackedPlan({ phases: 1, lifecycle: false });
+  const env = okCli(repo, ['log', 'close', planDir]);
+  assert.equal(env.data.event, null);
+  const warning = env.data.warnings.find((w) => w.code === 'LIFECYCLE_DOCUMENT_MISSING');
+  assert.ok(warning, JSON.stringify(env.data.warnings));
+  assert.equal(warning.path, path.join(specDir, 'lifecycle.json'));
+  assert.deepEqual(env.data.next_actions, []);
+  const human = runCli(repo, ['log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW'], { json: false });
+  assert.match(human.stdout, /LIFECYCLE_DOCUMENT_MISSING: .*lifecycle\.json not found/);
+});
+
+test('missing lifecycle: a none-strategy plan with no adapter registration gets no lifecycle warning', () => {
+  const { repo, planDir } = makeStackedPlan({ phases: 1, lifecycle: false, strategy: 'none', done: false });
+  const env = okCli(repo, ['log', 'update', planDir, 'execution-plan/phase-1.md', 'DONE']);
+  assert.deepEqual(env.data.warnings, []);
+});
+
+test('missing lifecycle: an adapter-registered none-strategy plan warns on phase updates', () => {
+  const { repo, planDir } = makeStackedPlan({ phases: 1, lifecycle: false, strategy: 'none', done: false });
+  writeRegistration(repo);
+  const env = okCli(repo, ['log', 'update', planDir, 'execution-plan/phase-1.md', 'DONE']);
+  assert.deepEqual(env.data.warnings.map((w) => w.code), ['LIFECYCLE_DOCUMENT_MISSING']);
+});

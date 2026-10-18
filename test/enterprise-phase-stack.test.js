@@ -1044,7 +1044,7 @@ function writeText(file, text) {
 }
 
 // Plan `p` with two phases; phase 1 is DONE and handed off, so HEAD sits on pocket/p/phase-2.
-function handedOffPlan(t, { stacked = true, consent = true } = {}) {
+function handedOffPlan(t, { stacked = true, consent = true, lifecycle = true } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'publish-phase-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const fake = installFakeGitHub(root);
@@ -1071,25 +1071,28 @@ function handedOffPlan(t, { stacked = true, consent = true } = {}) {
   for (const order of [1, 2]) {
     writeText(path.join(planDir, 'execution-plan', `phase-${order}.md`), `# Phase ${order}: Fixture\n\n### Task ${order}: Behavior ${order}\n\nBody.\n`);
   }
-  const core = (...args) => okNode(work, env, [CORE_CLI, ...args, '--json', '--contract', '3']);
-  core('log', 'init', planDir, '--phase-branches', stacked ? 'stacked' : 'none');
-  const specHash = require('node:crypto').createHash('sha256').update(specBody).digest('hex');
-  core('lifecycle', 'transition', specDir, 'spec-approved', '--artifact', `spec:spec-doc:approved-spec.md:${specHash}`);
-  core('log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW');
-  core('log', 'update', planDir, 'execution-plan/phase-1.md', 'DONE');
+  const envelopes = {};
+  const core = (...args) => JSON.parse(okNode(work, env, [CORE_CLI, ...args, '--json', '--contract', '3']).stdout);
+  envelopes.init = core('log', 'init', planDir, '--phase-branches', stacked ? 'stacked' : 'none');
+  if (lifecycle) {
+    const specHash = require('node:crypto').createHash('sha256').update(specBody).digest('hex');
+    core('lifecycle', 'transition', specDir, 'spec-approved', '--artifact', `spec:spec-doc:approved-spec.md:${specHash}`);
+  }
+  envelopes.review = core('log', 'update', planDir, 'execution-plan/phase-1.md', 'REVIEW');
+  envelopes.done = core('log', 'update', planDir, 'execution-plan/phase-1.md', 'DONE');
   if (stacked) {
     writeText(path.join(planDir, 'closeout.md'), [
       '# Pocket Closeout - Fixture', '',
       '## Phase 1 of 2 - Fixture phase 1', '<!-- pocket-closeout:phase-1 -->', '',
       '**Status:** Complete', '', '### What was completed', '', '- T1 done', '',
     ].join('\n'));
-    core('log', 'handoff', planDir, 'execution-plan/phase-1.md');
+    envelopes.handoff = core('log', 'handoff', planDir, 'execution-plan/phase-1.md');
   }
   const installArgs = [ENTERPRISE_CLI, 'install', work, '--phase-branches', stacked ? 'stacked' : 'none'];
   if (consent) installArgs.push('--push-consent', 'phase-branches');
   okNode(work, env, [...installArgs, '--json']);
   enterpriseMeta.setIssueIdentity(specDir, { number: 73, url: 'https://github.com/acme/pocketto/issues/73' });
-  return { root, work, origin, planDir, specDir, env, fake };
+  return { root, work, origin, planDir, specDir, env, fake, envelopes };
 }
 
 function publishCli(plan, phaseKey = 'phase-1') {
@@ -1168,6 +1171,69 @@ test('publish-phase not stacked: a non-stacked plan is refused with zero gh call
   assert.ok(envelope && envelope.ok === false, JSON.stringify(envelope));
   assert.equal(envelope.error.code, 'PHASE_CLOSED_NOT_STACKED');
   assert.equal(fakeState(plan).calls.length, 0);
+});
+
+// Issue #84: a stacked plan whose spec never went through spec-approved has no lifecycle.json.
+test('publish-phase missing lifecycle: reports PHASE_LIFECYCLE_MISSING with the recovery command, not a path violation', (t) => {
+  const plan = handedOffPlan(t, { lifecycle: false });
+  assert.equal(fs.existsSync(path.join(plan.specDir, 'lifecycle.json')), false);
+
+  for (const projectRoot of [plan.work, path.relative(plan.work, plan.work) || '.']) {
+    const result = runNode(plan.work, plan.env, [ENTERPRISE_CLI, 'publish-phase', projectRoot, plan.specDir, 'phase-1', '--json']);
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.command, 'enterprise-publish-phase');
+    assert.equal(envelope.error.code, 'PHASE_LIFECYCLE_MISSING', JSON.stringify(envelope));
+    assert.match(envelope.error.message, /docs\/pocket\/spec\/p\/lifecycle\.json not found/);
+    assert.match(envelope.error.message, /pocketto-pi lifecycle transition docs\/pocket\/spec\/p spec-approved/);
+    assert.doesNotMatch(envelope.error.message, /Lifecycle lifecycle/i);
+  }
+  assert.equal(fakeState(plan).calls.length, 0);
+  assert.equal(originHas(plan, 'pocket/p/phase-1'), false);
+});
+
+// Issue #84: Core surfaces the missing lifecycle document at init, on every phase-level
+// update, and when handoff could not record phase-closed, instead of reporting clean success.
+test('core missing lifecycle: stacked init, update, and handoff warn LIFECYCLE_DOCUMENT_MISSING', (t) => {
+  const plan = handedOffPlan(t, { lifecycle: false });
+  const expectedPath = path.join(plan.specDir, 'lifecycle.json');
+  for (const step of ['init', 'review', 'done', 'handoff']) {
+    const envelope = plan.envelopes[step];
+    assert.equal(envelope.ok, true, step);
+    const warnings = envelope.data.warnings.filter((warning) => warning.code === 'LIFECYCLE_DOCUMENT_MISSING');
+    assert.equal(warnings.length, 1, `${step}: ${JSON.stringify(envelope.data.warnings)}`);
+    assert.equal(warnings[0].path, expectedPath);
+    assert.match(warnings[0].fix, /pocketto-pi lifecycle transition '.+' spec-approved --artifact spec:/);
+  }
+  assert.equal(plan.envelopes.handoff.data.steps.event, 'skipped');
+  assert.deepEqual(plan.envelopes.handoff.data.next_actions, [],
+    'approving a spec is the user decision, so the recovery is never a required next action');
+});
+
+test('lifecycle context: a dangling lifecycle.json symlink stays PHASE_LIFECYCLE_PATH_INVALID without a doubled label', (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-dangling-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const specDir = path.join(root, 'docs', 'pocket', 'spec', PLAN_ID);
+  fs.mkdirSync(specDir, { recursive: true });
+  const { loadContext } = require('../enterprise/phase-handler-context');
+
+  assert.throws(() => loadContext({ plan_id: PLAN_ID }, { projectRoot: root }),
+    (error) => error.code === 'PHASE_LIFECYCLE_MISSING');
+
+  fs.symlinkSync(path.join(root, 'missing-target.json'), path.join(specDir, 'lifecycle.json'), 'file');
+  assert.throws(() => loadContext({ plan_id: PLAN_ID }, { projectRoot: root }), (error) => {
+    assert.equal(error.code, 'PHASE_LIFECYCLE_PATH_INVALID');
+    assert.equal(error.message, 'Lifecycle document must resolve inside the registered project root.');
+    return true;
+  });
+});
+
+test('core with lifecycle: a stacked plan with lifecycle.json gets no LIFECYCLE_DOCUMENT_MISSING warning after approval', (t) => {
+  const plan = handedOffPlan(t);
+  for (const step of ['review', 'done', 'handoff']) {
+    const codes = plan.envelopes[step].data.warnings.map((warning) => warning.code);
+    assert.equal(codes.includes('LIFECYCLE_DOCUMENT_MISSING'), false, `${step}: ${codes}`);
+  }
 });
 
 test('publish-phase stale snapshot: a snapshot edited after its event is STALE_ARTIFACT with nothing pushed', (t) => {

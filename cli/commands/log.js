@@ -9,7 +9,7 @@ const path = require('node:path');
 const { readFileSync, existsSync, statSync, readdirSync } = require('node:fs');
 const { CliError } = require('../lib/envelope');
 const { writeLog, todayISO, readLogChecked, withProjectionMutation } = require('../lib/logjson');
-const { runPhaseUpdateTransition, runPlanCloseTransition, lifecycleSpecDirForPlan } = require('../lib/lifecycle-transition');
+const { runPhaseUpdateTransition, runPlanCloseTransition, lifecycleSpecDirForPlan, lifecycleDocumentMissingWarnings } = require('../lib/lifecycle-transition');
 const { getGitSha, getCommitFiles, getRangeFiles, commitExists, resolveCommit, isAncestorOfHead } = require('../lib/git');
 const { currentBranch } = require('../lib/git-worktree');
 const { pendingDrainActions } = require('../lib/next-actions');
@@ -228,6 +228,13 @@ function buildOwnerMap(planDir, phase, baselineSha) {
   return owner;
 }
 
+// Human lines for LIFECYCLE_DOCUMENT_MISSING advisories (issue #84).
+function pushLifecycleWarnings(human, warnings) {
+  for (const warning of warnings) {
+    human.push(`⚠ ${warning.code}: ${warning.path} not found. ${warning.consequence}`, `  ${warning.fix}`);
+  }
+}
+
 // ─── INIT ───────────────────────────────────────────────────────────────────
 
 function init(positionals, { phaseBranches: requested = null } = {}) {
@@ -281,6 +288,10 @@ function init(positionals, { phaseBranches: requested = null } = {}) {
     const ids = (p.tasks || []).map((t) => t.id).join(', ');
     human.push(`    [${p.order}] ${p.file} → ${p.status} | tasks: ${ids || 'none'}`);
   }
+  const envelope = phaseBranches.initEnvelope({ strategy, stacked });
+  const lifecycleWarnings = lifecycleDocumentMissingWarnings(planDir, log);
+  envelope.warnings.push(...lifecycleWarnings);
+  pushLifecycleWarnings(human, lifecycleWarnings);
 
   return {
     command: 'log init',
@@ -288,7 +299,7 @@ function init(positionals, { phaseBranches: requested = null } = {}) {
     human,
     data: {
       planDir, logPath, planType, migrated: false, phaseCount: phases.length, phases,
-      ...phaseBranches.initEnvelope({ strategy, stacked }),
+      ...envelope,
     },
   };
 }
@@ -604,6 +615,8 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
       deps: { projectionWriter, adapterRunner },
     });
     human = [`Updated ${phase.file}: ${oldStatus} → ${newStatus}`];
+    const lifecycleWarnings = lifecycleDocumentMissingWarnings(planDir, log);
+    pushLifecycleWarnings(human, lifecycleWarnings);
     data = {
       planDir,
       phaseFile: phase.file,
@@ -620,6 +633,7 @@ function update(positionals, taskId, { sha: shaOverride = null, allowDuplicateSh
         }
         : null,
       dispatch: outcome.dispatch,
+      warnings: lifecycleWarnings,
     };
   }
 
@@ -830,6 +844,8 @@ function close(positionals, { projectionWriter = null, adapterRunner = null } = 
     `  date_completed : ${log.header.date_completed}`,
     `  phases         : ${log.phases.length} — all DONE`,
   ];
+  const lifecycleWarnings = lifecycleDocumentMissingWarnings(planDir, log);
+  pushLifecycleWarnings(human, lifecycleWarnings);
 
   // Additive, read-only envelope fields. `close` never creates or switches
   // branches; `branch` only reports the current one for stacked plans.
@@ -851,7 +867,7 @@ function close(positionals, { projectionWriter = null, adapterRunner = null } = 
       : null,
     dispatch: outcome.dispatch,
     next_actions: pendingDrainActions({ specDir: lifecycleSpecDirForPlan(planDir), projectDir: planDir }),
-    warnings: planArtifactWarnings(planDir),
+    warnings: [...planArtifactWarnings(planDir), ...lifecycleWarnings],
   };
   if (log.header.phase_branches && log.header.phase_branches.mode === 'stacked') {
     data.branch = { from: currentBranch(planDir), created: null, switched: false, status: 'none' };

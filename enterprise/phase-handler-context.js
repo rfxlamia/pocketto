@@ -14,6 +14,17 @@ function invalidLifecyclePath(label) {
   return new PhaseHandlerError('PHASE_LIFECYCLE_PATH_INVALID', `Lifecycle ${label} must resolve inside the registered project root.`);
 }
 
+// The spec-approved transition creates <spec_dir>/lifecycle.json. A plan whose spec never went
+// through it has no document, which is a missing-evidence problem, not a path-containment one.
+function missingLifecycleDocument(root, candidate) {
+  const relative = path.relative(root, candidate).split(path.sep).join('/');
+  const specDir = path.posix.dirname(relative);
+  return new PhaseHandlerError('PHASE_LIFECYCLE_MISSING',
+    `${relative} not found; the spec was never approved through the lifecycle. `
+      + `Run: npx -y pocketto-pi lifecycle transition ${specDir} spec-approved `
+      + '--artifact spec:<kind>:<relative-path>:<sha256> --json --contract 3');
+}
+
 function invalidPlanArtifactPath(label) {
   return new PhaseHandlerError('PHASE_ARTIFACT_PATH_INVALID', `Lifecycle ${label} must resolve inside the selected plan root.`);
 }
@@ -110,17 +121,29 @@ function resolveLifecyclePath(root, registeredRoot, value, label) {
   return { resolved, physical };
 }
 
+// A dangling lifecycle.json symlink also fails realpath with ENOENT; it stays a path violation.
+function isAbsentFile(candidate) {
+  try {
+    fs.lstatSync(candidate);
+    return false;
+  } catch (error) {
+    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('document', error);
+    return Boolean(error && error.code === 'ENOENT');
+  }
+}
+
 function resolveLifecycleFile(root, candidate) {
   let physical;
   try {
     physical = fs.realpathSync(candidate);
   } catch (error) {
-    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('lifecycle document', error);
-    throw invalidLifecyclePath('lifecycle document');
+    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('document', error);
+    if (error && error.code === 'ENOENT' && isAbsentFile(candidate)) throw missingLifecycleDocument(root, candidate);
+    throw invalidLifecyclePath('document');
   }
   const specDir = path.dirname(candidate);
   if (!isInside(root, physical) || !isInside(specDir, physical)) {
-    throw invalidLifecyclePath('lifecycle document');
+    throw invalidLifecyclePath('document');
   }
   return physical;
 }
@@ -146,7 +169,7 @@ function readLifecycleDocument(root, specDir) {
   try {
     return JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
   } catch (error) {
-    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('lifecycle evidence', error);
+    if (enterpriseMeta.isTransientIoError(error)) throw transientLifecycleIo('evidence', error);
     throw new PhaseHandlerError('PHASE_LIFECYCLE_INVALID', `Lifecycle evidence is missing or malformed: ${safeMessage(error)}`);
   }
 }
