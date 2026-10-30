@@ -284,6 +284,7 @@ test('npm test command includes every v4 runtime suite and the T13 documentation
     'test/integration/lifecycle-enterprise.test.js',
     'test/release-regression.test.js',
     'test/documentation.test.js',
+    'test/two-stage-review-loc-policy.test.js',
     'test/bug-hunting-64.test.js',
     'test/git-worktree.test.js',
     'test/enterprise-stack-body.test.js',
