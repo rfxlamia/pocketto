@@ -79,8 +79,8 @@ Beyond QUALITY BAR, assess:
 
 **Structure:**
 - Clean separation of concerns?
-- Functions/classes sized appropriately? File >~300 lines or function >~50 lines left unsplit → [Important]
-- No code duplication? Same logic 3+ times in scope, or duplicated across files of the same plan → [Important]
+- Functions/classes sized appropriately? A file over ~300 lines or a function over ~50 lines left unsplit is a prompt to inspect — an Important finding requires a cited concrete maintainability risk; size alone is not a defect and is Minor or omitted with a suggested, non-blocking cleanup.
+- No code duplication that harms maintainability? Same logic 3+ times in scope, or duplicated across files of the same plan, is a prompt to inspect — only duplicated behavior likely to drift, with cited evidence, is Important.
 
 **Patterns:**
 - Follows existing codebase conventions?
@@ -124,7 +124,7 @@ Bug risk, maintainability impact, or pattern violation.
 Examples:
 - Magic numbers that should be constants
 - Missing error handling on non-critical path
-- Code duplication
+- Duplicated behavior likely to drift
 - Inconsistent with codebase patterns
 - Missing edge case handling
 
@@ -171,7 +171,7 @@ ASSESSSED: Approved | Request Changes
 ## Edge Cases
 
 **Code is spec-compliant but ugly:**
-→ Stage 2 catches this. Flag as Important (maintainability).
+→ Stage 2 catches this. Flag as Important only with a cited concrete maintainability risk — the same bar as the refactor heuristics; otherwise note as Minor.
 
 **Code is beautiful but over-engineered:**
 → Check QUALITY BAR for "no extra work". Over-engineering = extra work.
@@ -184,6 +184,9 @@ ASSESSSED: Approved | Request Changes
 
 **Code uses different pattern than reviewer prefers:**
 → Only flag if it violates QUALITY BAR or codebase conventions. Personal preference ≠ issue.
+
+**Large file, small change, sound cohesion:**
+→ Size alone is not a defect. Note as Minor (or omit) with a suggested, non-blocking cleanup; do not force a refactor round on a counter.
 
 ## Output to Controller
 

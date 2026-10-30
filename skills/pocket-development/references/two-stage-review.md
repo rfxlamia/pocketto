@@ -2,7 +2,7 @@
 
 # In-Loop Audit Contract
 
-Normative contract for the per-task in-loop audit inside `pocket-development`. All audit state lives in the verdict artifact (`CONTRACT` stays 2). The main agent is Delegator + Gate Runner: it runs the mechanical gate, dispatches the auditor, reads labels from the artifact, and drives CLI updates. It SHALL NOT read implementation files to assess quality, spec compliance, or refactor thresholds. Pre-dispatch architecture inspection is limited to constructing and validating the packet; implementation judgments remain with the independent auditor.
+Normative contract for the per-task in-loop audit inside `pocket-development`. All audit state lives in the verdict artifact (`CONTRACT` stays 2). The main agent is Delegator + Gate Runner: it runs the mechanical gate, dispatches the auditor, reads labels from the artifact, and drives CLI updates. It SHALL NOT read implementation files to assess quality, spec compliance, or maintainability. Pre-dispatch architecture inspection is limited to constructing and validating the packet; implementation judgments remain with the independent auditor.
 
 ## Contents
 - [Auditor identity](#auditor-identity)
@@ -22,7 +22,7 @@ Normative contract for the per-task in-loop audit inside `pocket-development`. A
 
 The auditor SHALL always be a separate read-only subagent.
 
-The auditor SHALL NOT be the main agent. The auditor SHALL NOT be the implementer. The main agent SHALL NOT judge code, SHALL NOT grade findings, and SHALL NOT decide spec compliance, quality, or refactor thresholds by reading implementation files.
+The auditor SHALL NOT be the main agent. The auditor SHALL NOT be the implementer. The main agent SHALL NOT judge code, SHALL NOT grade findings, and SHALL NOT decide spec compliance, quality, or maintainability by reading implementation files.
 
 Every criterion in this contract is executed by that read-only subagent. The main agent SHALL dispatch it, pass the inputs this contract names, and then read the labels the auditor emitted.
 
@@ -67,13 +67,15 @@ The auditor SHALL emit `stage_1` (spec compliance) and `stage_2` (code quality, 
 
 ## Refactor heuristics
 
-The auditor SHALL judge refactor heuristics from the diff. The thresholds are identical logic 3+ times across in-scope files; a modified file crossing ~300 lines; a function exceeding ~50 lines.
+The auditor SHALL judge maintainability from the diff. The heuristic signals — identical logic 3+ times across in-scope files; a modified file crossing ~300 lines; a function exceeding ~50 lines — are prompts to inspect, not independent proof of a defect. No new universal numeric cap is introduced.
 
 No implementer self-report is required or accepted. The main agent SHALL NOT ask the implementer whether a refactor was needed and SHALL NOT accept such a claim as evidence.
 
-A diff that violates none of the thresholds proceeds to commit / DONE with no refactor round.
+The auditor MAY emit an Important maintainability finding only when it can identify a concrete maintainability risk — mixed responsibilities, difficult-to-test boundaries, duplicated behavior likely to drift, or tightly coupled unrelated logic — cite the relevant code, and explain why a targeted refactor materially improves it. Size alone, including a pre-existing large file touched by a small change, must not force a correction round; a size-only observation is a Minor (or omitted) non-blocking cleanup suggestion. Consider change scope, cohesion, existing repository conventions, and the trade-off of splitting versus keeping closely related logic together. Do not require splitting merely to satisfy a metric.
 
-A diff that crosses any threshold SHALL produce an Important quality finding on that heuristic and requires a fix/refactor cycle (see [Severity ladder](#severity-ladder) and [Review cycles and recovery](#review-cycles-and-recovery)). The subsequent re-audit SHALL confirm the heuristic is cleared and that tests remain green (via the mechanical gate). A refactor that shifts behavior so the test command goes red fails the mechanical gate and is not accepted as DONE.
+A diff with no evidence-backed maintainability finding — whether or not any heuristic signal fired — proceeds to commit / DONE with no refactor round.
+
+An Important finding issued under this rule still requires a fix/refactor cycle (see [Severity ladder](#severity-ladder) and [Review cycles and recovery](#review-cycles-and-recovery)). The subsequent re-audit SHALL confirm the cited risk is addressed and that tests remain green (via the mechanical gate). A refactor that shifts behavior so the test command goes red fails the mechanical gate and is not accepted as DONE.
 
 ## Severity ladder
 
@@ -95,7 +97,7 @@ A verdict that contains any Critical or Important finding SHALL enter a fix or r
 
 **Consumes one round** (decrement `loop_info.cycles_remaining` once when the round is entered):
 
-- each implementer correction/re-dispatch entered because an audit emitted any Critical or Important finding, including a refactor-heuristic finding
+- each implementer correction/re-dispatch entered because an audit emitted any Critical or Important finding, including an evidence-backed maintainability finding
 - each implementer re-dispatch needed after a mechanical-gate failure
 
 The findings that trigger one implementer dispatch are one consuming event, not one round per finding. A single re-audit that both re-states an unfixed Critical/Important and reports a new finding starts at most one next round.
