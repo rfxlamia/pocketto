@@ -1165,3 +1165,15 @@ test('missing lifecycle: an adapter-registered none-strategy plan warns on phase
   const env = okCli(repo, ['log', 'update', planDir, 'execution-plan/phase-1.md', 'DONE']);
   assert.deepEqual(env.data.warnings.map((w) => w.code), ['LIFECYCLE_DOCUMENT_MISSING']);
 });
+
+// Issue #84: a repeated `log init` takes the existing-log path, which used to report
+// clean success while the lifecycle document was still absent.
+test('missing lifecycle: a repeated log init on an existing stacked log warns the same way', () => {
+  const { repo, planDir, specDir } = makeStackedPlan({ phases: 1, lifecycle: false, done: false });
+  for (const env of [okCli(repo, ['log', 'init', planDir]), okCli(repo, ['log', 'init', planDir])]) {
+    assert.equal(env.data.migrated, false);
+    const warnings = env.data.warnings.filter((w) => w.code === 'LIFECYCLE_DOCUMENT_MISSING');
+    assert.equal(warnings.length, 1, JSON.stringify(env.data.warnings));
+    assert.equal(warnings[0].path, path.join(specDir, 'lifecycle.json'));
+  }
+});

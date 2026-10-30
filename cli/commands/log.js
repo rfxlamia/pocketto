@@ -235,6 +235,17 @@ function pushLifecycleWarnings(human, warnings) {
   }
 }
 
+// Both init paths report the same advisory: a fresh init and a repeated init on
+// an existing log.json must not disagree about a missing lifecycle document.
+function withLifecycleWarnings(result, planDir, log) {
+  const lifecycleWarnings = lifecycleDocumentMissingWarnings(planDir, log);
+  if (lifecycleWarnings.length === 0) return result;
+  pushLifecycleWarnings(result.human, lifecycleWarnings);
+  if (Array.isArray(result.data.warnings)) result.data.warnings.push(...lifecycleWarnings);
+  else result.data.warnings = lifecycleWarnings;
+  return result;
+}
+
 // ─── INIT ───────────────────────────────────────────────────────────────────
 
 function init(positionals, { phaseBranches: requested = null } = {}) {
@@ -289,11 +300,7 @@ function init(positionals, { phaseBranches: requested = null } = {}) {
     human.push(`    [${p.order}] ${p.file} → ${p.status} | tasks: ${ids || 'none'}`);
   }
   const envelope = phaseBranches.initEnvelope({ strategy, stacked });
-  const lifecycleWarnings = lifecycleDocumentMissingWarnings(planDir, log);
-  envelope.warnings.push(...lifecycleWarnings);
-  pushLifecycleWarnings(human, lifecycleWarnings);
-
-  return {
+  return withLifecycleWarnings({
     command: 'log init',
     exit: 0,
     human,
@@ -301,7 +308,7 @@ function init(positionals, { phaseBranches: requested = null } = {}) {
       planDir, logPath, planType, migrated: false, phaseCount: phases.length, phases,
       ...envelope,
     },
-  };
+  }, planDir, log);
 }
 
 // Pre-existing logs may carry duplicate done_sha values recorded before the
@@ -396,12 +403,12 @@ function migrateExisting(planDir, logPath) {
   if (migrated === 0) {
     const human = [`log.json already exists at ${logPath} — no migration needed.`];
     warnDuplicateDoneShas(human, duplicateDoneShas);
-    return {
+    return withLifecycleWarnings({
       command: 'log init',
       exit: 0,
       human,
       data: { planDir, logPath, migrated: false, phaseCount: log.phases.length, phases: log.phases, duplicateDoneShas },
-    };
+    }, planDir, log);
   }
 
   writeLog(logPath, log);
@@ -411,12 +418,12 @@ function migrateExisting(planDir, logPath) {
     human.push(`  [${phase.order}] ${phase.file} (${phase.status}) → tasks: ${ids || 'none'}`);
   }
   warnDuplicateDoneShas(human, duplicateDoneShas);
-  return {
+  return withLifecycleWarnings({
     command: 'log init',
     exit: 0,
     human,
     data: { planDir, logPath, migrated: true, phaseCount: log.phases.length, phases: log.phases, duplicateDoneShas },
-  };
+  }, planDir, log);
 }
 
 // Helper to resolve phase object in log.json, matching either exact phase.file,

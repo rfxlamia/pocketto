@@ -1228,6 +1228,27 @@ test('lifecycle context: a dangling lifecycle.json symlink stays PHASE_LIFECYCLE
   });
 });
 
+// Containment is not relaxed by the new missing-document code: a symlink that resolves
+// outside the registered root is a path violation, whether its target exists or not.
+test('lifecycle context: a lifecycle.json symlink escaping the project root stays PHASE_LIFECYCLE_PATH_INVALID', (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-escaping-')));
+  const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-escaping-outside-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(external, { recursive: true, force: true }));
+  const specDir = path.join(root, 'docs', 'pocket', 'spec', PLAN_ID);
+  fs.mkdirSync(specDir, { recursive: true });
+  const target = path.join(external, 'lifecycle.json');
+  fs.writeFileSync(target, '{}\n');
+  fs.symlinkSync(target, path.join(specDir, 'lifecycle.json'), 'file');
+
+  const { loadContext } = require('../enterprise/phase-handler-context');
+  assert.throws(() => loadContext({ plan_id: PLAN_ID }, { projectRoot: root }), (error) => {
+    assert.equal(error.code, 'PHASE_LIFECYCLE_PATH_INVALID');
+    assert.equal(error.message, 'Lifecycle document must resolve inside the registered project root.');
+    return true;
+  });
+});
+
 test('core with lifecycle: a stacked plan with lifecycle.json gets no LIFECYCLE_DOCUMENT_MISSING warning after approval', (t) => {
   const plan = handedOffPlan(t);
   for (const step of ['review', 'done', 'handoff']) {
