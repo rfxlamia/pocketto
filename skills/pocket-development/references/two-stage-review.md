@@ -67,13 +67,15 @@ The auditor SHALL emit `stage_1` (spec compliance) and `stage_2` (code quality, 
 
 ## Refactor heuristics
 
-The auditor SHALL judge refactor heuristics from the diff. The thresholds are identical logic 3+ times across in-scope files; a modified file crossing ~300 lines; a function exceeding ~50 lines.
+The auditor SHALL judge maintainability from the diff. The heuristic signals — identical logic 3+ times across in-scope files; a modified file crossing ~300 lines; a function exceeding ~50 lines — are prompts to inspect, not independent proof of a defect. No new universal numeric cap is introduced.
 
 No implementer self-report is required or accepted. The main agent SHALL NOT ask the implementer whether a refactor was needed and SHALL NOT accept such a claim as evidence.
 
-A diff that violates none of the thresholds proceeds to commit / DONE with no refactor round.
+The auditor MAY emit an Important maintainability finding only when it can identify a concrete maintainability risk — mixed responsibilities, difficult-to-test boundaries, duplicated behavior likely to drift, or tightly coupled unrelated logic — cite the relevant code, and explain why a targeted refactor materially improves it. Size alone, including a pre-existing large file touched by a small change, must not force a correction round; a size-only observation is a Minor (or omitted) non-blocking cleanup suggestion. Consider change scope, cohesion, existing repository conventions, and the trade-off of splitting versus keeping closely related logic together. Do not require splitting merely to satisfy a metric.
 
-A diff that crosses any threshold SHALL produce an Important quality finding on that heuristic and requires a fix/refactor cycle (see [Severity ladder](#severity-ladder) and [Review cycles and recovery](#review-cycles-and-recovery)). The subsequent re-audit SHALL confirm the heuristic is cleared and that tests remain green (via the mechanical gate). A refactor that shifts behavior so the test command goes red fails the mechanical gate and is not accepted as DONE.
+A diff that triggers none of the heuristic signals, or whose signals resolve without a concrete maintainability risk, proceeds to commit / DONE with no refactor round.
+
+An Important finding issued under this rule still requires a fix/refactor cycle (see [Severity ladder](#severity-ladder) and [Review cycles and recovery](#review-cycles-and-recovery)). The subsequent re-audit SHALL confirm the cited risk is addressed and that tests remain green (via the mechanical gate). A refactor that shifts behavior so the test command goes red fails the mechanical gate and is not accepted as DONE.
 
 ## Severity ladder
 

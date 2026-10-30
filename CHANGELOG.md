@@ -4,6 +4,8 @@ All notable changes to Pocketto are documented here, newest first. Dates are the
 
 ## Unreleased
 
+**Evidence-based maintainability review (issue #87).** The in-loop audit no longer treats LOC heuristics as automatic failures: a modified file crossing ~300 lines, a function exceeding ~50 lines, and identical logic appearing 3+ times are prompts to inspect, not independent proof of a defect. An Important finding requires a cited concrete maintainability risk (mixed responsibilities, difficult-to-test boundaries, duplicated behavior likely to drift, or tightly coupled unrelated logic) with an explanation of why a targeted refactor materially improves the code; a size-only observation is Minor or omitted with a non-blocking cleanup suggestion. The severity vocabulary (`Critical | Important | Minor`), the `REVIEW_PASS` / `REVIEW_FAIL` / `REVIEW_BLOCKED` verdict contract, the mechanical gate, the read-only auditor boundary, and bounded recovery semantics are unchanged. See [issue #87](https://github.com/rfxlamia/pocketto/issues/87).
+
 ## 4.2.2 — 2026-10-16
 
 **Handoff worktree handling.** `log handoff` now refuses only when Pocket parallel-group worktrees remain registered: entries inside the main worktree's `.worktree/` directory or checked out on a `task/*` branch. Worktrees owned by unrelated sessions no longer block handoff; they are reported as `HANDOFF_FOREIGN_WORKTREE` entries in `data.warnings` (additive, `CONTRACT` unchanged) and as a `warning` line in human output, with path and branch escaped. `HANDOFF_WORKTREES_ACTIVE` is unchanged in code but now lists only parallel-group worktrees. Worktree listing uses NUL-delimited output so paths with spaces or newlines are handled.

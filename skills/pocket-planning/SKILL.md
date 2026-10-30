@@ -167,8 +167,10 @@ Rule: <rule name>
   Reuse helpers found in Preflight before creating new ones.
 - Files that change together should live together (by feature, not by layer)
 - In existing codebases, follow established patterns unless the file is already unwieldy —
-  a mapped Modify file already over ~300 lines (or pushed past it by this work) → plan the
-  extraction as part of the task and add the extracted file(s) to this map
+  when a mapped Modify file is over ~300 lines (or pushed past it by this work), evaluate
+  extraction as part of the task: weigh cohesion, test coverage, and ownership before
+  deciding, and add the extracted file(s) to this map only when a targeted refactor
+  materially improves it. Splitting is not required merely to satisfy a metric.
 - Every non-trivial implementation file must have a corresponding test file listed
 - Exact paths — no relative paths, no `src/*/...` wildcards
 

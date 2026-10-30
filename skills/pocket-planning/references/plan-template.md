@@ -223,7 +223,7 @@ Order within DELIVERABLE:
 Include in QUALITY BAR / OBJECTIVE unless the spec overrides:
 
 - Tests written before implementation (implement-then-test is a plan violation)
-- Rule of three enforced — auditor judges duplication from the diff, not implementer self-report
+- Rule of three inspected — the auditor judges duplication from the diff, not implementer self-report; a blocking finding requires a cited concrete maintainability risk
 - Commit messages use conventional commits: `feat | fix | test | refactor | chore` with module scope
 - If a refactor extracts a helper, commit it separately as `refactor(<scope>): <description>`
 
