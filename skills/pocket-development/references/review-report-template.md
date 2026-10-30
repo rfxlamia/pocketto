@@ -279,6 +279,11 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
         "severity": "Minor",
         "description": "Unused import 'os'",
         "location": "auth_service.py:3"
+      },
+      {
+        "severity": "Minor",
+        "description": "auth_service.py crosses ~300 lines with sound cohesion — size-only observation, non-blocking cleanup suggestion: consider extracting the token-transport helpers if the file keeps growing",
+        "location": "auth_service.py"
       }
     ],
     "assessment": "Approved"
@@ -294,6 +299,58 @@ JSON schema for review report artifact written to `reviews/<task_id>-review.json
     "prior_windows": []
   },
   "reviewed_sha": "d4e5f6g7h8i9j0"
+}
+```
+
+## Example: REVIEW_FAIL (Stage 2, evidence-backed maintainability Important)
+
+A size signal alone never produces this verdict — the Important carries the cited
+code, the concrete maintainability risk, and why a targeted refactor improves it
+(see `two-stage-review.md` § Refactor heuristics):
+
+```json
+{
+  "task_id": "T4",
+  "task_name": "Add session revocation",
+  "cycle": 1,
+  "timestamp": "2026-05-08T14:00:00Z",
+  "reviewer_mode": "read-only",
+  "reviewer_config": "standard",
+  "stage_1": {
+    "status": "PASS",
+    "issues": [],
+    "concerns_addressed": []
+  },
+  "stage_2": {
+    "status": "FAIL",
+    "strengths": [
+      "Revocation checks wired through the existing middleware boundary"
+    ],
+    "issues": [
+      {
+        "severity": "Important",
+        "description": "session_store.py now mixes three responsibilities — HTTP cookie parsing, Redis TTL bookkeeping, and revocation auditing — and the revocation branch is only reachable through the HTTP handler, so the TTL logic cannot be tested without a live server. A targeted refactor extracting the TTL bookkeeping into session_ttl.py (the packet already declares it as a helper) makes that boundary directly testable without changing behavior.",
+        "location": "session_store.py:88-140"
+      },
+      {
+        "severity": "Minor",
+        "description": "session_store.py is 240 lines; size alone is not a defect — noting the extraction target above as the non-blocking cleanup",
+        "location": "session_store.py"
+      }
+    ],
+    "assessment": "Request Changes"
+  },
+  "overall": "REVIEW_FAIL",
+  "fix_instructions": "1. session_store.py:88-140 — extract Redis TTL bookkeeping into session_ttl.py so the revocation branch is testable at the module boundary; keep behavior identical (mechanical gate must stay green).",
+  "loop_info": {
+    "recovery_window": 1,
+    "current_cycle": 1,
+    "max_cycles": 2,
+    "cycles_remaining": 1,
+    "strategies": [],
+    "prior_windows": []
+  },
+  "reviewed_sha": "efg6789hij0123"
 }
 ```
 

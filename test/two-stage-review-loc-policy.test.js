@@ -64,8 +64,16 @@ test("two-stage-review: refactor heuristics are prompts to inspect, not automati
 		"an evidence-backed Important must still force a fix/refactor round",
 	);
 	assert.ok(
-		TWO_STAGE_REVIEW.includes("including a refactor-heuristic finding"),
-		"the recovery-round consuming event must keep covering refactor-heuristic findings",
+		TWO_STAGE_REVIEW.includes("including an evidence-backed maintainability finding"),
+		"the recovery-round consuming event must keep covering maintainability findings",
+	);
+	// No diff may gate on heuristic signals firing: a signal-free diff can still
+	// be judged, and a signal-free diff with no finding proceeds to DONE.
+	assert.ok(
+		TWO_STAGE_REVIEW.includes(
+			"A diff with no evidence-backed maintainability finding — whether or not any heuristic signal fired — proceeds to commit / DONE",
+		),
+		"DONE must not be gated on heuristic signals firing",
 	);
 });
 
@@ -112,8 +120,25 @@ test("code-quality-review: size and duplication bullets no longer auto-fail", ()
 		"structure assessment must frame size signals as prompts to inspect",
 	);
 	assert.ok(
-		CODE_QUALITY_REVIEW.includes("size alone is not a defect"),
+		CODE_QUALITY_REVIEW.includes("**Large file, small change, sound cohesion:**"),
+		"edge cases must keep the large-file-small-change case",
+	);
+	assert.ok(
+		CODE_QUALITY_REVIEW.includes("Size alone is not a defect."),
 		"edge cases must state that size alone is not a defect",
+	);
+	// The "spec-compliant but ugly" edge case must not be an evidence-free
+	// Important path — it carries the same cited-risk bar as the heuristics.
+	assert.ok(
+		CODE_QUALITY_REVIEW.includes(
+			"Flag as Important only with a cited concrete maintainability risk",
+		),
+		"the ugly-code edge case must require a cited concrete maintainability risk",
+	);
+	assert.doesNotMatch(
+		CODE_QUALITY_REVIEW,
+		/Flag as Important \(maintainability\)/,
+		"the ugly-code edge case must not flag Important unconditionally",
 	);
 
 	// Severity vocabulary survives the rewrite.

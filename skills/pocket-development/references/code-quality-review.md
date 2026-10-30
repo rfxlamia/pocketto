@@ -171,7 +171,7 @@ ASSESSSED: Approved | Request Changes
 ## Edge Cases
 
 **Code is spec-compliant but ugly:**
-→ Stage 2 catches this. Flag as Important (maintainability).
+→ Stage 2 catches this. Flag as Important only with a cited concrete maintainability risk — the same bar as the refactor heuristics; otherwise note as Minor.
 
 **Code is beautiful but over-engineered:**
 → Check QUALITY BAR for "no extra work". Over-engineering = extra work.
