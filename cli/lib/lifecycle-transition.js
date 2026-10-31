@@ -279,6 +279,38 @@ function matchingLifecycleTarget(planDir) {
   return { planId, specDir };
 }
 
+// Stacked plans and adapter-registered projects depend on lifecycle events
+// later (`log handoff` records phase-closed, Enterprise `publish-phase` reads
+// it). When such a plan resolves a spec dir with no lifecycle document, the
+// emission hooks skip silently, so this advisory names the gap up front.
+// Returns [] for every other plan and never throws. The recovery command
+// approves a spec, which is the user's decision, so it is reported as a fix
+// and never as a required next action.
+const LIFECYCLE_DOCUMENT_MISSING = 'LIFECYCLE_DOCUMENT_MISSING';
+
+function lifecycleDocumentMissingWarnings(planDir, log) {
+  try {
+    const phaseBranches = log && log.header ? log.header.phase_branches : undefined;
+    const stacked = Boolean(phaseBranches && phaseBranches.mode === 'stacked');
+    if (!stacked && !hasAdapterRegistration(planDir)) return [];
+    if (!planIdForLog(planDir)) return [];
+    const specDir = lifecycleSpecDirForPlan(planDir);
+    if (!specDir) return [];
+    if (existsSync(path.join(specDir, 'lifecycle.json'))) return [];
+    const resolved = path.resolve(specDir);
+    return [{
+      code: LIFECYCLE_DOCUMENT_MISSING,
+      path: path.join(resolved, 'lifecycle.json'),
+      consequence: 'No lifecycle events (phase-complete, phase-closed, plan-closed) are recorded for this plan, '
+        + 'so Enterprise publish-phase and lifecycle delivery cannot run.',
+      fix: `After the spec is approved, run: npx -y pocketto-pi lifecycle transition '${resolved.replace(/'/g, "'\\''")}' `
+        + 'spec-approved --artifact spec:<kind>:<relative-path>:<sha256> --json --contract 3',
+    }];
+  } catch {
+    return [];
+  }
+}
+
 function emitPhaseCompleteIfReview({ planDir, phaseFile, level, oldStatus, newStatus, log }) {
   if (level !== 'phase') return null;
   if (newStatus !== 'REVIEW') return null;
@@ -510,4 +542,4 @@ function runPlanCloseTransition({ planDir, logPath, log, phaseFiles, mutate, dep
   });
 }
 
-module.exports = { parseArtifactFlag, planIdFor, planIdForLog, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, emitPhaseClosed, runLifecycleTransition, transitionDeps, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };
+module.exports = { LIFECYCLE_DOCUMENT_MISSING, lifecycleDocumentMissingWarnings, parseArtifactFlag, planIdFor, planIdForLog, lifecycleSpecDirForPlan, runTransition, emitPhaseCompleteIfReview, emitPlanClosedIfDone, emitPhaseClosed, runLifecycleTransition, transitionDeps, runPhaseUpdateTransition, runPlanCloseTransition, dispatchCommittedEvent, decideDispatch, hasAdapterRegistration };

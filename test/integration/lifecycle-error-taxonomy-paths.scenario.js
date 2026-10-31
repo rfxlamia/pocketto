@@ -150,7 +150,7 @@ test('registered phase-complete keeps missing and malformed lifecycle documents 
   const cases = [
     {
       name: 'missing lifecycle document',
-      code: 'PHASE_LIFECYCLE_PATH_INVALID',
+      code: 'PHASE_LIFECYCLE_MISSING',
       alter(lifecyclePath) { fs.rmSync(lifecyclePath); },
     },
     {

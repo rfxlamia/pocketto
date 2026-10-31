@@ -21,6 +21,7 @@ const {
   runLifecycleTransition,
   transitionDeps,
   lifecycleSpecDirForPlan,
+  lifecycleDocumentMissingWarnings,
   planIdForLog,
 } = require('./lifecycle-transition');
 const { pendingDrainActions } = require('./next-actions');
@@ -124,9 +125,11 @@ function quoteHumanWorktree(value) {
     `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
-function handoffResult({ planDir, phase, snapshot, transition, commit, branch, warnings }) {
+function handoffResult({ planDir, phase, snapshot, transition, commit, branch, warnings, log }) {
   const order = phase.order;
   const { specDir, next, outcome } = transition;
+  // A skipped phase-closed event is not a clean handoff: name the missing document.
+  const lifecycleWarnings = transition.eventStep === 'skipped' ? lifecycleDocumentMissingWarnings(planDir, log) : [];
   const steps = {
     snapshot: snapshot.step,
     event: transition.eventStep,
@@ -145,6 +148,9 @@ function handoffResult({ planDir, phase, snapshot, transition, commit, branch, w
     const head = warning.branch === null ? 'detached HEAD' : `branch ${quoteHumanWorktree(warning.branch)}`;
     human.push(`  warning  : Foreign worktree remains registered: ${quoteHumanWorktree(warning.path)} (${head})`);
   }
+  for (const warning of lifecycleWarnings) {
+    human.push(`  warning  : ${warning.code}: ${warning.path} not found; phase-closed was not recorded.`, `             ${warning.fix}`);
+  }
   return {
     command: 'log handoff',
     exit: 0,
@@ -160,7 +166,7 @@ function handoffResult({ planDir, phase, snapshot, transition, commit, branch, w
       branch,
       commit: { sha: commit.sha, paths: commit.paths, skipped: commit.skipped },
       next_phase: next ? { phase_key: next.phaseKey, branch: next.branch, base_branch: next.base_branch } : null,
-      warnings: [...phaseArtifactWarnings({ planDir, specDir, phaseOrder: order }), ...warnings],
+      warnings: [...phaseArtifactWarnings({ planDir, specDir, phaseOrder: order }), ...warnings, ...lifecycleWarnings],
       next_actions: pendingDrainActions({ specDir, projectDir: planDir }),
     },
   };
@@ -208,7 +214,7 @@ function handoff(positionals, { findPhaseInLog, resolvePlanDir, projectionWriter
   const transition = commitPhaseClosed({ planDir, logPath, log, phase, snapshot, projectionWriter, adapterRunner });
   const commit = commitPlanArtifacts({ planDir, phase, specDir: transition.specDir, planId: planIdForLog(planDir) });
   const branch = createNextBranch({ planDir, phase, next: transition.next });
-  return handoffResult({ planDir, phase, snapshot, transition, commit, branch, warnings });
+  return handoffResult({ planDir, phase, snapshot, transition, commit, branch, warnings, log });
 }
 
 module.exports = { handoff };
